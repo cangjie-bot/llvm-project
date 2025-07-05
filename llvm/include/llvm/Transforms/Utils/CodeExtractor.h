@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // A utility to support extracting code from one function into its own
@@ -16,6 +18,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
 #include <limits>
 
@@ -84,6 +87,7 @@ public:
   ///    as arguments, and inserting stores to the arguments for any scalars.
   class CodeExtractor {
     using ValueSet = SetVector<Value *>;
+    using ValueMap = MapVector<Value *, Value *>;
 
     // Various bits of state computed on construction.
     DominatorTree *const DT;
@@ -193,6 +197,19 @@ public:
     void findInputsOutputs(ValueSet &Inputs, ValueSet &Outputs,
                            const ValueSet &Allocas) const;
 
+    /// An overloaded function.
+    ///
+    /// Differently, record bitcasts that are derived pointers but not structs.
+    /// Meanwhile replace them with their base values in inputs.
+    bool findInputsOutputs(ValueSet &Inputs, ValueSet &Outputs,
+                           const ValueSet &Allocas,
+                           ValueSet &BitcastInstrs) const;
+
+    /// Establish a map BasePtrCands from struct pointers in Values to their
+    /// base pointers.
+    void insertStructBaseInArguments(Function *F, ValueSet &Values,
+                                     ValueMap &BasePtrCands);
+
     /// Check if life time marker nodes can be hoisted/sunk into the outline
     /// region.
     ///
@@ -245,11 +262,14 @@ public:
     void severSplitPHINodesOfExits(const SmallPtrSetImpl<BasicBlock *> &Exits);
     void splitReturnBlocks();
 
-    Function *constructFunction(const ValueSet &inputs,
-                                const ValueSet &outputs,
-                                BasicBlock *header,
-                                BasicBlock *newRootNode, BasicBlock *newHeader,
-                                Function *oldFunction, Module *M);
+    Function *constructFunction(const ValueSet &Inputs,
+                                const ValueSet &Outputs,
+                                const ValueSet &BitcastInstrs,
+                                const ValueMap &InputsBasePtrCands,
+                                const ValueMap &OutputsBasePtrCands,
+                                BasicBlock *Header,
+                                BasicBlock *NewRootNode, BasicBlock *NewHeader,
+                                Function *OldFunction, Module *M);
 
     void moveCodeToFunction(Function *newFunction);
 
@@ -258,9 +278,11 @@ public:
         DenseMap<BasicBlock *, BlockFrequency> &ExitWeights,
         BranchProbabilityInfo *BPI);
 
-    CallInst *emitCallAndSwitchStatement(Function *newFunction,
-                                         BasicBlock *newHeader,
-                                         ValueSet &inputs, ValueSet &outputs);
+    CallInst *emitCallAndSwitchStatement(Function *NewFunction,
+                                         BasicBlock *NewHeader,
+                                         ValueSet &Inputs, ValueSet &Outputs,
+                                         ValueMap &InputsBasePtrCands,
+                                         ValueMap &OutputsBasePtrCands);
   };
 
 } // end namespace llvm

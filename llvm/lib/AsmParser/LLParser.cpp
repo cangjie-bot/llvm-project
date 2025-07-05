@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the parser class for .ll files.
@@ -1904,6 +1906,7 @@ void LLParser::parseOptionalDLLStorageClass(unsigned &Res) {
 ///   ::= 'amdgpu_cs'
 ///   ::= 'amdgpu_kernel'
 ///   ::= 'tailcc'
+///   ::= 'cangjiegccc'
 ///   ::= 'cc' UINT
 ///
 bool LLParser::parseOptionalCallingConv(unsigned &CC) {
@@ -1956,6 +1959,7 @@ bool LLParser::parseOptionalCallingConv(unsigned &CC) {
   case lltok::kw_amdgpu_cs:      CC = CallingConv::AMDGPU_CS; break;
   case lltok::kw_amdgpu_kernel:  CC = CallingConv::AMDGPU_KERNEL; break;
   case lltok::kw_tailcc:         CC = CallingConv::Tail; break;
+  case lltok::kw_cangjiegccc:    CC = CallingConv::CangjieGC; break;
   case lltok::kw_cc: {
       Lex.Lex();
       return parseUInt32(CC);

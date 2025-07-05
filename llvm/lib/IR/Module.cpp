@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Module class for the IR library.
@@ -167,6 +169,25 @@ FunctionCallee Module::getOrInsertFunction(StringRef Name, FunctionType *Ty,
 
 FunctionCallee Module::getOrInsertFunction(StringRef Name, FunctionType *Ty) {
   return getOrInsertFunction(Name, Ty, AttributeList());
+}
+
+Function *Module::declareCJRuntimeFunc(StringRef Name, FunctionType *FT,
+                                       bool GCLeafFunc, bool GCMalloc) {
+  Function *Func = getFunction(Name);
+  if (Func)
+    return Func;
+
+  Func = cast<Function>(getOrInsertFunction(Name, FT).getCallee());
+  Func->addFnAttr(Attribute::get(Context, "cj-runtime"));
+  if (GCMalloc) {
+    Func->addFnAttr(Attribute::get(Context, "cj-heapmalloc"));
+    Func->addFnAttr(Attribute::ArgMemOnly);
+    Func->addRetAttr(Attribute::NoAlias);
+  }
+  if (GCLeafFunc)
+    Func->addFnAttr(Attribute::get(Context, "gc-leaf-function"));
+
+  return Func;
 }
 
 // getFunction - Look up the specified function in the module symbol table.

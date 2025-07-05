@@ -87,6 +87,11 @@ LLVMContext::LLVMContext() : pImpl(new LLVMContextImpl(*this)) {
          "ptrauth operand bundle id drifted!");
   (void)PtrauthEntry;
 
+  auto *StructLiveEntry = pImpl->getOrInsertBundleTag("struct-live");
+  assert(StructLiveEntry->second == LLVMContext::OB_struct_live &&
+         "struct-live operand bundle id drifted!");
+  (void)StructLiveEntry;
+
   SyncScope::ID SingleThreadSSID =
       pImpl->getOrInsertSyncScopeID("singlethread");
   assert(SingleThreadSSID == SyncScope::SingleThread &&

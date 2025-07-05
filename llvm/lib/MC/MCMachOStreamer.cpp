@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/DenseMap.h"
@@ -172,7 +174,8 @@ void MCMachOStreamer::changeSection(MCSection *Section,
   StringRef SegName = MSec.getSegmentName();
   if (SegName == "__DWARF")
     CreatedADWARFSection = true;
-  else if (Created && DWARFMustBeAtTheEnd && !canGoAfterDWARF(MSec))
+  else if (Created && DWARFMustBeAtTheEnd && !canGoAfterDWARF(MSec) &&
+           !SegName.equals("__CJ_METADATA"))
     assert((!CreatedADWARFSection ||
             Section == getContext().getObjectFileInfo()->getStackMapSection())
            && "Creating regular section after DWARF");

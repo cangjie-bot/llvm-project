@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file is used as the registry of passes that are part of the core LLVM
@@ -28,6 +30,7 @@ MODULE_ANALYSIS("verify", VerifierAnalysis())
 MODULE_ANALYSIS("pass-instrumentation", PassInstrumentationAnalysis(PIC))
 MODULE_ANALYSIS("inline-advisor", InlineAdvisorAnalysis())
 MODULE_ANALYSIS("ir-similarity", IRSimilarityAnalysis())
+MODULE_ANALYSIS("obf-config", ObfConfigAnalysis())
 
 #ifndef MODULE_ALIAS_ANALYSIS
 #define MODULE_ALIAS_ANALYSIS(NAME, CREATE_PASS)                               \
@@ -48,6 +51,7 @@ MODULE_PASS("called-value-propagation", CalledValuePropagationPass())
 MODULE_PASS("canonicalize-aliases", CanonicalizeAliasesPass())
 MODULE_PASS("cg-profile", CGProfilePass())
 MODULE_PASS("check-debugify", NewPMCheckDebugifyPass())
+MODULE_PASS("cj-ptrauth-backward-cfi", PtrAuthBackwardCFI())
 MODULE_PASS("constmerge", ConstantMergePass())
 MODULE_PASS("coro-early", CoroEarlyPass())
 MODULE_PASS("coro-cleanup", CoroCleanupPass())
@@ -126,6 +130,17 @@ MODULE_PASS("sancov-module", ModuleSanitizerCoveragePass())
 MODULE_PASS("memprof-module", ModuleMemProfilerPass())
 MODULE_PASS("poison-checking", PoisonCheckingPass())
 MODULE_PASS("pseudo-probe-update", PseudoProbeUpdatePass())
+MODULE_PASS("place-safepoints", PlaceSafepoints())
+MODULE_PASS("cj-ir-verifier", CJIRVerifier())
+MODULE_PASS("cj-fill-metadata", CJFillMetadata())
+MODULE_PASS("cj-barrier-opt", CJBarrierOpt())
+MODULE_PASS("cj-runtime-lowering", CJRuntimeLowering())
+MODULE_PASS("cj-specific-opt", CJSpecificOpt())
+MODULE_PASS("cj-barrier-split", CJBarrierSplit())
+MODULE_PASS("cj-rewrite-statepoint", CJRewriteStatepoint())
+MODULE_PASS("obf-data", DataObfuscator())
+MODULE_PASS("obf-layout", LayoutObfuscator())
+MODULE_PASS("obf-controlflow", ControlFlowObfuscator())
 #undef MODULE_PASS
 
 #ifndef MODULE_PASS_WITH_PARAMS
@@ -173,6 +188,8 @@ CGSCC_PASS("function-attrs", PostOrderFunctionAttrsPass())
 CGSCC_PASS("attributor-cgscc", AttributorCGSCCPass())
 CGSCC_PASS("openmp-opt-cgscc", OpenMPOptCGSCCPass())
 CGSCC_PASS("no-op-cgscc", NoOpCGSCCPass())
+CGSCC_PASS("cj-pea", CJPartialEscapeAnalysisPass())
+CGSCC_PASS("cj-devirtual-opt", CJDevirtualOpt())
 #undef CGSCC_PASS
 
 #ifndef CGSCC_PASS_WITH_PARAMS
@@ -239,6 +256,7 @@ FUNCTION_ALIAS_ANALYSIS("objc-arc-aa", objcarc::ObjCARCAA())
 FUNCTION_ALIAS_ANALYSIS("scev-aa", SCEVAA())
 FUNCTION_ALIAS_ANALYSIS("scoped-noalias-aa", ScopedNoAliasAA())
 FUNCTION_ALIAS_ANALYSIS("tbaa", TypeBasedAA())
+FUNCTION_ALIAS_ANALYSIS("cangjie-aa", CangjieAA())
 #undef FUNCTION_ALIAS_ANALYSIS
 #undef FUNCTION_ANALYSIS
 
@@ -268,6 +286,7 @@ FUNCTION_PASS("div-rem-pairs", DivRemPairsPass())
 FUNCTION_PASS("dse", DSEPass())
 FUNCTION_PASS("dot-cfg", CFGPrinterPass())
 FUNCTION_PASS("dot-cfg-only", CFGOnlyPrinterPass())
+FUNCTION_PASS("dot-cj-cfg", CJCFGPrinterPass())
 FUNCTION_PASS("dot-dom", DomPrinter())
 FUNCTION_PASS("dot-dom-only", DomOnlyPrinter())
 FUNCTION_PASS("dot-post-dom", PostDomPrinter())
@@ -378,10 +397,17 @@ FUNCTION_PASS("verify<safepoint-ir>", SafepointIRVerifierPass())
 FUNCTION_PASS("verify<scalar-evolution>", ScalarEvolutionVerifierPass())
 FUNCTION_PASS("view-cfg", CFGViewerPass())
 FUNCTION_PASS("view-cfg-only", CFGOnlyViewerPass())
+FUNCTION_PASS("view-cj-cfg", CJCFGViewerPass())
 FUNCTION_PASS("tlshoist", TLSVariableHoistPass())
 FUNCTION_PASS("transform-warning", WarnMissedTransformationsPass())
 FUNCTION_PASS("tsan", ThreadSanitizerPass())
 FUNCTION_PASS("memprof", MemProfilerPass())
+FUNCTION_PASS("cj-generic-intrinsic-opt", CJGenericIntrinsicOpt())
+FUNCTION_PASS("insert-cj-tbaa", InsertCJTBAA())
+FUNCTION_PASS("cj-simple-opt", CJSimpleOpt())
+FUNCTION_PASS("cj-loop-float-opt", CJLoopFloatOpt())
+FUNCTION_PASS("cj-simple-range-analysis", CJSimpleRangeAnalysisPass())
+FUNCTION_PASS("cj-rssce", CJRSSCEPass())
 #undef FUNCTION_PASS
 
 #ifndef FUNCTION_PASS_WITH_PARAMS

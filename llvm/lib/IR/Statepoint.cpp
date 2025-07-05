@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains some utility functions to help recognize gc.statepoint
@@ -37,4 +39,21 @@ llvm::parseStatepointDirectivesFromAttrs(AttributeList AS) {
       Result.NumPatchBytes = NumPatchBytes;
 
   return Result;
+}
+
+uint64_t llvm::getCJStatepointID(CallBase *Call) {
+  Function *Callee = Call->getCalledFunction();
+  if (!Callee)
+    return CJStatepointID::Default;
+
+  if (Callee->isCangjieSafePoint())
+    return CJStatepointID::Safepoint;
+
+  if (Callee->isCangjieStackCheck())
+    return CJStatepointID::StackCheck;
+
+  if (Call->getMetadata("fast_new_array"))
+    return CJStatepointID::NewArrayFast;
+
+  return CJStatepointID::Default;
 }

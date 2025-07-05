@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the interfaces that X86 uses to lower LLVM code into a
@@ -4408,12 +4410,21 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   // Get a count of how many bytes are to be pushed on the stack.
   unsigned NumBytes = CCInfo.getAlignedCallFrameSize();
+  unsigned CallFrameSizeForCJFFI = NumBytes;
   if (IsSibcall)
     // This is a sibcall. The memory operands are available in caller's
     // own caller's stack.
     NumBytes = 0;
-  else if (IsGuaranteeTCO && canGuaranteeTCO(CallConv))
+  else if (IsGuaranteeTCO && canGuaranteeTCO(CallConv)) {
     NumBytes = GetAlignedArgumentStackSize(NumBytes, DAG);
+    CallFrameSizeForCJFFI = NumBytes;
+  }
+  auto *GANode = dyn_cast<GlobalAddressSDNode>(Callee.getNode());
+  if (GANode != nullptr) {
+    auto *CalleeFunc = dyn_cast<Function>(GANode->getGlobal());
+    CCInfo.AddAlignedCallFrameSizeMetaDataForCJFFI(
+        const_cast<Function *>(CalleeFunc), CallFrameSizeForCJFFI);
+  }
 
   int FPDiff = 0;
   if (isTailCall &&
@@ -4432,6 +4443,10 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   unsigned NumBytesToPush = NumBytes;
   unsigned NumBytesToPop = NumBytes;
+
+  if (NumBytesToPop != 0) {
+    MF.setNeedCangjieReloadSP(true);
+  }
 
   // If we have an inalloca argument, all stack space has already been allocated
   // for us and be right at the top of the stack.  We don't support multiple
@@ -20469,6 +20484,8 @@ static SDValue LowerToTLSExecModel(GlobalAddressSDNode *GA, SelectionDAG &DAG,
   // Most TLS accesses are not RIP relative, even on x86-64.  One exception is
   // initialexec.
   unsigned WrapperKind = X86ISD::Wrapper;
+  if ((GA->getGlobal()->getName().compare("mutatorInfo") == 0))
+    model = TLSModel::LocalExec;
   if (model == TLSModel::LocalExec) {
     OperandFlags = is64Bit ? X86II::MO_TPOFF : X86II::MO_NTPOFF;
   } else if (model == TLSModel::InitialExec) {
@@ -20506,8 +20523,40 @@ static SDValue LowerToTLSExecModel(GlobalAddressSDNode *GA, SelectionDAG &DAG,
   return DAG.getNode(ISD::ADD, dl, PtrVT, ThreadPointer, Offset);
 }
 
-SDValue
-X86TargetLowering::LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const {
+static SDValue
+LowerToTLSGeneralDynamicModelCJMutator(const GlobalAddressSDNode *GA,
+                                       SelectionDAG &DAG, const EVT PtrVT) {
+  SDLoc dl(GA);
+  Value *Ptr = Constant::getNullValue(Type::getInt8PtrTy(*DAG.getContext(),
+                                                         257)); // 64 bit %fs
+  SDValue ThreadPointer =
+      DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), DAG.getIntPtrConstant(0, dl),
+                  MachinePointerInfo(Ptr));
+  // -16 for mutatorInfo total size.
+  SDValue Offset = DAG.getConstant(0xfffffffffffffff0, dl, PtrVT);
+
+  return DAG.getNode(ISD::ADD, dl, PtrVT, ThreadPointer, Offset);
+}
+
+static SDValue LowerToTLSGeneralDynamicModel(const X86Subtarget &Subtarget,
+                                             const GlobalValue *GV,
+                                             GlobalAddressSDNode *GA,
+                                             SelectionDAG &DAG,
+                                             const EVT PtrVT) {
+  if (Subtarget.is64Bit()) {
+    if (GV->getName().compare("mutatorInfo") == 0) {
+      return LowerToTLSGeneralDynamicModelCJMutator(GA, DAG, PtrVT);
+    }
+    if (Subtarget.isTarget64BitLP64()) {
+      return LowerToTLSGeneralDynamicModel64(GA, DAG, PtrVT);
+    }
+    return LowerToTLSGeneralDynamicModelX32(GA, DAG, PtrVT);
+  }
+  return LowerToTLSGeneralDynamicModel32(GA, DAG, PtrVT);
+}
+
+SDValue X86TargetLowering::LowerGlobalTLSAddress(SDValue Op,
+                                                 SelectionDAG &DAG) const {
 
   GlobalAddressSDNode *GA = cast<GlobalAddressSDNode>(Op);
 
@@ -20521,20 +20570,15 @@ X86TargetLowering::LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const {
   if (Subtarget.isTargetELF()) {
     TLSModel::Model model = DAG.getTarget().getTLSModel(GV);
     switch (model) {
-      case TLSModel::GeneralDynamic:
-        if (Subtarget.is64Bit()) {
-          if (Subtarget.isTarget64BitLP64())
-            return LowerToTLSGeneralDynamicModel64(GA, DAG, PtrVT);
-          return LowerToTLSGeneralDynamicModelX32(GA, DAG, PtrVT);
-        }
-        return LowerToTLSGeneralDynamicModel32(GA, DAG, PtrVT);
-      case TLSModel::LocalDynamic:
-        return LowerToTLSLocalDynamicModel(GA, DAG, PtrVT, Subtarget.is64Bit(),
-                                           Subtarget.isTarget64BitLP64());
-      case TLSModel::InitialExec:
-      case TLSModel::LocalExec:
-        return LowerToTLSExecModel(GA, DAG, PtrVT, model, Subtarget.is64Bit(),
-                                   PositionIndependent);
+    case TLSModel::GeneralDynamic:
+      return LowerToTLSGeneralDynamicModel(Subtarget, GV, GA, DAG, PtrVT);
+    case TLSModel::LocalDynamic:
+      return LowerToTLSLocalDynamicModel(GA, DAG, PtrVT, Subtarget.is64Bit(),
+                                         Subtarget.isTarget64BitLP64());
+    case TLSModel::InitialExec:
+    case TLSModel::LocalExec:
+      return LowerToTLSExecModel(GA, DAG, PtrVT, model, Subtarget.is64Bit(),
+                                 PositionIndependent);
     }
     llvm_unreachable("Unknown TLS model.");
   }
@@ -24042,8 +24086,8 @@ static SDValue LowerAndToBT(SDValue And, ISD::CondCode CC, const SDLoc &dl,
       if ((!isUInt<32>(AndRHSVal) || (OptForSize && !isUInt<8>(AndRHSVal))) &&
           isPowerOf2_64(AndRHSVal)) {
         Src = AndLHS;
-        BitNo = DAG.getConstant(Log2_64_Ceil(AndRHSVal), dl,
-                                Src.getValueType());
+        BitNo =
+            DAG.getConstant(Log2_64_Ceil(AndRHSVal), dl, Src.getValueType());
       }
     }
   }

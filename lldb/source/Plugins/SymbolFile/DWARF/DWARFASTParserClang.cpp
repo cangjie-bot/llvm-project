@@ -2015,9 +2015,16 @@ bool DWARFASTParserClang::ParseTemplateDIE(
   return false;
 }
 
+static bool ShouldParseCjTemplateParameterInfos(void) {
+  /* Cangjie has no template parameter infos. */
+  return false;
+}
+
 bool DWARFASTParserClang::ParseTemplateParameterInfos(
     const DWARFDIE &parent_die,
     TypeSystemClang::TemplateParameterInfos &template_param_infos) {
+  if (!ShouldParseCjTemplateParameterInfos())
+    return false;
 
   if (!parent_die)
     return false;
@@ -2880,7 +2887,7 @@ void DWARFASTParserClang::ParseSingleMember(
       uint64_t parent_byte_size =
           parent_die.GetAttributeValueAsUnsigned(DW_AT_byte_size, UINT64_MAX);
 
-      if (attrs.member_byte_offset >= parent_byte_size) {
+      if (attrs.member_byte_offset >= parent_byte_size && member_array_element_type.GetTypeName() != "Unit") {
         if (member_array_size != 1 &&
             (member_array_size != 0 ||
              attrs.member_byte_offset > parent_byte_size)) {

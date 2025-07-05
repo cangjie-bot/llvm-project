@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Function class for the IR library.
@@ -85,7 +87,8 @@ static cl::opt<unsigned> NonGlobalValueMaxNameSize(
 //===----------------------------------------------------------------------===//
 
 Argument::Argument(Type *Ty, const Twine &Name, Function *Par, unsigned ArgNo)
-    : Value(Ty, Value::ArgumentVal), Parent(Par), ArgNo(ArgNo) {
+    : Value(Ty, Value::ArgumentVal), Parent(Par), ArgNo(ArgNo),
+      EscapeArgInfo(0) {
   setName(Name);
 }
 
@@ -407,6 +410,7 @@ Function::Function(FunctionType *Ty, LinkageTypes Linkage, unsigned AddrSpace,
   // name is a valid intrinsic ID.
   if (IntID)
     setAttributes(Intrinsic::getAttributes(getContext(), IntID));
+  EscapedInfo = 0;
 }
 
 Function::~Function() {
@@ -739,6 +743,14 @@ static const char * const IntrinsicNameTable[] = {
 #define GET_INTRINSIC_TARGET_DATA
 #include "llvm/IR/IntrinsicImpl.inc"
 #undef GET_INTRINSIC_TARGET_DATA
+
+bool Function::isCJIntrinsic() const {
+  if (!isIntrinsic())
+    return false;
+
+  StringRef Name = getName();
+  return Name.startswith("llvm.cj.");
+}
 
 bool Function::isTargetIntrinsic(Intrinsic::ID IID) {
   return IID > TargetInfos[0].Count;
@@ -1406,6 +1418,7 @@ bool Intrinsic::isLeaf(ID id) {
   default:
     return true;
 
+  case Intrinsic::cj_gc_statepoint:
   case Intrinsic::experimental_gc_statepoint:
   case Intrinsic::experimental_patchpoint_void:
   case Intrinsic::experimental_patchpoint_i64:

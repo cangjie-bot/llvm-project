@@ -386,6 +386,7 @@ protected:
 
 #pragma mark CommandObjectFrameVariable
 // List images with associated information
+
 class CommandObjectFrameVariable : public CommandObjectParsed {
 public:
   CommandObjectFrameVariable(CommandInterpreter &interpreter)
@@ -669,7 +670,15 @@ protected:
                     valobj_sp->GetPreferredDisplayLanguage());
                 options.SetRootValueObjectName(
                     var_sp ? var_sp->GetName().AsCString() : nullptr);
-                valobj_sp->Dump(result.GetOutputStream(), options);
+                if (m_option_variable.show_values) {
+                  if (valobj_sp->GetName() == "$CapturedVars") {
+                    continue;
+                  }
+                  valobj_sp->Dump(result.GetOutputStream(), options);
+                } else {
+                  result.GetOutputStream().Printf("(%s) %s =\n",
+                      valobj_sp->GetTypeName().AsCString(), valobj_sp->GetName().AsCString());
+                }
               }
             }
           }

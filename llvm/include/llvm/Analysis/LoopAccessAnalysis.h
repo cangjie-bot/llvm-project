@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the interface for the loop memory dependence framework that
@@ -172,12 +174,8 @@ public:
       : PSE(PSE), InnermostLoop(L) {}
 
   /// Register the location (instructions are given increasing numbers)
-  /// of a write access.
-  void addAccess(StoreInst *SI);
-
-  /// Register the location (instructions are given increasing numbers)
-  /// of a write access.
-  void addAccess(LoadInst *LI);
+  /// of a read or write access.
+  void addAccess(Instruction *I);
 
   /// Check whether the dependencies between the accesses are safe.
   ///
@@ -626,7 +624,7 @@ public:
   }
 
   /// Return the list of stores to invariant addresses.
-  const ArrayRef<StoreInst *> getStoresToInvariantAddresses() const {
+  const ArrayRef<Instruction *> getStoresToInvariantAddresses() const {
     return StoresToInvariantAddresses;
   }
 
@@ -690,7 +688,7 @@ private:
   bool HasDependenceInvolvingLoopInvariantAddress = false;
 
   /// List of stores to invariant addresses.
-  SmallVector<StoreInst *> StoresToInvariantAddresses;
+  SmallVector<Instruction *> StoresToInvariantAddresses;
 
   /// The diagnostics report generated for the analysis.  E.g. why we
   /// couldn't analyze the loop.
@@ -762,6 +760,8 @@ bool sortPtrAccesses(ArrayRef<Value *> VL, Type *ElemTy, const DataLayout &DL,
 /// This is a simple API that does not depend on the analysis pass.
 bool isConsecutiveAccess(Value *A, Value *B, const DataLayout &DL,
                          ScalarEvolution &SE, bool CheckType = true);
+
+bool isVectorizableCJGCWrite(Instruction *I);
 
 /// This analysis provides dependence information for the memory accesses
 /// of a loop.

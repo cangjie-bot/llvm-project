@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 // This pass implements the Bottom Up SLP vectorizer. It detects consecutive
 // stores that can be put together into vector-stores. Next, it attempts to
@@ -58,6 +60,8 @@ struct SLPVectorizerPass : public PassInfoMixin<SLPVectorizerPass> {
   using StoreListMap = MapVector<Value *, StoreList>;
   using GEPList = SmallVector<GetElementPtrInst *, 8>;
   using GEPListMap = MapVector<Value *, GEPList>;
+  using CJGCWriteList = SmallVector<CallInst *, 8>;
+  using CJGCWriteListMap = MapVector<Value *, CJGCWriteList>;
 
   ScalarEvolution *SE = nullptr;
   TargetTransformInfo *TTI = nullptr;
@@ -135,13 +139,17 @@ private:
   bool vectorizeStoreChain(ArrayRef<Value *> Chain, slpvectorizer::BoUpSLP &R,
                            unsigned Idx, unsigned MinVF);
 
-  bool vectorizeStores(ArrayRef<StoreInst *> Stores, slpvectorizer::BoUpSLP &R);
+  template <typename T>
+  bool vectorizeStoresOrGCWrites(ArrayRef<T *> Stores, slpvectorizer::BoUpSLP &R);
 
   /// The store instructions in a basic block organized by base pointer.
   StoreListMap Stores;
 
   /// The getelementptr instructions in a basic block organized by base pointer.
   GEPListMap GEPs;
+
+  /// The gc write barrier in a basic block organized by base pointer.
+  CJGCWriteListMap CJGCWrites;
 };
 
 } // end namespace llvm

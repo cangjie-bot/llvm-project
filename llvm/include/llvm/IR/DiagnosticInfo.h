@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file declares the different classes involved in low level diagnostics.
@@ -21,6 +23,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/SourceMgr.h"
@@ -211,7 +214,7 @@ public:
   const char *getResourceName() const { return ResourceName; }
   uint64_t getResourceSize() const { return ResourceSize; }
   uint64_t getResourceLimit() const { return ResourceLimit; }
-
+  std::string GetDemangleName() const;
   /// \see DiagnosticInfo::print.
   void print(DiagnosticPrinter &DP) const override;
 

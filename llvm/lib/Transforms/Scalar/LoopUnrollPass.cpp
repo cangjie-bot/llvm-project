@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass implements a simple loop unroller.  It works best when loops have
@@ -71,6 +73,10 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "loop-unroll"
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 
 cl::opt<bool> llvm::ForgetSCEVInLoopUnroll(
     "forget-scev-loop-unroll", cl::init(false), cl::Hidden,
@@ -239,6 +245,8 @@ TargetTransformInfo::UnrollingPreferences llvm::gatherUnrollingPreferences(
     UP.MaxCount = UnrollMaxCount;
   if (UnrollFullMaxCount.getNumOccurrences() > 0)
     UP.FullUnrollMaxCount = UnrollFullMaxCount;
+  if (CJPipeline)
+    UP.Partial = true;
   if (UnrollAllowPartial.getNumOccurrences() > 0)
     UP.Partial = UnrollAllowPartial;
   if (UnrollAllowRemainder.getNumOccurrences() > 0)

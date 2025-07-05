@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file describes the various pseudo instructions used by the compiler,
@@ -30,6 +32,15 @@ let hasSideEffects = 0, isNotDuplicable = 1, Uses = [ESP, SSP],
     SchedRW = [WriteJump] in
   def MOVPC32r : Ii32<0xE8, Pseudo, (outs GR32:$reg), (ins i32imm:$label),
                       "", []>;
+
+// used by cangjie stack back calling convention:
+//    call $next_inst
+//    do nothing
+//
+//    pop rip
+//    ret
+let hasSideEffects = 0, isNotDuplicable = 1, SchedRW = [WriteJump] in
+  def PUSHPC64 : Ii64<0xE9, Pseudo, (outs), (ins i64imm:$label), "", []>;
 
 // ADJCALLSTACKDOWN/UP implicitly use/def ESP because they may be expanded into
 // a stack adjustment and the codegen must know that they may modify the stack

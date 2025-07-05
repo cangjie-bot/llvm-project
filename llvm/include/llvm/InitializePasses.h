@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains the declarations for the pass initialization routines
@@ -88,7 +90,14 @@ void initializeBranchProbabilityInfoWrapperPassPass(PassRegistry&);
 void initializeBranchRelaxationPass(PassRegistry&);
 void initializeBreakCriticalEdgesPass(PassRegistry&);
 void initializeBreakFalseDepsPass(PassRegistry&);
+void initializeCangjieSpecificOptLegacyPassPass(PassRegistry &);
 void initializeCanonicalizeFreezeInLoopsPass(PassRegistry &);
+void initializeCJBarrierOptLegacyPassPass(PassRegistry &);
+void initializeCJBarrierSplitLegacyPassPass(PassRegistry &);
+void initializeCJRuntimeLoweringLegacyPassPass(PassRegistry &);
+void initializeCJGenericIntrinsicOptLegacyPassPass(PassRegistry &);
+void initializeCJIRVerifierLegacyPassPass(PassRegistry &);
+void initializeCJLoopFloatOptLegacyPassPass(PassRegistry &);
 void initializeCFGOnlyPrinterLegacyPassPass(PassRegistry&);
 void initializeCFGOnlyViewerLegacyPassPass(PassRegistry&);
 void initializeCFGPrinterLegacyPassPass(PassRegistry&);
@@ -96,6 +105,11 @@ void initializeCFGSimplifyPassPass(PassRegistry&);
 void initializeCFGuardPass(PassRegistry&);
 void initializeCFGuardLongjmpPass(PassRegistry&);
 void initializeCFGViewerLegacyPassPass(PassRegistry&);
+void initializeCJBarrierLoweringPass(PassRegistry&);
+void initializeCJCFGViewerLegacyPassPass(PassRegistry&);
+void initializeCJCFGPrinterLegacyPassPass(PassRegistry&);
+void initializeCJRewriteStatepointLegacyPassPass(PassRegistry &);
+void initializeCJStackPointerInserterPass(PassRegistry &);
 void initializeCFIFixupPass(PassRegistry&);
 void initializeCFIInstrInserterPass(PassRegistry&);
 void initializeCFLAndersAAWrapperPassPass(PassRegistry&);
@@ -145,6 +159,7 @@ void initializeEarlyTailDuplicatePass(PassRegistry&);
 void initializeEdgeBundlesPass(PassRegistry&);
 void initializeEHContGuardCatchretPass(PassRegistry &);
 void initializeEliminateAvailableExternallyLegacyPassPass(PassRegistry&);
+void initializeEscapeAnalysisPass(PassRegistry&);
 void initializeExpandMemCmpPassPass(PassRegistry&);
 void initializeExpandPostRAPass(PassRegistry&);
 void initializeExpandReductionsPass(PassRegistry&);
@@ -152,6 +167,7 @@ void initializeExpandVectorPredicationPass(PassRegistry &);
 void initializeMakeGuardsExplicitLegacyPassPass(PassRegistry&);
 void initializeExternalAAWrapperPassPass(PassRegistry&);
 void initializeFEntryInserterPass(PassRegistry&);
+void initializeCJFillMetadataLegacyPassPass(PassRegistry &);
 void initializeFinalizeISelPass(PassRegistry&);
 void initializeFinalizeMachineBundlesPass(PassRegistry&);
 void initializeFixIrreduciblePass(PassRegistry &);
@@ -164,6 +180,7 @@ void initializeFuncletLayoutPass(PassRegistry&);
 void initializeFunctionSpecializationLegacyPassPass(PassRegistry &);
 void initializeGCMachineCodeAnalysisPass(PassRegistry&);
 void initializeGCModuleInfoPass(PassRegistry&);
+void initializeGCOVProfilerLegacyPassPass(PassRegistry&);
 void initializeGVNHoistLegacyPassPass(PassRegistry&);
 void initializeGVNLegacyPassPass(PassRegistry&);
 void initializeGVNSinkLegacyPassPass(PassRegistry&);
@@ -192,6 +209,9 @@ void initializeInferAddressSpacesPass(PassRegistry&);
 void initializeInferFunctionAttrsLegacyPassPass(PassRegistry&);
 void initializeInjectTLIMappingsLegacyPass(PassRegistry &);
 void initializeInlineCostAnalysisPass(PassRegistry&);
+void initializeCJSimpleRangeAnalysisPass(PassRegistry&);
+void initializeCangjieAAWrapperPassPass(PassRegistry&);
+void initializeInsertCJTBAALegacyPassPass(PassRegistry&);
 void initializeInstCountLegacyPassPass(PassRegistry &);
 void initializeInstNamerPass(PassRegistry&);
 void initializeInstSimplifyLegacyPassPass(PassRegistry &);
@@ -332,7 +352,7 @@ void initializePeepholeOptimizerPass(PassRegistry&);
 void initializePhiValuesWrapperPassPass(PassRegistry&);
 void initializePhysicalRegisterUsageInfoPass(PassRegistry&);
 void initializePlaceBackedgeSafepointsImplPass(PassRegistry&);
-void initializePlaceSafepointsPass(PassRegistry&);
+void initializePlaceSafepointsLegacyPassPass(PassRegistry&);
 void initializePostDomOnlyPrinterWrapperPassPass(PassRegistry &);
 void initializePostDomOnlyViewerWrapperPassPass(PassRegistry &);
 void initializePostDomPrinterWrapperPassPass(PassRegistry &);
@@ -421,6 +441,8 @@ void initializeTailDuplicatePass(PassRegistry&);
 void initializeTargetLibraryInfoWrapperPassPass(PassRegistry&);
 void initializeTargetPassConfigPass(PassRegistry&);
 void initializeTargetTransformInfoWrapperPassPass(PassRegistry&);
+void initializeThreadSanitizerPassPass(PassRegistry&);
+void initializePtrAuthBackwardCFIPass(PassRegistry&);
 void initializeTLSVariableHoistLegacyPassPass(PassRegistry &);
 void initializeTwoAddressInstructionPassPass(PassRegistry&);
 void initializeTypeBasedAAWrapperPassPass(PassRegistry&);

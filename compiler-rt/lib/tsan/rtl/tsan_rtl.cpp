@@ -45,7 +45,7 @@ void (*on_initialize)(void);
 int (*on_finalize)(int);
 #endif
 
-#if !SANITIZER_GO && !SANITIZER_APPLE
+#if !SANITIZER_GO && !SANITIZER_CJ && !SANITIZER_APPLE
 __attribute__((tls_model("initial-exec")))
 THREADLOCAL char cur_thread_placeholder[sizeof(ThreadState)] ALIGNED(
     SANITIZER_CACHE_LINE_SIZE);
@@ -73,6 +73,114 @@ void OnInitialize() {
   if (on_initialize)
     on_initialize();
 #  endif
+}
+#endif
+
+#if SANITIZER_CJ
+template<typename T>
+uptr TraceGetEventMemSize(T *ev) {
+  return 1 << ev->size_log;
+}
+
+template< >
+uptr TraceGetEventMemSize(EventAccessRange *ev) {
+  return (ev->size_hi << EventAccessRange::kSizeLoBits) + ev->size_lo;
+}
+
+template< >
+uptr TraceGetEventMemSize(EventLock *ev) {
+  return 0;
+}
+
+template< >
+uptr TraceGetEventMemSize(EventUnlock *ev) {
+  return 0;
+}
+
+template<typename T>
+void TraceDoFix(T *ev, uptr from, uptr to, uptr size) {
+  uptr ev_addr = RestoreAddr(ev->addr);
+  uptr ev_size = TraceGetEventMemSize(ev);
+  if (!(from <= ev_addr && (from + size) >= (ev_addr + ev_size)))
+    return;
+
+  uptr newAddr = ev_addr - from + to;
+  ev->addr = CompressAddr(newAddr);
+}
+
+void TraceFixEvent(TracePart *part, Event *end, uptr from, uptr to, uptr size) {
+  for (Event *evp = &part->events[0]; evp < end; evp++) {
+    if (evp->is_access) {
+      if (evp->is_func == 0 && evp->type == EventType::kAccessExt &&
+              evp->_ == 0)  // NopEvent
+        continue;
+      auto *ev = reinterpret_cast<EventAccess *>(evp);
+      TraceDoFix(ev, from, to, size);
+      continue;
+    } else if (evp->is_func) {
+      continue;
+    }
+    switch (evp->type) {
+      case EventType::kAccessExt: {
+        auto *ev = reinterpret_cast<EventAccessExt *>(evp);
+        evp++;
+        TraceDoFix(ev, from, to, size);
+        break;
+      }
+      case EventType::kAccessRange: {
+        auto *ev = reinterpret_cast<EventAccessRange *>(evp);
+        evp++;
+        TraceDoFix(ev, from, to, size);
+        break;
+      }
+      case EventType::kLock:
+        FALLTHROUGH;
+      case EventType::kRLock: {
+        auto *ev = reinterpret_cast<EventLock *>(evp);
+        evp++;
+        TraceDoFix(ev, from, to, size);
+        break;
+      }
+      case EventType::kUnlock: {
+        auto *ev = reinterpret_cast<EventUnlock *>(evp);
+        TraceDoFix(ev, from, to, size);
+        break;
+      }
+      default: {
+        break;
+      }
+    }
+  }
+}
+
+void TraceFixAll(uptr from, uptr to, uptr size) {
+  ThreadRegistryLock lock0(&ctx->thread_registry);
+
+  for (u32 i = 0; i < ctx->thread_registry.NumThreadsLocked(); i++) {
+    ThreadContext* tctx = (ThreadContext*)ctx->thread_registry.GetThreadLocked(
+        static_cast<Tid>(i));
+    auto trace = &tctx->trace;
+    Lock lock(&trace->mtx);
+
+    TracePart *part = trace->parts.Front();
+    if (!part)
+      continue;
+
+    TracePart *last_part = trace->parts.Back();
+    Event *last_pos = trace->final_pos;
+    if (tctx->thr)
+      last_pos = (Event *)atomic_load_relaxed(&tctx->thr->trace_pos);
+    for (;;) {
+      Event *end = &part->events[TracePart::kSize - 1];
+      if (part == last_part)
+        end = last_pos;
+      TraceFixEvent(part, end, from, to, size);
+
+      if (part == last_part)
+        break;
+      part = trace->parts.Next(part);
+    }
+  }
 }
 #endif
 
@@ -407,7 +515,7 @@ ThreadState::ThreadState(Tid tid)
     // ignore_interceptors()
     : tid(tid) {
   CHECK_EQ(reinterpret_cast<uptr>(this) % SANITIZER_CACHE_LINE_SIZE, 0);
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   // C/C++ uses fixed size shadow stack.
   const int kInitStackSize = kShadowStackSize;
   shadow_stack = static_cast<uptr*>(
@@ -423,7 +531,7 @@ ThreadState::ThreadState(Tid tid)
   shadow_stack_end = shadow_stack + kInitStackSize;
 }
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 void MemoryProfiler(u64 uptime) {
   if (ctx->memprof_fd == kInvalidFd)
     return;
@@ -531,7 +639,7 @@ void DontNeedShadowFor(uptr addr, uptr size) {
                          reinterpret_cast<uptr>(MemToShadow(addr + size)));
 }
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 // We call UnmapShadow before the actual munmap, at that point we don't yet
 // know if the provided address/size are sane. We can't call UnmapShadow
 // after the actual munmap becuase at that point the memory range can
@@ -620,8 +728,14 @@ void MapShadow(uptr addr, uptr size) {
   static uptr mapped_meta_end = 0;
   uptr meta_begin = (uptr)MemToMeta(addr);
   uptr meta_end = (uptr)MemToMeta(addr + size);
+#if SANITIZER_CJ && defined(__linux__)
+  // 64K is too large and may cause collision on linux
+  meta_begin = RoundDownTo(meta_begin, GetPageSizeCached());
+  meta_end = RoundUpTo(meta_end, GetPageSizeCached());
+#else
   meta_begin = RoundDownTo(meta_begin, 64 << 10);
   meta_end = RoundUpTo(meta_end, 64 << 10);
+#endif
   if (!data_mapped) {
     // First call maps data+bss.
     data_mapped = true;
@@ -629,10 +743,15 @@ void MapShadow(uptr addr, uptr size) {
                                  "meta shadow"))
       Die();
   } else {
+#if SANITIZER_CJ && defined(__linux__)
+    meta_begin = RoundDownTo(meta_begin, GetPageSizeCached());
+    meta_end = RoundUpTo(meta_end, GetPageSizeCached());
+#else
     // Mapping continuous heap.
     // Windows wants 64K alignment.
     meta_begin = RoundDownTo(meta_begin, 64 << 10);
     meta_end = RoundUpTo(meta_end, 64 << 10);
+#endif
     CHECK_GT(meta_end, mapped_meta_end);
     if (meta_begin < mapped_meta_end)
       meta_begin = mapped_meta_end;
@@ -645,7 +764,7 @@ void MapShadow(uptr addr, uptr size) {
           addr + size, meta_begin, meta_end);
 }
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 static void OnStackUnwind(const SignalContext &sig, const void *,
                           BufferedStackTrace *stack) {
   stack->Unwind(StackTrace::GetNextInstructionPc(sig.pc), sig.bp, sig.context,
@@ -662,7 +781,7 @@ void CheckUnwind() {
   // on the other hand there is no sense in processing interceptors
   // since we are going to die soon.
   ScopedIgnoreInterceptors ignore;
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   ThreadState* thr = cur_thread();
   thr->nomalloc = false;
   thr->ignore_sync++;
@@ -695,7 +814,7 @@ void Initialize(ThreadState *thr) {
   __sanitizer::InitializePlatformEarly();
   __tsan::InitializePlatformEarly();
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   InitializeAllocator();
   ReplaceSystemMalloc();
 #endif
@@ -708,13 +827,15 @@ void Initialize(ThreadState *thr) {
   InitializeDynamicAnnotations();
 #if !SANITIZER_GO
   InitializeShadowMemory();
+#if !SANITIZER_CJ
   InitializeAllocatorLate();
   InstallDeadlySignalHandlers(TsanOnDeadlySignal);
+#endif
 #endif
   // Setup correct file descriptor for error reports.
   __sanitizer_set_report_path(common_flags()->log_path);
   InitializeSuppressions();
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   InitializeLibIgnore();
   Symbolizer::GetOrInit()->AddHooks(EnterSymbolizer, ExitSymbolizer);
 #endif
@@ -730,7 +851,7 @@ void Initialize(ThreadState *thr) {
   __ubsan::InitAsPlugin();
 #endif
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   Symbolizer::LateInitialize();
   if (InitializeMemoryProfiler() || flags()->force_background_thread)
     MaybeSpawnBackgroundThread();
@@ -751,7 +872,7 @@ void MaybeSpawnBackgroundThread() {
   // On MIPS, TSan initialization is run before
   // __pthread_initialize_minimal_internal() is finished, so we can not spawn
   // new threads.
-#if !SANITIZER_GO && !defined(__mips__)
+#if !SANITIZER_GO && !SANITIZER_CJ && !defined(__mips__)
   static atomic_uint32_t bg_thread = {};
   if (atomic_load(&bg_thread, memory_order_relaxed) == 0 &&
       atomic_exchange(&bg_thread, 1, memory_order_relaxed) == 0) {
@@ -777,7 +898,7 @@ int Finalize(ThreadState *thr) {
     ScopedErrorReportLock lock;
   }
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   if (Verbosity()) AllocatorPrintStats();
 #endif
 
@@ -800,7 +921,7 @@ int Finalize(ThreadState *thr) {
   return failed ? common_flags()->exitcode : 0;
 }
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 void ForkBefore(ThreadState* thr, uptr pc) SANITIZER_NO_THREAD_SAFETY_ANALYSIS {
   GlobalProcessorLock();
   // Detaching from the slot makes OnUserFree skip writing to the shadow.
@@ -867,7 +988,7 @@ void ForkChildAfter(ThreadState* thr, uptr pc, bool start_thread) {
 }
 #endif
 
-#if SANITIZER_GO
+#if SANITIZER_GO || SANITIZER_CJ
 NOINLINE
 void GrowShadowStack(ThreadState *thr) {
   const int sz = thr->shadow_stack_end - thr->shadow_stack;
@@ -882,12 +1003,12 @@ void GrowShadowStack(ThreadState *thr) {
 #endif
 
 StackID CurrentStackId(ThreadState *thr, uptr pc) {
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   if (!thr->is_inited)  // May happen during bootstrap.
     return kInvalidStackID;
 #endif
   if (pc != 0) {
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
     DCHECK_LT(thr->shadow_stack_pos, thr->shadow_stack_end);
 #else
     if (thr->shadow_stack_pos == thr->shadow_stack_end)
@@ -937,7 +1058,7 @@ NOINLINE
 void TraceSwitchPart(ThreadState* thr) {
   if (TraceSkipGap(thr))
     return;
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   if (ctx->after_multithreaded_fork) {
     // We just need to survive till exec.
     TracePart* part = thr->tctx->trace.parts.Back();
@@ -1032,7 +1153,7 @@ void ThreadIgnoreBegin(ThreadState* thr, uptr pc) {
   thr->ignore_reads_and_writes++;
   CHECK_GT(thr->ignore_reads_and_writes, 0);
   thr->fast_state.SetIgnoreBit();
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   if (pc && !ctx->after_multithreaded_fork)
     thr->mop_ignore_set.Add(CurrentStackId(thr, pc));
 #endif
@@ -1044,7 +1165,7 @@ void ThreadIgnoreEnd(ThreadState *thr) {
   thr->ignore_reads_and_writes--;
   if (thr->ignore_reads_and_writes == 0) {
     thr->fast_state.ClearIgnoreBit();
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
     thr->mop_ignore_set.Reset();
 #endif
   }
@@ -1062,7 +1183,7 @@ void ThreadIgnoreSyncBegin(ThreadState *thr, uptr pc) {
   DPrintf("#%d: ThreadIgnoreSyncBegin\n", thr->tid);
   thr->ignore_sync++;
   CHECK_GT(thr->ignore_sync, 0);
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   if (pc && !ctx->after_multithreaded_fork)
     thr->sync_ignore_set.Add(CurrentStackId(thr, pc));
 #endif
@@ -1072,7 +1193,7 @@ void ThreadIgnoreSyncEnd(ThreadState *thr) {
   DPrintf("#%d: ThreadIgnoreSyncEnd\n", thr->tid);
   CHECK_GT(thr->ignore_sync, 0);
   thr->ignore_sync--;
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   if (thr->ignore_sync == 0)
     thr->sync_ignore_set.Reset();
 #endif

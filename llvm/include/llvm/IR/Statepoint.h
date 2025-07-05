@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains utility functions and a wrapper class analogous to
@@ -33,6 +35,15 @@
 #include <vector>
 
 namespace llvm {
+
+// Cangjie Statepoint ID
+enum CJStatepointID : uint64_t {
+   Default = 0,
+   // 1 and 2 are reserved for others
+   Safepoint = 3,
+   StackCheck = 4,
+   NewArrayFast = 5,
+};
 
 /// The statepoint intrinsic accepts a set of flags as its third argument.
 /// Valid values come out of this set.
@@ -66,7 +77,8 @@ public:
 
   static bool classof(const CallBase *I) {
     if (const Function *CF = I->getCalledFunction())
-      return CF->getIntrinsicID() == Intrinsic::experimental_gc_statepoint;
+      return CF->getIntrinsicID() == Intrinsic::experimental_gc_statepoint ||
+             CF->getIntrinsicID() == Intrinsic::cj_gc_statepoint;
     return false;
   }
 
@@ -120,14 +132,23 @@ public:
   /// Return the type of the value returned by the call underlying the
   /// statepoint.
   Type *getActualReturnType() const {
-    auto *FT = cast<FunctionType>(getParamElementType(CalledFunctionPos));
-    return FT->getReturnType();
+    Function *CalledFunction = getActualCalledFunction();
+    if (CalledFunction) {
+      return CalledFunction->getReturnType();
+    } else {
+      Type *TargetElemType = getParamElementType(CalledFunctionPos);
+      if (TargetElemType == nullptr) {
+        TargetElemType = getArgOperand(CalledFunctionPos)
+                             ->getType()
+                             ->getNonOpaquePointerElementType();
+      }
+      return cast<FunctionType>(TargetElemType)->getReturnType();
+    }
   }
-
 
   /// Return the number of arguments to the underlying call.
   size_t actual_arg_size() const { return getNumCallArgs(); }
-  /// Return an iterator to the begining of the arguments to the underlying call
+  /// Return an iterator to the beginning of the arguments to the underlying call
   const_op_iterator actual_arg_begin() const {
     assert(CallArgsBeginPos <= (int)arg_size());
     return arg_begin() + CallArgsBeginPos;
@@ -175,7 +196,7 @@ public:
     return make_range(deopt_begin(), deopt_end());
   }
 
-  /// Returns an iterator to the begining of the argument range describing gc
+  /// Returns an iterator to the beginning of the argument range describing gc
   /// values for the statepoint.
   const_op_iterator gc_args_begin() const {
     if (auto Opt = getOperandBundle(LLVMContext::OB_gc_live))
@@ -195,6 +216,25 @@ public:
     return make_range(gc_args_begin(), gc_args_end());
   }
 
+  /// Returns an iterator to the beginning of the struct-live range for the
+  /// statepoint.
+  const_op_iterator struct_args_begin() const {
+    if (auto Opt = getOperandBundle(LLVMContext::OB_struct_live))
+      return Opt->Inputs.begin();
+    return arg_end();
+  }
+
+  /// Return an end iterator for the struct-live range
+  const_op_iterator struct_args_end() const {
+    if (auto Opt = getOperandBundle(LLVMContext::OB_struct_live))
+      return Opt->Inputs.end();
+    return arg_end();
+  }
+
+  /// range adapter for struct arguments
+  iterator_range<const_op_iterator> struct_args() const {
+    return make_range(struct_args_begin(), struct_args_end());
+  }
 
   /// Get list of all gc reloactes linked to this statepoint
   /// May contain several relocations for the same base/derived pair.
@@ -247,6 +287,8 @@ StatepointDirectives parseStatepointDirectivesFromAttrs(AttributeList AS);
 /// Return \c true if the \p Attr is an attribute that is a statepoint
 /// directive.
 bool isStatepointDirectiveAttr(Attribute Attr);
+
+uint64_t getCJStatepointID(CallBase *Call);
 
 } // end namespace llvm
 

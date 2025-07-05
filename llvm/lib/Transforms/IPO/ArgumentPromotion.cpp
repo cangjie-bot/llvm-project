@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass promotes "by reference" arguments to be "by value" arguments.  In
@@ -60,6 +62,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/NoFolder.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
@@ -80,6 +83,10 @@ using namespace llvm;
 
 STATISTIC(NumArgumentsPromoted, "Number of pointer arguments promoted");
 STATISTIC(NumArgumentsDead, "Number of dead pointer args eliminated");
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 
 namespace {
 
@@ -448,6 +455,11 @@ static bool allCallersPassValidPointerForArgument(Argument *Arg,
 static bool findArgParts(Argument *Arg, const DataLayout &DL, AAResults &AAR,
                          unsigned MaxElements, bool IsRecursive,
                          SmallVectorImpl<OffsetAndArgPart> &ArgPartsVec) {
+  if (CJPipeline && (containsGCPtrType(Arg->getType()) ||
+                     isMemoryContainsGCPtrType(Arg->getType()))) {
+    return false;
+  }
+
   // Quick exit for unused arguments
   if (Arg->use_empty())
     return true;
@@ -769,7 +781,7 @@ static Function *promoteArguments(Function *F, FunctionAnalysisManager &FAM,
   for (Argument *PtrArg : PointerArgs) {
     // Replace sret attribute with noalias. This reduces register pressure by
     // avoiding a register copy.
-    if (PtrArg->hasStructRetAttr()) {
+    if (!CJPipeline && PtrArg->hasStructRetAttr()) {
       unsigned ArgNo = PtrArg->getArgNo();
       F->removeParamAttr(ArgNo, Attribute::StructRet);
       F->addParamAttr(ArgNo, Attribute::NoAlias);

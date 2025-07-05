@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_MC_SECTIONKIND_H
@@ -116,9 +118,42 @@ class SectionKind {
            /// can write to them.  If it chooses to, the dynamic linker can
            /// mark the pages these globals end up on as read-only after it is
            /// done with its relocation phase.
-           ReadOnlyWithRel
+           ReadOnlyWithRel,
+
+           CJMetadataInfo,
+               CJTypeTemplate,
+               CJStaticGenericTI,
+               CJTypeInfo,
+               CJTypeFields,
+               CJMTable,
+               CJInnerTypeExtensions,
+               CJOuterTypeExtensions,
+               CJReflectPkgInfo,
+               CJReflectGV,
+               CJReflectGeneticTI,
+               CJGCTib,
   } K : 8;
+
 public:
+  bool isCJMetadataInfo() const { return K == CJMetadataInfo; }
+  bool isCJTypeInfo() const { return K == CJTypeInfo; }
+  bool isCJTypeTemplate() const { return K == CJTypeTemplate; }
+  bool isCJTypeFields() const { return K == CJTypeFields; }
+  bool isCJGCTib() const { return K == CJGCTib; }
+  bool isCJMTable() const { return K == CJMTable; }
+  bool isCJReflectPkgInfo() const { return K == CJReflectPkgInfo; }
+  bool isCJReflectGV() const { return K == CJReflectGV; }
+  bool isCJStaticGenericTI() const { return K == CJStaticGenericTI; }
+  bool isCJInnerTypeExtensions() const { return K == CJInnerTypeExtensions; }
+  bool isCJOuterTypeExtensions() const { return K == CJOuterTypeExtensions; }
+  bool isCJReflectGenericTI() const { return K == CJReflectGeneticTI; }
+  bool isCJMetaData() const {
+    return isCJMetadataInfo() || isCJTypeInfo() || isCJTypeTemplate() ||
+           isCJTypeFields() || isCJGCTib() || isCJMTable() ||
+           isCJReflectPkgInfo() || isCJReflectGV() || isCJStaticGenericTI() ||
+           isCJInnerTypeExtensions() || isCJOuterTypeExtensions() ||
+           isCJReflectGenericTI();
+  }
 
   bool isMetadata() const { return K == Metadata; }
 
@@ -211,6 +246,22 @@ public:
   static SectionKind getBSSExtern() { return get(BSSExtern); }
   static SectionKind getCommon() { return get(Common); }
   static SectionKind getData() { return get(Data); }
+  static SectionKind getCJMetadataInfo() { return get(CJMetadataInfo); }
+  static SectionKind getCJTypeTemplate() { return get(CJTypeTemplate); }
+  static SectionKind getCJTypeInfo() { return get(CJTypeInfo); }
+  static SectionKind getCJTypeFields() { return get(CJTypeFields); }
+  static SectionKind getCJGCTib() { return get(CJGCTib); }
+  static SectionKind getCJMTable() { return get(CJMTable); }
+  static SectionKind getCJReflectGV() { return get(CJReflectGV); }
+  static SectionKind getCJReflectPkgInfo() { return get(CJReflectPkgInfo); }
+  static SectionKind getCJStaticGenericTI() { return get(CJStaticGenericTI); }
+  static SectionKind getCJReflectGenericTI() { return get(CJReflectGeneticTI); }
+  static SectionKind getCJInnerTypeExtensions() {
+    return get(CJInnerTypeExtensions);
+  }
+  static SectionKind getCJOuterTypeExtensions() {
+    return get(CJOuterTypeExtensions);
+  }
   static SectionKind getReadOnlyWithRel() { return get(ReadOnlyWithRel); }
 };
 

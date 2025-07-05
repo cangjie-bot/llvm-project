@@ -3522,7 +3522,7 @@ GDBRemoteCommunicationServerLLGS::Handle_vRun(
     }
     LLDB_LOG(log, "failed to launch exe: {0}", m_process_launch_error);
   }
-  return SendErrorResponse(8);
+  return SendErrorResponse(m_process_launch_error);
 }
 
 GDBRemoteCommunication::PacketResult

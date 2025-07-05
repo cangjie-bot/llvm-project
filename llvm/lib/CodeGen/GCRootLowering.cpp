@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the lowering for the gc.root mechanism.
@@ -20,12 +22,19 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/Support/CommandLine.h"
+#include <unordered_map>
 
 using namespace llvm;
+
+#define DEBUG_TYPE "gc-root-lowering"
 
 namespace {
 
@@ -70,7 +79,7 @@ public:
 
   bool runOnMachineFunction(MachineFunction &MF) override;
 };
-}
+} // namespace
 
 // -----------------------------------------------------------------------------
 
@@ -167,6 +176,7 @@ static bool InsertRootInitializers(Function &F, ArrayRef<AllocaInst *> Roots) {
 
 /// runOnFunction - Replace gcread/gcwrite intrinsics with loads and stores.
 /// Leave gcroot intrinsics; the code generator needs to see those.
+/// Lower cj intrinsic(e.g gcwrite_cj) to the corresponding runtime function.
 bool LowerIntrinsics::runOnFunction(Function &F) {
   // Quick exit for functions that do not use GC.
   if (!F.hasGC())
@@ -189,7 +199,7 @@ bool LowerIntrinsics::DoLowering(Function &F, GCStrategy &S) {
   SmallVector<AllocaInst *, 32> Roots;
 
   bool MadeChange = false;
-  for (BasicBlock &BB : F)
+  for (BasicBlock &BB : F) {
     for (Instruction &I : llvm::make_early_inc_range(BB)) {
       IntrinsicInst *CI = dyn_cast<IntrinsicInst>(&I);
       if (!CI)
@@ -197,11 +207,12 @@ bool LowerIntrinsics::DoLowering(Function &F, GCStrategy &S) {
 
       Function *F = CI->getCalledFunction();
       switch (F->getIntrinsicID()) {
-      default: break;
+      default:
+        break;
       case Intrinsic::gcwrite: {
         // Replace a write barrier with a simple store.
-        Value *St = new StoreInst(CI->getArgOperand(0),
-                                  CI->getArgOperand(2), CI);
+        Value *St =
+            new StoreInst(CI->getArgOperand(0), CI->getArgOperand(2), CI);
         CI->replaceAllUsesWith(St);
         CI->eraseFromParent();
         MadeChange = true;
@@ -225,6 +236,7 @@ bool LowerIntrinsics::DoLowering(Function &F, GCStrategy &S) {
       }
       }
     }
+  }
 
   if (Roots.size())
     MadeChange |= InsertRootInitializers(F, Roots);

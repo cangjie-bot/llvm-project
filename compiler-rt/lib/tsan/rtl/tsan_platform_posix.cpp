@@ -79,6 +79,7 @@ void InitializeShadowMemory() {
       reinterpret_cast<int (*)(int)>(dlsym(RTLD_DEFAULT, "__tsan_on_finalize"));
 }
 
+#if !SANITIZER_CJ
 static bool TryProtectRange(uptr beg, uptr end) {
   CHECK_LE(beg, end);
   if (beg == end)
@@ -136,6 +137,7 @@ void CheckAndProtect() {
   TryProtectRange(user_addr_max_l4, user_addr_max_l5);
 #endif
 }
+#endif
 #endif
 
 }  // namespace __tsan

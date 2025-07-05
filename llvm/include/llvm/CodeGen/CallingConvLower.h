@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file declares the CCState and CCValAssign classes, used for lowering
@@ -26,6 +28,7 @@ class CCState;
 class MachineFunction;
 class MVT;
 class TargetRegisterInfo;
+class Function;
 
 /// CCValAssign - Represent assignment of one arg/retval to a location.
 class CCValAssign {
@@ -270,6 +273,8 @@ public:
     return alignTo(StackOffset, MaxStackArgAlign);
   }
 
+  void AddAlignedCallFrameSizeMetaDataForCJFFI(Function *Func,
+                                               unsigned CallFrameSize) const;
   /// isAllocated - Return true if the specified register (or an alias) is
   /// allocated.
   bool isAllocated(MCRegister Reg) const {

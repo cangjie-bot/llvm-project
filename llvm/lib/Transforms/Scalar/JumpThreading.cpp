@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Jump Threading pass.
@@ -2908,6 +2910,10 @@ bool JumpThreadingPass::tryToUnfoldSelectInCurrBB(BasicBlock *BB) {
     Instruction *Term = SplitBlockAndInsertIfThen(Cond, SI, false);
     BasicBlock *SplitBB = SI->getParent();
     BasicBlock *NewBB = Term->getParent();
+    if (BB->getParent()->hasCangjieGC()) {
+      SplitBB->setName(BB->getName() + ".jumpthread");
+      NewBB->setName(BB->getName() + ".jumpthread");
+    }
     PHINode *NewPN = PHINode::Create(SI->getType(), 2, "", SI);
     NewPN->addIncoming(SI->getTrueValue(), Term->getParent());
     NewPN->addIncoming(SI->getFalseValue(), BB);

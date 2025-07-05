@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // InstructionCombining - Combine instructions to form fewer, simple
@@ -166,6 +168,10 @@ MaxArraySize("instcombine-maxarray-size", cl::init(1024),
 // information. This flag can be removed when those passes are fixed.
 static cl::opt<unsigned> ShouldLowerDbgDeclare("instcombine-lower-dbg-declare",
                                                cl::Hidden, cl::init(true));
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 
 Optional<Instruction *>
 InstCombiner::targetInstCombineIntrinsic(IntrinsicInst &II) {
@@ -2217,7 +2223,8 @@ Instruction *InstCombinerImpl::visitGEPOfBitcast(BitCastInst *BCI,
   // By avoiding such GEPs, phi translation and MemoryDependencyAnalysis have
   // a better chance to succeed.
   if (!isa<BitCastInst>(SrcOp) && GEP.accumulateConstantOffset(DL, Offset) &&
-      !isAllocationFn(SrcOp, &TLI)) {
+      !isAllocationFn(SrcOp, &TLI) &&
+      !(CJPipeline && isa<Argument>(SrcOp))) {
     // If this GEP instruction doesn't move the pointer, just replace the GEP
     // with a bitcast of the real input to the dest type.
     if (!Offset) {
@@ -2786,12 +2793,35 @@ static bool isAllocSiteRemovable(Instruction *AI,
           case Intrinsic::lifetime_start:
           case Intrinsic::lifetime_end:
           case Intrinsic::objectsize:
+          case Intrinsic::cj_memset:
             Users.emplace_back(I);
             continue;
           case Intrinsic::launder_invariant_group:
           case Intrinsic::strip_invariant_group:
             Users.emplace_back(I);
             Worklist.push_back(I);
+            continue;
+          case Intrinsic::cj_gcwrite_ref:
+            if (II->getOperand(0) == PI)
+              return false;
+            Users.emplace_back(I);
+            continue;
+          case Intrinsic::cj_gcwrite_struct:
+          case Intrinsic::cj_gcwrite_generic:
+            // PI is written to memory, it cannot be removed.
+            if (II->getOperand(2) == PI)
+              return false;
+            Users.emplace_back(I);
+            continue;
+          case Intrinsic::cj_gcread_generic:
+            if (II->getArgOperand(1) == PI || II->getArgOperand(2) == PI)
+              return false;
+            Users.emplace_back(I);
+            continue;
+          case Intrinsic::cj_assign_generic:
+            if (II->getArgOperand(1) == PI)
+              return false;
+            Users.emplace_back(I);
             continue;
           }
         }
@@ -3886,7 +3916,7 @@ bool InstCombinerImpl::freezeOtherUses(FreezeInst &FI) {
     while (isa<AllocaInst>(MoveBefore))
       MoveBefore = MoveBefore->getNextNode();
   } else if (auto *PN = dyn_cast<PHINode>(Op)) {
-    MoveBefore = PN->getParent()->getFirstNonPHI();
+    MoveBefore = &*PN->getParent()->getFirstInsertionPt();
   } else if (auto *II = dyn_cast<InvokeInst>(Op)) {
     MoveBefore = II->getNormalDest()->getFirstNonPHI();
   } else if (auto *CB = dyn_cast<CallBrInst>(Op)) {
@@ -4389,6 +4419,16 @@ public:
   }
 };
 
+static bool isCJFPToIntOverflowCheck(Instruction *I) {
+  if (!CJPipeline)
+    return false;
+
+  if (!isa<FPToSIInst>(I) && !isa<FPToUIInst>(I))
+    return false;
+
+  return true;
+}
+
 /// Populate the IC worklist from a function, by walking it in depth-first
 /// order and adding all reachable code to the worklist.
 ///
@@ -4421,6 +4461,15 @@ static bool prepareICWorklistFromFunction(Function &F, const DataLayout &DL,
       if (!Inst.use_empty() &&
           (Inst.getNumOperands() == 0 || isa<Constant>(Inst.getOperand(0))))
         if (Constant *C = ConstantFoldInstruction(&Inst, DL, TLI)) {
+          if (isa<PoisonValue>(C) && isCJFPToIntOverflowCheck(&Inst)) {
+            for (User *U : Inst.users()) {
+              auto II = dyn_cast<IntrinsicInst>(U);
+              if (II == nullptr ||
+                  II->getIntrinsicID() != Intrinsic::cj_get_fp_state)
+                continue;
+              II->replaceAllUsesWith(ConstantInt::get(II->getType(), 1));
+            }
+          }
           LLVM_DEBUG(dbgs() << "IC: ConstFold to: " << *C << " from: " << Inst
                             << '\n');
           Inst.replaceAllUsesWith(C);

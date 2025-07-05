@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the LoopInfo class that is used to identify natural loops
@@ -545,6 +547,8 @@ extern template class LoopBase<BasicBlock, Loop>;
 /// in the CFG are necessarily loops.
 class LLVM_EXTERNAL_VISIBILITY Loop : public LoopBase<BasicBlock, Loop> {
 public:
+  bool IsInVectorizedProcess = false;
+  bool HasGCWriteInLoop = false;
   /// A range representing the start and end location of a loop.
   class LocRange {
     DebugLoc Start;

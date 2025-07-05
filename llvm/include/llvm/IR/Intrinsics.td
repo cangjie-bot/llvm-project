@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines properties of all LLVM intrinsics.
@@ -180,6 +182,9 @@ class LLVMQualPointerType<LLVMType elty, int addrspace>
 class LLVMPointerType<LLVMType elty>
   : LLVMQualPointerType<elty, 0>;
 
+class LLVMGCPointerType<LLVMType elty>
+  : LLVMQualPointerType<elty, 1>;
+
 class LLVMAnyPointerType<LLVMType elty>
   : LLVMType<iPTRAny>{
   LLVMType ElTy = elty;
@@ -240,26 +245,38 @@ let isAny = true in {
   def llvm_anyfloat_ty   : LLVMType<fAny>;
   def llvm_anyvector_ty  : LLVMType<vAny>;
 }
-def llvm_i1_ty         : LLVMType<i1>;
-def llvm_i8_ty         : LLVMType<i8>;
-def llvm_i16_ty        : LLVMType<i16>;
-def llvm_i32_ty        : LLVMType<i32>;
-def llvm_i64_ty        : LLVMType<i64>;
-def llvm_i128_ty       : LLVMType<i128>;
-def llvm_half_ty       : LLVMType<f16>;
-def llvm_bfloat_ty     : LLVMType<bf16>;
-def llvm_float_ty      : LLVMType<f32>;
-def llvm_double_ty     : LLVMType<f64>;
-def llvm_f80_ty        : LLVMType<f80>;
-def llvm_f128_ty       : LLVMType<f128>;
-def llvm_ppcf128_ty    : LLVMType<ppcf128>;
-def llvm_ptr_ty        : LLVMPointerType<llvm_i8_ty>;             // i8*
-def llvm_ptrptr_ty     : LLVMPointerType<llvm_ptr_ty>;            // i8**
-def llvm_anyptr_ty     : LLVMAnyPointerType<llvm_i8_ty>;          // (space)i8*
-def llvm_empty_ty      : LLVMType<OtherVT>;                       // { }
-def llvm_descriptor_ty : LLVMPointerType<llvm_empty_ty>;          // { }*
-def llvm_metadata_ty   : LLVMType<MetadataVT>;                    // !{...}
-def llvm_token_ty      : LLVMType<token>;                         // token
+def llvm_i1_ty           : LLVMType<i1>;
+def llvm_i8_ty           : LLVMType<i8>;
+def llvm_i16_ty          : LLVMType<i16>;
+def llvm_i32_ty          : LLVMType<i32>;
+def llvm_i64_ty          : LLVMType<i64>;
+def llvm_i128_ty         : LLVMType<i128>;
+def llvm_half_ty         : LLVMType<f16>;
+def llvm_bfloat_ty       : LLVMType<bf16>;
+def llvm_float_ty        : LLVMType<f32>;
+def llvm_double_ty       : LLVMType<f64>;
+def llvm_f80_ty          : LLVMType<f80>;
+def llvm_f128_ty         : LLVMType<f128>;
+def llvm_ppcf128_ty      : LLVMType<ppcf128>;
+def llvm_ptr_ty          : LLVMPointerType<llvm_i8_ty>;             // i8*
+def llvm_i1gcptr_ty      : LLVMGCPointerType<llvm_i1_ty>;           // i1 addrspace1*
+def llvm_i16gcptr_ty     : LLVMGCPointerType<llvm_i16_ty>;          // i16 addrspace1*
+def llvm_i32gcptr_ty     : LLVMGCPointerType<llvm_i32_ty>;          // i32 addrspace1*
+def llvm_i64gcptr_ty     : LLVMGCPointerType<llvm_i64_ty>;          // i64 addrspace1*
+def llvm_anygcptr_ty     : LLVMGCPointerType<llvm_any_ty>;          // (any) addrspace1*
+def llvm_halfgcptr_ty    : LLVMGCPointerType<llvm_half_ty>;         // half addrspace1*
+def llvm_floatgcptr_ty   : LLVMGCPointerType<llvm_float_ty>;        // float addrspace1*
+def llvm_doublegcptr_ty  : LLVMGCPointerType<llvm_double_ty>;       // double addrspace1*
+def llvm_gcptrptr_ty     : LLVMGCPointerType<llvm_ptr_ty>;          // i8* addrspace1*
+def llvm_gcptr_ty        : LLVMGCPointerType<llvm_i8_ty>;           // i8 addrspace1*
+def llvm_ptrptr_ty       : LLVMPointerType<llvm_ptr_ty>;            // i8**
+def llvm_ptrgcptr_ty     : LLVMPointerType<llvm_gcptr_ty>;          // i8 addrspace1**
+def llvm_gcptrgcptr_ty   : LLVMGCPointerType<llvm_gcptr_ty>;        // i8 addrspace1* addrspace1*
+def llvm_anyptr_ty       : LLVMAnyPointerType<llvm_i8_ty>;          // i8 addrspace*
+def llvm_empty_ty        : LLVMType<OtherVT>;                       // { }
+def llvm_descriptor_ty   : LLVMPointerType<llvm_empty_ty>;          // { }*
+def llvm_metadata_ty     : LLVMType<MetadataVT>;                    // !{...}
+def llvm_token_ty        : LLVMType<token>;                         // token
 
 def llvm_x86mmx_ty     : LLVMType<x86mmx>;
 def llvm_ptrx86mmx_ty  : LLVMPointerType<llvm_x86mmx_ty>;         // <1 x i64>*
@@ -416,6 +433,191 @@ def int_gcwrite : Intrinsic<[],
                             [llvm_ptr_ty, llvm_ptr_ty, llvm_ptrptr_ty],
                             [IntrArgMemOnly, NoCapture<ArgIndex<1>>,
                              NoCapture<ArgIndex<2>>]>;
+
+//===------------------- Cangjie GC Barrier Intrinsics --------------------===//
+//
+def int_cj_gcwrite_ref              : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptrgcptr_ty],
+                                                [IntrArgMemOnly, NoCapture<ArgIndex<1>>, NoCapture<ArgIndex<2>>]>;
+def int_cj_gcwrite_struct           : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyptr_ty, llvm_i64_ty],
+                                                [IntrArgMemOnly, NoCapture<ArgIndex<1>>, NoCapture<ArgIndex<2>>, NoAlias<ArgIndex<1>>,
+                                                 NoAlias<ArgIndex<2>>, WriteOnly<ArgIndex<1>>, ReadOnly<ArgIndex<2>>]>;
+def int_cj_gcwrite_static_ref       : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_ptrgcptr_ty],
+                                                [IntrArgMemOnly, NoCapture<ArgIndex<1>>]>;
+def int_cj_gcwrite_static_struct    : Intrinsic<[],
+                                                [llvm_ptr_ty, llvm_ptr_ty, llvm_i64_ty],
+                                                [IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>,
+                                                 NoAlias<ArgIndex<0>>, NoAlias<ArgIndex<1>>, WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<1>>]>;
+def int_cj_gcread_ref               : Intrinsic<[llvm_gcptr_ty],
+                                                [llvm_gcptr_ty, llvm_gcptrgcptr_ty],
+                                                [IntrReadMem, IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>]>;
+def int_cj_gcread_weakref           : Intrinsic<[llvm_gcptr_ty],
+                                                [llvm_gcptr_ty, llvm_gcptrgcptr_ty],
+                                                [IntrReadMem, IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>]>;
+
+def int_cj_gcread_struct            : Intrinsic<[],
+                                                [llvm_ptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty],
+                                                [IntrArgMemOnly, NoCapture<ArgIndex<1>>, NoCapture<ArgIndex<2>>, NoAlias<ArgIndex<1>>,
+                                                 NoAlias<ArgIndex<2>>, WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<2>>]>;
+def int_cj_gcread_static_ref        : Intrinsic<[llvm_gcptr_ty],
+                                                [llvm_ptrgcptr_ty],
+                                                [IntrReadMem, IntrArgMemOnly, NoCapture<ArgIndex<0>>]>;
+def int_cj_gcread_static_struct     : Intrinsic<[],
+                                                [llvm_ptr_ty, llvm_ptr_ty, llvm_i64_ty],
+                                                [IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>,
+                                                 NoAlias<ArgIndex<0>>, NoAlias<ArgIndex<1>>, WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<1>>]>;
+def int_cj_array_copy_ref           : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
+def int_cj_array_copy_struct        : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
+def int_cj_copy_struct_field        : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
+
+//===------------------- Cangjie runtime Intrinsics ------------------------===//
+//
+def int_cj_get_obj_klass                       : Intrinsic<[llvm_ptr_ty],
+                                                           [llvm_gcptr_ty]>;
+def int_cj_memset                              : Intrinsic<[],
+                                                           [llvm_anyptr_ty, llvm_i8_ty, llvm_i64_ty, llvm_i1_ty],
+                                                           [IntrArgMemOnly, IntrWriteMem,
+                                                            NoCapture<ArgIndex<0>>, WriteOnly<ArgIndex<0>>]>;
+def int_cj_malloc_object                       : Intrinsic<[llvm_gcptr_ty],
+                                                           [llvm_ptr_ty, llvm_i32_ty],
+                                                           [Throws]>;
+def int_cj_malloc_array                        : Intrinsic<[llvm_gcptr_ty],
+                                                           [llvm_ptr_ty, llvm_i64_ty, llvm_i64_ty],
+                                                           [Throws]>;
+def int_cj_division_check_sdiv                 : Intrinsic<[llvm_anyint_ty],
+                                                           [llvm_anyint_ty, llvm_anyint_ty],
+                                                           [Throws]>;
+def int_cj_division_check_udiv                 : Intrinsic<[llvm_anyint_ty],
+                                                           [llvm_anyint_ty, llvm_anyint_ty],
+                                                           [Throws]>;
+def int_cj_division_check_srem                 : Intrinsic<[llvm_anyint_ty],
+                                                           [llvm_anyint_ty, llvm_anyint_ty],
+                                                           [Throws]>;
+def int_cj_division_check_urem                 : Intrinsic<[llvm_anyint_ty],
+                                                           [llvm_anyint_ty, llvm_anyint_ty],
+                                                           [Throws]>;
+def int_cj_acquire_rawdata                     : Intrinsic<[llvm_ptr_ty],
+                                                           [llvm_gcptr_ty, llvm_i64_ty]>;
+def int_cj_release_rawdata                     : Intrinsic<[],
+                                                           [llvm_gcptr_ty, llvm_ptr_ty, llvm_i32_ty]>;
+def int_cj_post_throw_exception                : Intrinsic<[llvm_gcptr_ty],
+                                                           [llvm_ptr_ty]>;
+def int_cj_throw_exception                     : Intrinsic<[],
+                                                           [llvm_gcptr_ty],
+                                                           [Throws]>;
+def int_cj_get_exception_wrapper               : Intrinsic<[llvm_ptr_ty],
+                                                           []>;
+def int_cj_get_exception_typeid                : Intrinsic<[llvm_i32_ty],
+                                                           []>;
+def int_cj_pre_initialize_package              : Intrinsic<[],
+                                                           [llvm_ptr_ty]>;
+def int_cj_fill_in_stack_trace                 : Intrinsic<[llvm_gcptr_ty],
+                                                           [llvm_ptr_ty, llvm_gcptr_ty]>;
+def int_cj_get_real_heap_size                  : Intrinsic<[llvm_i64_ty],
+                                                           []>;
+def int_cj_get_allocated_heap_size             : Intrinsic<[llvm_i64_ty],
+                                                           []>;
+def int_cj_get_max_heap_size                   : Intrinsic<[llvm_i64_ty],
+                                                           []>;
+def int_cj_dump_heap_data                      : Intrinsic<[llvm_i1_ty],
+                                                           [llvm_i32_ty]>;
+def int_cj_get_thread_number                   : Intrinsic<[llvm_i64_ty],
+                                                           []>;
+def int_cj_get_blocking_thread_number          : Intrinsic<[llvm_i64_ty],
+                                                           []>;
+def int_cj_get_native_thread_number            : Intrinsic<[llvm_i64_ty],
+                                                           []>;
+def int_cj_get_gc_count                        : Intrinsic<[llvm_i64_ty],
+                                                           []>;
+def int_cj_get_gc_time_us                      : Intrinsic<[llvm_i64_ty],
+                                                           []>;
+def int_cj_get_gc_freed_size                   : Intrinsic<[llvm_i64_ty],
+                                                           []>;
+def int_cj_start_cpu_profiling                 : Intrinsic<[llvm_i1_ty],
+                                                           []>;
+def int_cj_stop_cpu_profiling                  : Intrinsic<[llvm_i1_ty],
+                                                           [llvm_i32_ty]>;
+def int_cj_set_gc_threshold                    : Intrinsic<[],
+                                                           [llvm_i64_ty]>;
+def int_cj_invoke_gc                           : Intrinsic<[],
+                                                           [llvm_i1_ty]>;
+def int_cj_register_implicit_exception_raisers : Intrinsic<[],
+                                                           [llvm_ptr_ty]>;
+
+//===------------------- Cangjie atomic Operations Intrinsics --------------===//
+//
+def int_cj_atomic_store         : Intrinsic<[],
+                                            [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptrgcptr_ty, llvm_i32_ty]>;
+def int_cj_atomic_load          : Intrinsic<[llvm_gcptr_ty],
+                                            [llvm_gcptr_ty, llvm_gcptrgcptr_ty, llvm_i32_ty]>;
+def int_cj_atomic_swap          : Intrinsic<[llvm_gcptr_ty],
+                                            [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptrgcptr_ty, llvm_i32_ty]>;
+def int_cj_atomic_compare_swap  : Intrinsic<[llvm_i1_ty],
+                                            [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptrgcptr_ty, llvm_i32_ty, llvm_i32_ty]>;
+
+//===------------------- Cangjie backend Intrinsics ------------------------===//
+//
+def int_cj_get_fp_state         : Intrinsic<[llvm_i64_ty], [llvm_anyint_ty]>;
+def int_cj_reset_fp_state       : Intrinsic<[], []>;
+def int_cj_set_location         : Intrinsic<[], []>;
+
+//===------------------- Cangjie generic Intrinsics ------------------------===//
+//
+def int_cj_get_type_info            : Intrinsic<[llvm_ptr_ty],
+                                                [llvm_ptr_ty, llvm_i32_ty, llvm_ptrptr_ty],
+                                                [IntrReadMem, IntrArgMemOnly, IntrWillReturn]>;
+def int_cj_get_field_offset         : Intrinsic<[llvm_i64_ty],
+                                                [llvm_ptr_ty, llvm_i64_ty, llvm_i32_ty]>;
+def int_cj_is_subtype               : Intrinsic<[llvm_i1_ty],
+                                                [llvm_ptr_ty, llvm_ptr_ty],
+                                                [IntrNoMem, IntrSpeculatable, IntrWillReturn,
+                                                 NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>]>;
+def int_cj_is_tupletype_of          : Intrinsic<[llvm_i1_ty],
+                                                [llvm_anyptr_ty, llvm_ptr_ty, llvm_ptr_ty],
+                                                [IntrSpeculatable, IntrWillReturn,
+                                                 NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>, NoCapture<ArgIndex<2>>]>;
+def int_cj_is_typeinfo_equal        : Intrinsic<[llvm_i1_ty],
+                                                [llvm_ptr_ty, llvm_ptr_ty]>;
+def int_cj_is_reference             : Intrinsic<[llvm_i1_ty],
+                                                [llvm_ptr_ty]>;
+def int_cj_alloca_generic           : Intrinsic<[llvm_gcptr_ty],
+                                                [llvm_ptr_ty, llvm_i32_ty],
+                                                [Throws]>;
+def int_cj_gcwrite_generic          : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i32_ty],
+                                                [IntrArgMemOnly, IntrWillReturn,
+                                                 NoCapture<ArgIndex<0>>,
+                                                 NoCapture<ArgIndex<1>>, WriteOnly<ArgIndex<1>>,
+                                                 NoCapture<ArgIndex<2>>, NoAlias<ArgIndex<2>>, ReadOnly<ArgIndex<2>>]>;
+def int_cj_gcread_generic           : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i32_ty],
+                                                [IntrArgMemOnly, IntrWillReturn,
+                                                 NoCapture<ArgIndex<0>>, NoAlias<ArgIndex<0>>, WriteOnly<ArgIndex<0>>,
+                                                 NoCapture<ArgIndex<1>>, ReadOnly<ArgIndex<1>>,
+                                                 NoCapture<ArgIndex<2>>, ReadOnly<ArgIndex<2>>]>;
+def int_cj_get_mtable_func          : Intrinsic<[llvm_ptr_ty],
+                                                [llvm_ptr_ty, llvm_ptr_ty, llvm_i64_ty],
+                                                [IntrNoMem, IntrWillReturn, IntrSpeculatable]>;
+def int_cj_get_vtable_func          : Intrinsic<[llvm_ptr_ty],
+                                                [llvm_ptr_ty, llvm_i64_ty, llvm_i64_ty]>;
+def int_cj_assign_generic           : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_ptr_ty],
+                                                [IntrArgMemOnly, IntrWillReturn,
+                                                 NoCapture<ArgIndex<0>>, NoAlias<ArgIndex<0>>, WriteOnly<ArgIndex<0>>,
+                                                 NoCapture<ArgIndex<1>>, NoAlias<ArgIndex<1>>, ReadOnly<ArgIndex<1>>,
+                                                 NoCapture<ArgIndex<2>>, NoAlias<ArgIndex<2>>, ReadOnly<ArgIndex<2>>]>;
+def int_cj_malloc_array_generic     : Intrinsic<[llvm_gcptr_ty],
+                                                [llvm_ptr_ty, llvm_i64_ty],
+                                                [Throws]>;
+def int_cj_array_copy_generic       : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
+def int_cj_gcwrite_generic_payload  : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_ptr_ty, llvm_i32_ty]>;
 
 //===------------------- ObjC ARC runtime Intrinsics --------------------===//
 //
@@ -1256,6 +1458,25 @@ def int_experimental_gc_get_pointer_base : Intrinsic<[llvm_anyptr_ty],
 def int_experimental_gc_get_pointer_offset : Intrinsic<[llvm_i64_ty],
                  [llvm_anyptr_ty], [IntrNoMem, IntrWillReturn,
                  ReadNone<ArgIndex<0>>, NoCapture<ArgIndex<0>>]>;
+
+
+//===---------------- Cangjie Garbage Collection Intrinsics ---------------===//
+def int_cj_gc_statepoint : Intrinsic<[llvm_token_ty],
+                                     [llvm_vararg_ty],
+                                     [Throws]>;
+
+def int_cj_gc_result     : Intrinsic<[llvm_any_ty], [llvm_token_ty],
+                                     [IntrNoMem]>;
+
+def int_cj_gc_relocate   : Intrinsic<[llvm_any_ty],
+                                     [llvm_token_ty, llvm_i32_ty,
+                                      llvm_i32_ty],
+                                     [IntrNoMem, ImmArg<ArgIndex<1>>,
+                                      ImmArg<ArgIndex<2>>]>;
+
+def int_cj_stack_relocate : Intrinsic<[llvm_any_ty],
+                                      [llvm_token_ty, llvm_i32_ty],
+                                      [IntrNoMem, ImmArg<ArgIndex<1>>]>;
 
 //===------------------------ Coroutine Intrinsics ---------------===//
 // These are documented in docs/Coroutines.rst

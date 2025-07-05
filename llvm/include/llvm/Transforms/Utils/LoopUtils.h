@@ -47,6 +47,9 @@ typedef std::pair<const RuntimeCheckingPtrGroup *,
                   const RuntimeCheckingPtrGroup *>
     RuntimePointerCheck;
 
+// A pair of a set of MustAlias Values and their base pointer if exist
+using MustAliasPair = std::pair<SmallSetVector<Value *, 8>, Value *>;
+
 template <typename T> class Optional;
 template <typename T, unsigned N> class SmallSetVector;
 template <typename T, unsigned N> class SmallPriorityWorklist;
@@ -208,11 +211,11 @@ void breakLoopBackedge(Loop *L, DominatorTree &DT, ScalarEvolution &SE,
 /// \p AllowSpeculation is whether values should be hoisted even if they are not
 /// guaranteed to execute in the loop, but are safe to speculatively execute.
 bool promoteLoopAccessesToScalars(
-    const SmallSetVector<Value *, 8> &, SmallVectorImpl<BasicBlock *> &,
+    const MustAliasPair &, SmallVectorImpl<BasicBlock *> &,
     SmallVectorImpl<Instruction *> &, SmallVectorImpl<MemoryAccess *> &,
     PredIteratorCache &, LoopInfo *, DominatorTree *, const TargetLibraryInfo *,
     Loop *, MemorySSAUpdater &, ICFLoopSafetyInfo *,
-    OptimizationRemarkEmitter *, bool AllowSpeculation);
+    OptimizationRemarkEmitter *, bool AllowSpeculation, AAResults *AA);
 
 /// Does a BFS from a given node to all of its children inside a given loop.
 /// The returned vector of nodes includes the starting point.

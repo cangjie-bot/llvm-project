@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines all of the AARCH64-specific intrinsics.
@@ -706,6 +708,17 @@ let TargetPrefix = "aarch64" in {
 // FPCR
 def int_aarch64_get_fpcr : FPCR_Get_Intrinsic;
 def int_aarch64_set_fpcr : FPCR_Set_Intrinsic;
+
+let TargetPrefix = "aarch64" in {
+  class FPSR_Get_Intrinsic
+    : DefaultAttrsIntrinsic<[llvm_i64_ty], [], [IntrNoMem, IntrHasSideEffects]>;
+  class FPSR_Reset_Intrinsic
+    : DefaultAttrsIntrinsic<[], [], [IntrNoMem, IntrHasSideEffects]>;
+}
+
+// FPSR
+def int_aarch64_get_fpsr : FPSR_Get_Intrinsic;
+def int_aarch64_reset_fpsr : FPSR_Reset_Intrinsic;
 
 // Armv8.5-A Random number generation intrinsics
 def int_aarch64_rndr : RNDR_Intrinsic;

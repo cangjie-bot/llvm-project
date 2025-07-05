@@ -809,6 +809,11 @@ void ObjectFilePECOFF::ParseSymtab(Symtab &symtab) {
                               symbol.value);
           symbols[i].GetAddressRef() = symbol_addr;
           symbols[i].SetType(MapSymbolType(symbol.type));
+          // When the clang compiler compiles dynamic links, the symbol type of adaptation layer is 0.
+          // Set this symbol type to eSymbolTypeCode. and we need exclude .text symbol
+          if (symbol_name != ".text" && symbol.type == 0) {
+            symbols[i].SetType(lldb::eSymbolTypeCode);
+          }
         }
 
         if (symbol.naux > 0) {
@@ -850,12 +855,12 @@ void ObjectFilePECOFF::ParseSymtab(Symtab &symtab) {
     lldb::offset_t name_ordinal_offset =
         export_table.address_of_name_ordinals - data_start;
 
-    Symbol *symbols = symtab.Resize(export_table.number_of_names);
+    Symbol *symbols = symtab.Resize(num_syms + export_table.number_of_names);
 
     std::string symbol_name;
 
     // Read each export table entry
-    for (size_t i = 0; i < export_table.number_of_names; ++i) {
+    for (size_t i = num_syms; i < num_syms + export_table.number_of_names; ++i) {
       uint32_t name_ordinal =
           has_ordinal ? symtab_data.GetU16(&name_ordinal_offset) : i;
       uint32_t name_address = symtab_data.GetU32(&name_offset);

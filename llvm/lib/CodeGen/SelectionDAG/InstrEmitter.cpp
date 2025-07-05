@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This implements the Emit routines for the SelectionDAG class, which creates
@@ -24,11 +26,14 @@
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/IR/PseudoProbe.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
-
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 #define DEBUG_TYPE "instr-emitter"
 
 /// MinRCSize - Smallest register class we allow when constraining virtual
@@ -927,6 +932,18 @@ InstrEmitter::EmitDbgLabel(SDDbgLabel *SD) {
   return &*MIB;
 }
 
+static bool isAArch64Machine(const Triple &TargetTriple) {
+  switch (TargetTriple.getArch()) {
+  default:
+    return false;
+  case Triple::aarch64:
+  case Triple::aarch64_be:
+  case Triple::aarch64_32:
+    return true;
+  }
+  report_fatal_error("program should not go here");
+}
+
 /// EmitMachineNode - Generate machine code for a target-specific node and
 /// needed dependencies.
 ///
@@ -991,7 +1008,8 @@ EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
   if (II.isVariadic())
     assert(NumMIOperands >= II.getNumOperands() &&
            "Too few operands for a variadic node!");
-  else
+  // MRS instr may have two args in cangjie
+  else if (!(CJPipeline && TLI->isCangjieGetFPStateInstr(Opc)))
     assert(NumMIOperands >= II.getNumOperands() &&
            NumMIOperands <= II.getNumOperands() + II.getNumImplicitDefs() +
                             NumImpUses &&
@@ -1095,6 +1113,12 @@ EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
       UsedRegs.push_back(Reg);
       EmitCopyFromReg(Node, i, IsClone, IsCloned, Reg, VRBaseMap);
     }
+  }
+
+  const TargetMachine &TM = MF->getTarget();
+  if (Opc == TargetOpcode::STATEPOINT &&
+      isAArch64Machine(TM.getTargetTriple()) && CJPipeline) {
+    UsedRegs.push_back(TLI->getRegisterByName("LR", LLT(), *MF));
   }
 
   // Scan the glue chain for any used physregs.

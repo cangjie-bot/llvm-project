@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This implements routines for translating from LLVM IR into SelectionDAG IR.
@@ -324,6 +326,7 @@ public:
   void resolveOrClearDbgInfo();
 
   SDValue getValue(const Value *V);
+  SDValue getValue(const Value *V, SDValue Chain);
 
   SDValue getNonRegisterValue(const Value *V);
   SDValue getValueImpl(const Value *V);
@@ -355,6 +358,8 @@ public:
   bool isExportableFromCurrentBlock(const Value *V, const BasicBlock *FromBB);
   void CopyToExportRegsIfNeeded(const Value *V);
   void ExportFromCurrentBlock(const Value *V);
+  bool needToDisableTailCall(const CallBase &CB, const TargetLowering &TLI,
+                             bool IsMustTailCall) const;
   void LowerCallTo(const CallBase &CB, SDValue Callee, bool IsTailCall,
                    bool IsMustTailCall, const BasicBlock *EHPadBB = nullptr);
 
@@ -390,6 +395,9 @@ public:
     /// The full list of gc arguments to the gc.statepoint being lowered.
     ArrayRef<const Use> GCArgs;
 
+    /// The list of struct arguments to the gc.statepoint being lowered.
+    ArrayRef<const Use> StructArgs;
+
     /// The gc.statepoint instruction.
     const Instruction *StatepointInstr = nullptr;
 
@@ -416,6 +424,8 @@ public:
     /// The exception handling unwind destination, in case this represents an
     /// invoke of gc.statepoint.
     const BasicBlock *EHPadBB = nullptr;
+
+    Function *ActualCalledFunction = nullptr;
 
     explicit StatepointLoweringInfo(SelectionDAG &DAG) : CLI(DAG) {}
   };
@@ -586,7 +596,7 @@ private:
   void visitPatchpoint(const CallBase &CB, const BasicBlock *EHPadBB = nullptr);
 
   // These two are implemented in StatepointLowering.cpp
-  void visitGCRelocate(const GCRelocateInst &Relocate);
+  void visitRelocate(const GCProjectionInst &Relocate);
   void visitGCResult(const GCResultInst &I);
 
   void visitVectorReduce(const CallInst &I, unsigned Intrinsic);
@@ -644,6 +654,10 @@ private:
                        MCSymbol *&BeginLabel);
   SDValue lowerEndEH(SDValue Chain, const InvokeInst *II,
                      const BasicBlock *EHPadBB, MCSymbol *BeginLabel);
+  void handleRelocationForVReg(SDValue SD, SDValue Relocated,
+                               const Instruction *Relocate,
+                               StatepointLoweringInfo &SI,
+                               DenseMap<SDValue, Register> &VirtRegs);
 };
 
 /// This struct represents the registers (physical or virtual)

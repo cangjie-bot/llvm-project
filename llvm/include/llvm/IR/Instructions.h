@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file exposes the class definitions of all of the subclasses of the
@@ -29,6 +31,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/OperandTraits.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
@@ -2454,6 +2457,8 @@ public:
   ///
   /// Null is returned if the indices are invalid for the specified type.
   static Type *getIndexedType(Type *Agg, ArrayRef<unsigned> Idxs);
+
+  int getIndexOffset(const DataLayout &DL);
 
   using idx_iterator = const unsigned*;
 
@@ -5330,11 +5335,39 @@ inline const Value *getLoadStorePointerOperand(const Value *V) {
     return Load->getPointerOperand();
   if (auto *Store = dyn_cast<StoreInst>(V))
     return Store->getPointerOperand();
+  if (auto *CI = dyn_cast<CallInst>(V)) {
+    Intrinsic::ID ID = CI->getIntrinsicID();
+    if (ID == Intrinsic::cj_gcwrite_ref)
+      return CI->getOperand(2);
+    if (ID == Intrinsic::cj_gcwrite_static_ref)
+      return CI->getOperand(1);
+    if (ID == Intrinsic::cj_gcread_ref)
+      return CI->getOperand(1);
+    if (ID == Intrinsic::cj_gcread_static_ref)
+      return CI->getOperand(0);
+  }
   return nullptr;
 }
 inline Value *getLoadStorePointerOperand(Value *V) {
   return const_cast<Value *>(
       getLoadStorePointerOperand(static_cast<const Value *>(V)));
+}
+
+/// A helper function that returns the value operand of a store or gcwrite
+/// instruction. Returns nullptr if not store or gcwrite.
+inline const Value *getStoreValueOperand(const Value *V) {
+  if (auto *Store = dyn_cast<StoreInst>(V))
+    return Store->getValueOperand();
+  if (auto *CI = dyn_cast<CallInst>(V)) {
+    if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref) {
+      return CI->getOperand(0);
+    }
+  }
+  return nullptr;
+}
+inline Value *getStoreValueOperand(Value *V) {
+  return const_cast<Value *>(
+      getStoreValueOperand(static_cast<const Value *>(V)));
 }
 
 /// A helper function that returns the pointer operand of a load, store
@@ -5362,6 +5395,11 @@ inline Align getLoadStoreAlignment(Value *I) {
 /// A helper function that returns the address space of the pointer operand of
 /// load or store instruction.
 inline unsigned getLoadStoreAddressSpace(Value *I) {
+  if (auto *CI = dyn_cast<CallInst>(I)) {
+    if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref) {
+      return CI->getOperand(2)->getType()->getPointerAddressSpace();
+    }
+  }
   assert((isa<LoadInst>(I) || isa<StoreInst>(I)) &&
          "Expected Load or Store instruction");
   if (auto *LI = dyn_cast<LoadInst>(I))
@@ -5371,6 +5409,11 @@ inline unsigned getLoadStoreAddressSpace(Value *I) {
 
 /// A helper function that returns the type of a load or store instruction.
 inline Type *getLoadStoreType(Value *I) {
+  if (auto *CI = dyn_cast<CallInst>(I)) {
+    if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref) {
+      return CI->getOperand(0)->getType();
+    }
+  }
   assert((isa<LoadInst>(I) || isa<StoreInst>(I)) &&
          "Expected Load or Store instruction");
   if (auto *LI = dyn_cast<LoadInst>(I))

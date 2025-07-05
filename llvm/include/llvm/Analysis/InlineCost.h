@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements heuristics for inlining decisions.
@@ -245,6 +247,8 @@ InlineParams getInlineParams(unsigned OptLevel, unsigned SizeOptLevel);
 /// Return the cost associated with a callsite, including parameter passing
 /// and the call/return instruction.
 int getCallsiteCost(CallBase &Call, const DataLayout &DL);
+
+bool checkCJStackMapThreshold(CallBase &Call, Function &F);
 
 /// Get an InlineCost object representing the cost of inlining this
 /// callsite.

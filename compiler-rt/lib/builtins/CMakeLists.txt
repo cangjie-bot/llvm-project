@@ -96,7 +96,6 @@ set(GENERIC_SOURCES
   divsi3.c
   divti3.c
   extendsfdf2.c
-  extendhfsf2.c
   ffsdi2.c
   ffssi2.c
   ffsti2.c
@@ -165,9 +164,7 @@ set(GENERIC_SOURCES
   subvsi3.c
   subvti3.c
   trampoline_setup.c
-  truncdfhf2.c
   truncdfsf2.c
-  truncsfhf2.c
   ucmpdi2.c
   ucmpti2.c
   udivdi3.c
@@ -306,6 +303,22 @@ if (NOT MSVC)
     x86_64/floatundidf.S
     x86_64/floatundisf.S
   )
+
+  if (UNIX AND NOT APPLE)
+    set(x86_64_SOURCES
+      ${x86_64_SOURCES}
+      x86_64/extendhfsf2.S
+      x86_64/truncsfhf2.S
+      x86_64/truncdfhf2.S
+    )
+  else()
+    set(x86_64_SOURCES
+      ${x86_64_SOURCES}
+      extendhfsf2.c
+      truncsfhf2.c
+      truncdfhf2.c
+    )
+  endif()
 
   if (NOT ANDROID)
     set(x86_64_SOURCES

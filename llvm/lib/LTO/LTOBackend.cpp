@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the "backend" phase of LTO, i.e. it performs
@@ -20,6 +22,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/PassManager.h"
@@ -41,7 +44,14 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
+#include "llvm/Transforms/Scalar/CJBarrierOpt.h"
+#include "llvm/Transforms/Scalar/CJBarrierSplit.h"
+#include "llvm/Transforms/Scalar/CJRewriteStatepoint.h"
+#include "llvm/Transforms/Scalar/CJRuntimeLowering.h"
+#include "llvm/Transforms/Scalar/CJSimpleOpt.h"
+#include "llvm/Transforms/Scalar/CJSpecificOpt.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Scalar/PlaceSafepoints.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
 #include "llvm/Transforms/Utils/SplitModule.h"
 
@@ -72,8 +82,26 @@ static cl::opt<bool> ThinLTOAssumeMerged(
     cl::desc("Assume the input has already undergone ThinLTO function "
              "importing and the other pre-optimization pipeline changes."));
 
+extern cl::opt<int> MaxRecursionInl;
+extern cl::opt<int> CountedLoopTripWidth;
+
 namespace llvm {
+enum class CJPGOKind { NoPGO, InstrGen, InstrUse };
+cl::opt<CJPGOKind> CJPGOKindFlag(
+    "cj-pgo-kind", cl::init(CJPGOKind::NoPGO), cl::Hidden,
+    cl::desc("The kind of cangjie profile guided optimization"),
+    cl::values(clEnumValN(CJPGOKind::NoPGO, "nopgo", "Do not use PGO."),
+               clEnumValN(CJPGOKind::InstrGen, "pgo-instr-gen-pipeline",
+                          "Instrument the IR to generate profile."),
+               clEnumValN(CJPGOKind::InstrUse, "pgo-instr-use-pipeline",
+                          "Use instrumented profile to guide PGO.")));
+cl::opt<std::string> CJProfileFile("cj-profile-file",
+                                   cl::desc("Path to the profile."),
+                                   cl::Hidden);
 extern cl::opt<bool> NoPGOWarnMismatch;
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> EnableCJBarrierSplit;
+extern cl::opt<bool> RunPartialInlining;
 }
 
 [[noreturn]] static void reportOpenError(StringRef Path, Twine Msg) {
@@ -232,6 +260,18 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
                            ModuleSummaryIndex *ExportSummary,
                            const ModuleSummaryIndex *ImportSummary) {
   Optional<PGOOptions> PGOOpt;
+  switch (CJPGOKindFlag) {
+  case CJPGOKind::InstrGen:
+    PGOOpt = PGOOptions(CJProfileFile, "", "", PGOOptions::IRInstr);
+    break;
+  case CJPGOKind::InstrUse:
+    PGOOpt =
+        PGOOptions(CJProfileFile, "", Conf.ProfileRemapping, PGOOptions::IRUse);
+    break;
+  case CJPGOKind::NoPGO:
+    break;
+  }
+
   if (!Conf.SampleProfile.empty())
     PGOOpt = PGOOptions(Conf.SampleProfile, "", Conf.ProfileRemapping,
                         PGOOptions::SampleUse, PGOOptions::NoCSAction, true);
@@ -291,6 +331,41 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
   if (!Conf.DisableVerify)
     MPM.addPass(VerifierPass());
 
+  if (CJPipeline) {
+    // Customize parameters for cangjie-pipeline.
+    if (OptLevel > 1 && !MaxRecursionInl.getPosition()) {
+      MaxRecursionInl = 1;
+    }
+    // We put 64-bit safepoint optimization to O3 level for safety.
+    if (OptLevel > 2) {
+      CountedLoopTripWidth = 64;
+    } else {
+      CountedLoopTripWidth = 16;
+    }
+
+    // Only enable partial inlining for PGO.
+    if (PGOOpt)
+      RunPartialInlining = true;
+
+    MPM.addPass(CJRuntimeLowering());
+    if (EnableCJBarrierSplit)
+      MPM.addPass(CJBarrierSplit());
+    if (OptLevel > 1) {
+      MPM.addPass(createModuleToFunctionPassAdaptor(CJSimpleOpt()));
+    }
+  }
+
+  auto addCangjiePasses = [&]() {
+    if (CJPipeline) {
+      MPM.addPass(CJSpecificOpt(OptLevel));
+      MPM.addPass(PlaceSafepoints());
+      if (OptLevel > 1) {
+        MPM.addPass(CJBarrierOpt());
+      }
+      MPM.addPass(CJRewriteStatepoint(OptLevel));
+    }
+  };
+
   OptimizationLevel OL;
 
   switch (OptLevel) {
@@ -323,6 +398,8 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
   } else {
     MPM.addPass(PB.buildLTODefaultPipeline(OL, ExportSummary));
   }
+
+  addCangjiePasses();
 
   if (!Conf.DisableVerify)
     MPM.addPass(VerifierPass());
@@ -360,6 +437,11 @@ bool lto::opt(const Config &Conf, TargetMachine *TM, unsigned Task, Module &Mod,
 static void codegen(const Config &Conf, TargetMachine *TM,
                     AddStreamFn AddStream, unsigned Task, Module &Mod,
                     const ModuleSummaryIndex &CombinedIndex) {
+  if (CJPipeline) {
+    // Before codegen, add attributes to functions in Module based on
+    // commandline parameters like llc.
+    codegen::setFunctionAttributes("", "", Mod);
+  }
   if (Conf.PreCodeGenModuleHook && !Conf.PreCodeGenModuleHook(Task, Mod))
     return;
 
@@ -450,7 +532,7 @@ static void splitCodeGen(const Config &C, TargetMachine *TM,
               std::unique_ptr<TargetMachine> TM =
                   createTargetMachine(C, T, *MPartInCtx);
 
-              codegen(C, TM.get(), AddStream, ThreadId, *MPartInCtx,
+              ::codegen(C, TM.get(), AddStream, ThreadId, *MPartInCtx,
                       CombinedIndex);
             },
             // Pass BC using std::move to ensure that it get moved rather than
@@ -507,7 +589,7 @@ Error lto::backend(const Config &C, AddStreamFn AddStream,
   }
 
   if (ParallelCodeGenParallelismLevel == 1) {
-    codegen(C, TM.get(), AddStream, 0, Mod, CombinedIndex);
+    ::codegen(C, TM.get(), AddStream, 0, Mod, CombinedIndex);
   } else {
     splitCodeGen(C, TM.get(), AddStream, ParallelCodeGenParallelismLevel, Mod,
                  CombinedIndex);
@@ -564,7 +646,7 @@ Error lto::thinBackend(const Config &Conf, unsigned Task, AddStreamFn AddStream,
   updatePublicTypeTestCalls(Mod, CombinedIndex.withWholeProgramVisibility());
 
   if (Conf.CodeGenOnly) {
-    codegen(Conf, TM.get(), AddStream, Task, Mod, CombinedIndex);
+    ::codegen(Conf, TM.get(), AddStream, Task, Mod, CombinedIndex);
     return finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));
   }
 
@@ -579,7 +661,7 @@ Error lto::thinBackend(const Config &Conf, unsigned Task, AddStreamFn AddStream,
                  CmdArgs))
           return finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));
 
-        codegen(Conf, TM, AddStream, Task, Mod, CombinedIndex);
+        ::codegen(Conf, TM, AddStream, Task, Mod, CombinedIndex);
         return finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));
       };
 

@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass optimizes scalar/vector interactions using target cost models. The
@@ -25,6 +27,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
@@ -205,6 +208,11 @@ bool VectorCombine::vectorizeLoadInsert(Instruction &I) {
     // to more accurately represent "(new) SrcPtr - Offset = (old) SrcPtr", but
     // negation does not change the result of the alignment calculation.
     Alignment = commonAlignment(Alignment, Offset.getZExtValue());
+  }
+
+  if (I.getFunction()->hasCangjieGC() &&
+      isMemoryContainsGCPtrType(SrcPtr->getType())) {
+    return false;
   }
 
   // Original pattern: insertelt undef, load [free casts of] PtrOp, 0

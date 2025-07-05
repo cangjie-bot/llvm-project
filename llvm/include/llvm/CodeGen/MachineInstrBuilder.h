@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file exposes a function named BuildMI, which is useful for dramatically
@@ -277,6 +279,11 @@ public:
 
   const MachineInstrBuilder &setMIFlag(MachineInstr::MIFlag Flag) const {
     MI->setFlag(Flag);
+    return *this;
+  }
+
+  const MachineInstrBuilder &setMIExtFlag(MachineInstr::MIExtFlag Flag) const {
+    MI->setExtFlag(Flag);
     return *this;
   }
 

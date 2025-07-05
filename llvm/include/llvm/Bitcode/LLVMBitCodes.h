@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This header defines Bitcode enum values for LLVM IR bitcode files.
@@ -689,6 +691,7 @@ enum AttributeKindCodes {
   ATTR_KIND_ALLOC_KIND = 82,
   ATTR_KIND_PRESPLIT_COROUTINE = 83,
   ATTR_KIND_FNRETTHUNK_EXTERN = 84,
+  ATTR_KIND_CJ_STACK_POINTER = 85,
 };
 
 enum ComdatSelectionKindCodes {

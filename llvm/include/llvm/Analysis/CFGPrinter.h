@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines a 'dot-cfg' analysis pass, which emits the
@@ -18,16 +20,137 @@
 #ifndef LLVM_ANALYSIS_CFGPRINTER_H
 #define LLVM_ANALYSIS_CFGPRINTER_H
 
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/HeatUtils.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/Statepoint.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DOTGraphTraits.h"
 #include "llvm/Support/FormatVariadic.h"
+
+using namespace llvm;
+
+static bool IsCJCFG = false;
+extern cl::opt<std::string> CJCFGARG;
+extern cl::opt<bool> IfCJCFGOnly;
+extern cl::opt<bool> IfCJCFGComplex;
+extern cl::opt<unsigned> CJCFGCol;
+
+namespace {
+class CJDFXOperate {
+public:
+  void run(const Function &F) {
+    setCJCFG();
+    fillMap(F);
+    if (!CJCFGARG.empty()) {
+      fillArgSet(F);
+    }
+  }
+
+  DenseMap<const Value *, SetVector<const Value *>> FlowMap;
+  DenseMap<const Value *, const Value *> DerivedBase;
+  SetVector<const Value *> ArgSet;
+
+private:
+  void setCJCFG() { IsCJCFG = true; }
+
+  void fillArgSet(const Function &F) {
+    for (auto &I : instructions(F)) {
+      if (I.getName().equals(CJCFGARG)) {
+        ArgSet.insert(&I);
+        break;
+      }
+    }
+
+    if (ArgSet.empty()) {
+      return;
+    }
+
+    for (auto Flow : FlowMap) {
+      for (auto Data : Flow.second) {
+        if (Data == ArgSet[0] || Data == ArgSet[0]->stripPointerCasts()) {
+          ArgSet.set_union(Flow.second);
+          break;
+        }
+      }
+    }
+  }
+
+  void getPhiOrigin(PHINode *Phi, SetVector<const Value *> &Cache) {
+    Cache.insert(Phi);
+    for (auto &Val : Phi->incoming_values()) {
+      if (Cache.count(Val->stripPointerCasts()) == 0) {
+        if (auto Reloc = dyn_cast<GCRelocateInst>(Val->stripPointerCasts())) {
+          getRelocateOrigin(Reloc, Cache);
+        } else if (auto PhiNew = dyn_cast<PHINode>(Val->stripPointerCasts())) {
+          getPhiOrigin(PhiNew, Cache);
+        } else {
+          Cache.insert(Val->stripPointerCasts());
+        }
+      }
+    }
+  }
+
+  void getRelocateOrigin(const GCRelocateInst *Reloc,
+                         SetVector<const Value *> &Cache) {
+    Cache.insert(Reloc);
+    auto Statepoint = cast<GCStatepointInst>(Reloc->getStatepoint());
+    auto Derived = dyn_cast<Value>(
+        *(Statepoint->gc_args_begin() + Reloc->getDerivedPtrIndex()));
+    auto Base = dyn_cast<Value>(
+        *(Statepoint->gc_args_begin() + Reloc->getBasePtrIndex()));
+    DerivedBase[Derived] = Base;
+    if (auto RelocOld =
+            dyn_cast<const GCRelocateInst>(Derived->stripPointerCasts())) {
+      getRelocateOrigin(RelocOld, Cache);
+    } else if (auto Phi = dyn_cast<PHINode>(Derived->stripPointerCasts())) {
+      getPhiOrigin(Phi, Cache);
+    } else {
+      Cache.insert(Derived->stripPointerCasts());
+    }
+  }
+
+  void fillMap(const Function &F) {
+    auto isFind = [&](const Value *Val) {
+      for (auto Flow : FlowMap) {
+        if (Flow.second.count(Val) > 0) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    for (auto &I : reverse(instructions(F))) {
+      if (auto Reloc = dyn_cast<const GCRelocateInst>(&I)) {
+        if (isFind(Reloc)) {
+          continue;
+        }
+        SetVector<const Value *> Cache;
+        getRelocateOrigin(Reloc, Cache);
+        bool Changed = false;
+        for (auto Flow : FlowMap) {
+          auto Temp = Cache;
+          Temp.set_subtract(Flow.second);
+          if (Temp.size() < Cache.size()) {
+            FlowMap[Flow.first].set_union(Temp);
+            Changed = true;
+          }
+        }
+        if (!Changed) {
+          FlowMap[&I] = Cache;
+        }
+      }
+    }
+  }
+};
+} // end anonymous namespace
 
 namespace llvm {
 template <class GraphType> struct GraphTraits;
@@ -47,6 +170,16 @@ public:
 };
 
 class CFGOnlyPrinterPass : public PassInfoMixin<CFGOnlyPrinterPass> {
+public:
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+};
+
+class CJCFGViewerPass : public PassInfoMixin<CJCFGViewerPass> {
+public:
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+};
+
+class CJCFGPrinterPass : public PassInfoMixin<CJCFGPrinterPass> {
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
@@ -131,6 +264,162 @@ struct DOTGraphTraits<DOTFuncInfo *> : public DefaultDOTGraphTraits {
     return "CFG for '" + CFGInfo->getFunction()->getName().str() + "' function";
   }
 
+  static const Value *findOrigin(const Value *Live, CJDFXOperate &CJDFXOp) {
+    for (auto Flow : CJDFXOp.FlowMap) {
+      if (Flow.second.count(Live->stripPointerCasts()) > 0) {
+        return Flow.first;
+      }
+    }
+    return Live;
+  }
+
+  static void printBase(raw_string_ostream &OS, const Value *Derived,
+                        CJDFXOperate &CJDFXOp) {
+    auto Itr = CJDFXOp.DerivedBase.find(Derived);
+    if (Itr != CJDFXOp.DerivedBase.end() && Itr->second != Derived) {
+      OS << "[ %" << CJDFXOp.DerivedBase[Derived]->getName() << " ]";
+    } else {
+      OS << "[ nullptr ]";
+    }
+  }
+
+  // print: gc-live[ base ]( origin1 origin2 ... ), phi1, phi2, ...
+  static void printLive(raw_string_ostream &OS,
+                        DenseMap<const Value *, const Value *> &LiveOriginMap,
+                        bool IsRef, CJDFXOperate &CJDFXOp) {
+    if (LiveOriginMap.size() == 0) {
+      return;
+    }
+    if (IsRef) {
+      OS << "ref:\n";
+    } else {
+      OS << "struct:\n";
+    }
+    for (auto LiveOrigin : LiveOriginMap) {
+      const Value *Live = LiveOrigin.first;
+      const Value *Origin = LiveOrigin.second;
+      OS << "%" << Live->getName();
+      printBase(OS, Live, CJDFXOp);
+      bool Changed = false;
+      OS << "(";
+      for (auto Flow : CJDFXOp.FlowMap[Origin]) {
+        if (isa<GCResultInst>(Flow) || isa<LoadInst>(Flow) ||
+            isa<AllocaInst>(Flow) || isa<Argument>(Flow) ||
+            isa<GetElementPtrInst>(Flow)) {
+          OS << " %" << Flow->getName();
+          Changed = true;
+        }
+      }
+      if (!Changed) {
+        OS << " %" << Live->stripPointerCasts()->getName();
+      }
+      OS << " )";
+      for (auto Flow : CJDFXOp.FlowMap[Origin]) {
+        if (isa<PHINode>(Flow)) {
+          OS << ", %" << Flow->getName();
+        }
+      }
+      OS << "\n";
+    }
+  }
+
+  static void addCJDFXLabel(const BasicBlock *Node, raw_string_ostream &OS,
+                            CJDFXOperate &CJDFXOp) {
+    auto isStructTy = [&](Type *Ty) {
+      if (auto PT = dyn_cast<PointerType>(Ty)) {
+        return Ty->getNonOpaquePointerElementType()->isStructTy();
+      }
+      return Ty->isStructTy();
+    };
+
+    auto handleGCArg = [&](raw_string_ostream &OS, const GCStatepointInst *Call,
+                           bool IsRef) {
+      DenseMap<const Value *, const Value *> LiveOriginMap;
+      for (auto &GCArg : Call->gc_args()) {
+        const Value *Live = dyn_cast<Value>(&GCArg);
+        const Value *Origin = findOrigin(Live, CJDFXOp);
+        if ((IsRef ^ isStructTy(Live->getType()))) {
+          LiveOriginMap.insert({Live, Origin});
+        }
+      }
+      printLive(OS, LiveOriginMap, IsRef, CJDFXOp);
+    };
+
+    for (auto &I : *Node) {
+      if (auto Call = dyn_cast<GCStatepointInst>(&I)) {
+        // print: statepoint_tokenxxx( calleefunc ):
+        OS << Call->getName();
+        if (auto CalledFunc = Call->getActualCalledFunction()) {
+          OS << "( " << CalledFunc->getName() << " ):\n";
+        } else {
+          // 3: ActualCallee
+          OS << "( " << Call->getOperand(3)->getName() << " ):\n";
+        }
+        handleGCArg(OS, Call, true);
+        handleGCArg(OS, Call, false);
+      }
+    }
+  }
+
+  // Print base and derived for relocated
+  static void printReloc(raw_string_ostream &OS,
+                         const GCRelocateInst *GCReloc) {
+    OS << "(%";
+    auto Base = dyn_cast<Value>(
+        *(cast<GCStatepointInst>(GCReloc->getStatepoint())->gc_args_begin() +
+          GCReloc->getBasePtrIndex()));
+    auto Derived = dyn_cast<Value>(
+        *(cast<GCStatepointInst>(GCReloc->getStatepoint())->gc_args_begin() +
+          GCReloc->getDerivedPtrIndex()));
+    OS << Base->getName() << ", %";
+    OS << Derived->getName() << ")\n";
+  }
+
+  static void addCJDFXArgLabel(const BasicBlock *Node, raw_string_ostream &OS,
+                               CJDFXOperate &CJDFXOp) {
+    auto setFind = [&](const Value *Val) {
+      return CJDFXOp.ArgSet.count(Val) > 0 ||
+             CJDFXOp.ArgSet.count(Val->stripPointerCasts()) > 0;
+    };
+
+    auto argUse = [&](const Instruction *I) {
+      for (auto &Arg : I->operands()) {
+        if (setFind(dyn_cast<Value>(&Arg))) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (CJDFXOp.ArgSet.empty()) {
+      return;
+    }
+    SetVector<const Value *> DataSet;
+    for (auto &I : *Node) {
+      const Value *Val = &I;
+      if (!IfCJCFGComplex) {
+        if (setFind(Val)) {
+          DataSet.insert(Val);
+        }
+      } else {
+        if (setFind(Val) || argUse(&I)) {
+          DataSet.insert(Val);
+          CJDFXOp.ArgSet.insert(Val);
+        }
+      }
+    }
+    if (!DataSet.empty()) {
+      OS << "\nData flow of ";
+      OS << CJCFGARG << ":\n";
+    }
+    for (auto Data : DataSet) {
+      OS << *Data << "\n";
+      if (auto GCReloc = dyn_cast<GCRelocateInst>(Data)) {
+        printReloc(OS, GCReloc);
+      }
+    }
+  }
+
   static std::string getSimpleNodeLabel(const BasicBlock *Node, DOTFuncInfo *) {
     if (!Node->getName().empty())
       return Node->getName().str();
@@ -163,7 +452,20 @@ struct DOTGraphTraits<DOTFuncInfo *> : public DefaultDOTGraphTraits {
       OS << ":";
     }
 
-    HandleBasicBlock(OS, *Node);
+    CJDFXOperate CJDFXOp;
+    CJDFXOp.run(*(Node->getParent()));
+    if (IsCJCFG && IfCJCFGOnly) {
+      OS << Node->getName() << ":\n";
+    } else {
+      HandleBasicBlock(OS, *Node);
+    }
+    if (IsCJCFG) {
+      if (CJCFGARG.empty()) {
+        addCJDFXLabel(Node, OS, CJDFXOp);
+      } else {
+        addCJDFXArgLabel(Node, OS, CJDFXOp);
+      }
+    }
     std::string OutStr = OS.str();
     if (OutStr[0] == '\n')
       OutStr.erase(OutStr.begin());
@@ -171,6 +473,7 @@ struct DOTGraphTraits<DOTFuncInfo *> : public DefaultDOTGraphTraits {
     // Process string output to make it nicer...
     unsigned ColNum = 0;
     unsigned LastSpace = 0;
+    unsigned MaxCol = IsCJCFG ? CJCFGCol : MaxColumns;
     for (unsigned i = 0; i != OutStr.length(); ++i) {
       if (OutStr[i] == '\n') { // Left justify
         OutStr[i] = '\\';
@@ -180,7 +483,7 @@ struct DOTGraphTraits<DOTFuncInfo *> : public DefaultDOTGraphTraits {
       } else if (OutStr[i] == ';') {             // Delete comments!
         unsigned Idx = OutStr.find('\n', i + 1); // Find end of line
         HandleComment(OutStr, i, Idx);
-      } else if (ColNum == MaxColumns) { // Wrap lines.
+      } else if (ColNum == MaxCol) { // Wrap lines.
         // Wrap very long names even though we can't find a space.
         if (!LastSpace)
           LastSpace = i;
@@ -197,7 +500,6 @@ struct DOTGraphTraits<DOTFuncInfo *> : public DefaultDOTGraphTraits {
   }
 
   std::string getNodeLabel(const BasicBlock *Node, DOTFuncInfo *CFGInfo) {
-
     if (isSimple())
       return getSimpleNodeLabel(Node, CFGInfo);
     else
@@ -304,6 +606,8 @@ namespace llvm {
 class FunctionPass;
 FunctionPass *createCFGPrinterLegacyPassPass();
 FunctionPass *createCFGOnlyPrinterLegacyPassPass();
+FunctionPass *createCJCFGViewerLegacyPassPass();
+FunctionPass *createCJCFGPrinterLegacyPassPass();
 } // End llvm namespace
 
 #endif

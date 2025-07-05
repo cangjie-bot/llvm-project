@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the IRBuilder class, which is used as a convenient way
@@ -150,6 +152,31 @@ CallInst *IRBuilderBase::CreateMemSet(Value *Ptr, Value *Val, Value *Size,
 
   if (Align)
     cast<MemSetInst>(CI)->setDestAlignment(*Align);
+
+  // Set the TBAA info if present.
+  if (TBAATag)
+    CI->setMetadata(LLVMContext::MD_tbaa, TBAATag);
+
+  if (ScopeTag)
+    CI->setMetadata(LLVMContext::MD_alias_scope, ScopeTag);
+
+  if (NoAliasTag)
+    CI->setMetadata(LLVMContext::MD_noalias, NoAliasTag);
+
+  return CI;
+}
+
+CallInst *IRBuilderBase::CreateCJMemSet(Value *Ptr, Value *Val, Value *Size,
+                                        MaybeAlign Align, bool isVolatile,
+                                        MDNode *TBAATag, MDNode *ScopeTag,
+                                        MDNode *NoAliasTag) {
+  Ptr = getCastedInt8PtrValue(Ptr);
+  Value *Ops[] = {Ptr, Val, Size, getInt1(isVolatile)};
+  Module *M = BB->getParent()->getParent();
+  Function *TheFn = Intrinsic::getDeclaration(
+      M, Intrinsic::cj_memset, {Ptr->getType()});
+
+  CallInst *CI = createCallHelper(TheFn, Ops, this);
 
   // Set the TBAA info if present.
   if (TBAATag)
@@ -690,6 +717,38 @@ getStatepointArgs(IRBuilderBase &B, uint64_t ID, uint32_t NumPatchBytes,
   return Args;
 }
 
+template <typename T0>
+static std::vector<Value *>
+getCJStatepointArgs(IRBuilderBase &B, uint64_t ID, uint32_t NumPatchBytes,
+                    Value *ActualCallee, uint32_t Flags,
+                    ArrayRef<T0> CallArgs) {
+  std::vector<Value *> Args;
+  Args.push_back(B.getInt64(ID));
+  Args.push_back(B.getInt32(NumPatchBytes));
+  Args.push_back(ActualCallee);
+  Args.push_back(B.getInt32(CallArgs.size()));
+  Args.push_back(B.getInt32(Flags));
+  llvm::append_range(Args, CallArgs);
+  // GC args are now encoded in the gc-live operand bundle
+  return Args;
+}
+
+static std::vector<OperandBundleDef>
+getStatepointBundles(ArrayRef<Value *> GCArgs, ArrayRef<Value *> StructArgs) {
+  std::vector<OperandBundleDef> Rval;
+  if (GCArgs.size()) {
+    SmallVector<Value*, 16> LiveValues;
+    llvm::append_range(LiveValues, GCArgs);
+    Rval.emplace_back("gc-live", LiveValues);
+  }
+  if (StructArgs.size()) {
+    SmallVector<Value*, 16> StructLiveValues;
+    llvm::append_range(StructLiveValues, StructArgs);
+    Rval.emplace_back("struct-live", StructLiveValues);
+  }
+  return Rval;
+}
+
 template<typename T1, typename T2, typename T3>
 static std::vector<OperandBundleDef>
 getStatepointBundles(Optional<ArrayRef<T1>> TransitionArgs,
@@ -729,9 +788,11 @@ static CallInst *CreateGCStatepointCallCommon(
   std::vector<Value *> Args = getStatepointArgs(
       *Builder, ID, NumPatchBytes, ActualCallee.getCallee(), Flags, CallArgs);
 
-  CallInst *CI = Builder->CreateCall(
-      FnStatepoint, Args,
-      getStatepointBundles(TransitionArgs, DeoptArgs, GCArgs), Name);
+  CallInst *CI =
+      Builder->CreateCall(FnStatepoint, Args,
+                          getStatepointBundles(TransitionArgs, DeoptArgs,
+                                               GCArgs),
+                          Name);
   CI->addParamAttr(2,
                    Attribute::get(Builder->getContext(), Attribute::ElementType,
                                   ActualCallee.getFunctionType()));
@@ -764,6 +825,22 @@ CallInst *IRBuilderBase::CreateGCStatepointCall(
   return CreateGCStatepointCallCommon<Use, Value *, Value *, Value *>(
       this, ID, NumPatchBytes, ActualCallee, uint32_t(StatepointFlags::None),
       CallArgs, None, DeoptArgs, GCArgs, Name);
+}
+
+CallInst *IRBuilderBase::CreateCJGCStatepointCall(
+    uint64_t ID, uint32_t NumPatchBytes, FunctionCallee ActualCallee,
+    uint32_t Flags, ArrayRef<Value *> CallArgs, ArrayRef<Value *> GCArgs,
+    ArrayRef<Value *> StructArgs, const Twine &Name) {
+  Module *M = this->GetInsertBlock()->getParent()->getParent();
+  // Fill in the one generic type'd argument (the function is also vararg)
+  Function *Fn = Intrinsic::getDeclaration(M, Intrinsic::cj_gc_statepoint);
+
+  std::vector<Value *> Args = getCJStatepointArgs(
+      *this, ID, NumPatchBytes, ActualCallee.getCallee(), Flags, CallArgs);
+
+  CallInst *CI =
+      CreateCall(Fn, Args, getStatepointBundles(GCArgs, StructArgs), Name);
+  return CI;
 }
 
 template <typename T0, typename T1, typename T2, typename T3>
@@ -825,9 +902,38 @@ InvokeInst *IRBuilderBase::CreateGCStatepointInvoke(
       Name);
 }
 
+InvokeInst *IRBuilderBase::CreateCJGCStatepointInvoke(
+    uint64_t ID, uint32_t NumPatchBytes, FunctionCallee ActualInvokee,
+    BasicBlock *NormalDest, BasicBlock *UnwindDest, uint32_t Flags,
+    ArrayRef<Value *> InvokeArgs, ArrayRef<Value *> GCArgs,
+    ArrayRef<Value *> StructArgs, const Twine &Name) {
+  Module *M = this->GetInsertBlock()->getParent()->getParent();
+  // Fill in the one generic type'd argument (the function is also vararg)
+  Function *Fn = Intrinsic::getDeclaration(M, Intrinsic::cj_gc_statepoint);
+
+  std::vector<Value *> Args = getCJStatepointArgs(
+      *this, ID, NumPatchBytes, ActualInvokee.getCallee(), Flags, InvokeArgs);
+
+  InvokeInst *II =
+      CreateInvoke(Fn, NormalDest, UnwindDest, Args,
+                   getStatepointBundles(GCArgs, StructArgs), Name);
+  return II;
+}
+
 CallInst *IRBuilderBase::CreateGCResult(Instruction *Statepoint,
                                         Type *ResultType, const Twine &Name) {
   Intrinsic::ID ID = Intrinsic::experimental_gc_result;
+  Module *M = BB->getParent()->getParent();
+  Type *Types[] = {ResultType};
+  Function *FnGCResult = Intrinsic::getDeclaration(M, ID, Types);
+
+  Value *Args[] = {Statepoint};
+  return createCallHelper(FnGCResult, Args, this, Name);
+}
+
+CallInst *IRBuilderBase::CreateCJGCResult(Instruction *Statepoint,
+                                          Type *ResultType, const Twine &Name) {
+  Intrinsic::ID ID = Intrinsic::cj_gc_result;
   Module *M = BB->getParent()->getParent();
   Type *Types[] = {ResultType};
   Function *FnGCResult = Intrinsic::getDeclaration(M, ID, Types);
@@ -843,6 +949,19 @@ CallInst *IRBuilderBase::CreateGCRelocate(Instruction *Statepoint,
   Type *Types[] = {ResultType};
   Function *FnGCRelocate =
       Intrinsic::getDeclaration(M, Intrinsic::experimental_gc_relocate, Types);
+
+  Value *Args[] = {Statepoint, getInt32(BaseOffset), getInt32(DerivedOffset)};
+  return createCallHelper(FnGCRelocate, Args, this, Name);
+}
+
+CallInst *IRBuilderBase::CreateCJGCRelocate(Instruction *Statepoint,
+                                            int BaseOffset, int DerivedOffset,
+                                            Type *ResultType,
+                                            const Twine &Name) {
+  Module *M = BB->getParent()->getParent();
+  Type *Types[] = {ResultType};
+  Function *FnGCRelocate =
+      Intrinsic::getDeclaration(M, Intrinsic::cj_gc_relocate, Types);
 
   Value *Args[] = {Statepoint, getInt32(BaseOffset), getInt32(DerivedOffset)};
   return createCallHelper(FnGCRelocate, Args, this, Name);

@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // The file defines the MachineFrameInfo class.
@@ -240,6 +242,9 @@ private:
   /// above.  It then updates StackSize to contain the number of bytes that need
   /// to be allocated on entry to the function.
   uint64_t StackSize = 0;
+
+  /// Record the offset of frame pointer from stack base pointer on Win64.
+  uint64_t FPOffset = 0;
 
   /// The amount that a frame offset needs to be adjusted to
   /// have the actual offset from the stack/frame pointer.  The exact usage of
@@ -578,6 +583,12 @@ public:
 
   /// Set the size of the stack.
   void setStackSize(uint64_t Size) { StackSize = Size; }
+
+  /// Return the offset of the frame pointer on Win64.
+  uint64_t getWin64FramePointerOffset() const { return FPOffset; }
+
+  /// Set the offset of the frame pointer on Win64.
+  void setWin64FramePointerOffset(uint64_t offset) { FPOffset = offset; }
 
   /// Estimate and return the size of the stack frame.
   uint64_t estimateStackSize(const MachineFunction &MF) const;

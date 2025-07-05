@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the X86-specific support for the FastISel class. Much
@@ -3288,7 +3290,11 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
 
   // Get a count of how many bytes are to be pushed on the stack.
   unsigned NumBytes = CCInfo.getAlignedCallFrameSize();
-
+  // Cangjie need to add frame info for CFFI stub.
+  if (Callee) {
+    CCInfo.AddAlignedCallFrameSizeMetaDataForCJFFI(
+        const_cast<Function *>(dyn_cast<Function>(Callee)), NumBytes);
+  }
   // Issue CALLSEQ_START
   unsigned AdjStackDown = TII.getCallFrameSetupOpcode();
   BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(AdjStackDown))

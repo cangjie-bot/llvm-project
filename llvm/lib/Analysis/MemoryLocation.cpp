@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/MemoryLocation.h"
@@ -15,6 +17,10 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 using namespace llvm;
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
 
 void LocationSize::print(raw_ostream &OS) const {
   OS << "LocationSize::";
@@ -43,11 +49,18 @@ MemoryLocation MemoryLocation::get(const LoadInst *LI) {
 
 MemoryLocation MemoryLocation::get(const StoreInst *SI) {
   const auto &DL = SI->getModule()->getDataLayout();
-
   return MemoryLocation(SI->getPointerOperand(),
                         LocationSize::precise(DL.getTypeStoreSize(
                             SI->getValueOperand()->getType())),
                         SI->getAAMetadata());
+}
+
+MemoryLocation MemoryLocation::get(const CallBase *CI) {
+  const auto &DL = CI->getModule()->getDataLayout();
+  return MemoryLocation(getLoadStorePointerOperand(CI),
+                        LocationSize::precise(DL.getTypeStoreSize(
+                            getLoadStorePointerOperand(CI)->getType())),
+                        CI->getAAMetadata());
 }
 
 MemoryLocation MemoryLocation::get(const VAArgInst *VI) {
@@ -85,6 +98,16 @@ Optional<MemoryLocation> MemoryLocation::getOrNone(const Instruction *Inst) {
     return get(cast<AtomicCmpXchgInst>(Inst));
   case Instruction::AtomicRMW:
     return get(cast<AtomicRMWInst>(Inst));
+  case Instruction::Call: {
+    auto *CI = cast<CallBase>(Inst);
+    auto IID = CI->getIntrinsicID();
+    if (IID == Intrinsic::cj_gcwrite_ref ||
+        IID == Intrinsic::cj_gcwrite_static_ref ||
+        IID == Intrinsic::cj_gcread_ref ||
+        IID == Intrinsic::cj_gcread_static_ref)
+      return get(CI);
+  }
+    LLVM_FALLTHROUGH;
   default:
     return None;
   }
@@ -101,6 +124,23 @@ MemoryLocation MemoryLocation::getForSource(const AtomicMemTransferInst *MTI) {
 MemoryLocation MemoryLocation::getForSource(const AnyMemTransferInst *MTI) {
   assert(MTI->getRawSource() == MTI->getArgOperand(1));
   return getForArgument(MTI, 1, nullptr);
+}
+
+Optional<MemoryLocation>
+MemoryLocation::getCJMemTransferSource(const IntrinsicInst *II) {
+  if (CJPipeline) {
+    switch (II->getIntrinsicID()) {
+    case Intrinsic::cj_gcwrite_static_struct:
+    case Intrinsic::cj_gcread_static_struct:
+      return getForArgument(II, 1, nullptr);
+    case Intrinsic::cj_gcwrite_struct:
+    case Intrinsic::cj_gcread_struct:
+      return getForArgument(II, 2, nullptr);
+    default:
+      break;
+    }
+  }
+  return None;
 }
 
 MemoryLocation MemoryLocation::getForDest(const MemIntrinsic *MI) {
@@ -124,6 +164,20 @@ MemoryLocation::getForDest(const CallBase *CB, const TargetLibraryInfo &TLI) {
   if (CB->hasOperandBundles())
     // TODO: remove implementation restriction
     return None;
+
+  if (CJPipeline) {
+    switch (CB->getIntrinsicID()) {
+    case Intrinsic::cj_memset:
+    case Intrinsic::cj_gcwrite_static_struct:
+    case Intrinsic::cj_gcread_struct:
+    case Intrinsic::cj_gcread_static_struct:
+      return getForArgument(CB, 0, &TLI);
+    case Intrinsic::cj_gcwrite_struct:
+      return getForArgument(CB, 1, &TLI);
+    default:
+      break;
+    }
+  }
 
   Value *UsedV = nullptr;
   Optional<unsigned> UsedIdx;
@@ -169,6 +223,9 @@ MemoryLocation MemoryLocation::getForArgument(const CallBase *Call,
     default:
       break;
     case Intrinsic::memset:
+    case Intrinsic::cj_memset:
+    case Intrinsic::cj_gcwrite_static_struct:
+    case Intrinsic::cj_gcread_static_struct:
     case Intrinsic::memcpy:
     case Intrinsic::memcpy_inline:
     case Intrinsic::memmove:
@@ -178,6 +235,15 @@ MemoryLocation MemoryLocation::getForArgument(const CallBase *Call,
       assert((ArgIdx == 0 || ArgIdx == 1) &&
              "Invalid argument index for memory intrinsic");
       if (ConstantInt *LenCI = dyn_cast<ConstantInt>(II->getArgOperand(2)))
+        return MemoryLocation(Arg, LocationSize::precise(LenCI->getZExtValue()),
+                              AATags);
+      return MemoryLocation::getAfter(Arg, AATags);
+
+    case Intrinsic::cj_gcwrite_struct:
+    case Intrinsic::cj_gcread_struct:
+      assert((ArgIdx == 0 || ArgIdx == 1 || ArgIdx == 2) &&
+             "Invalid argument index for cj.gcwrite.struct");
+      if (ConstantInt *LenCI = dyn_cast<ConstantInt>(II->getArgOperand(3)))
         return MemoryLocation(Arg, LocationSize::precise(LenCI->getZExtValue()),
                               AATags);
       return MemoryLocation::getAfter(Arg, AATags);

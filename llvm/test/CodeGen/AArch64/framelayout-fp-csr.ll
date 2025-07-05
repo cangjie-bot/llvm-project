@@ -11,12 +11,12 @@ entry:
   ret void
 }
 ; CHECK-LABEL: test1:
-; CHECK:       str     d8, [sp, #-32]!
-; CHECK-NEXT:  stp     x29, x30, [sp, #16]
-; CHECK-NEXT:  add     x29, sp, #16
+; CHECK:       stp	x29, x30, [sp, #-32]!           // 16-byte Folded Spill
+; CHECK-NEXT:  str	d8, [sp, #16]                   // 8-byte Folded Spill
+; CHECK-NEXT:  mov	x29, sp
 ; CHECK:       nop
-; CHECK:       ldp     x29, x30, [sp, #16]
-; CHECK-NEXT:  ldr     d8, [sp], #32
+; CHECK:       ldr	d8, [sp, #16]                   // 8-byte Folded Reload
+; CHECK-NEXT:  ldp	x29, x30, [sp], #32             // 16-byte Folded Reload
 ; CHECK-NEXT:  ret
 
 attributes #26 = { nounwind }

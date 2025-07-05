@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass performs loop invariant code motion on machine instructions. We
@@ -1007,6 +1009,12 @@ bool MachineLICMBase::IsLoopInvariantInst(MachineInstr &I) {
     LLVM_DEBUG(dbgs() << "LICM: Instruction not a LICM candidate\n");
     return false;
   }
+
+  // derived ptr need to be recalculated in copy gc
+  if (I.isCalDerivedPtrInCangjieCopyGC(MRI)) {
+    return false;
+  }
+
   return CurLoop->isLoopInvariant(I);
 }
 

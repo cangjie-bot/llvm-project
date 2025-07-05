@@ -231,9 +231,7 @@ void LoopVersioning::annotateInstWithNoAlias(Instruction *VersionedInst,
     return;
 
   LLVMContext &Context = VersionedLoop->getHeader()->getContext();
-  const Value *Ptr = isa<LoadInst>(OrigInst)
-                         ? cast<LoadInst>(OrigInst)->getPointerOperand()
-                         : cast<StoreInst>(OrigInst)->getPointerOperand();
+  const Value *Ptr = getLoadStorePointerOperand(OrigInst);
 
   // Find the group for the pointer and then add the scope metadata.
   auto Group = PtrToGroup.find(Ptr);

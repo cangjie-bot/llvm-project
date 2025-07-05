@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This is the LLVM loop vectorizer. This pass modifies 'vectorizable' loops
@@ -366,6 +368,15 @@ cl::opt<bool> PrintVPlansInDotFormat(
     "vplan-print-in-dot-format", cl::init(false), cl::Hidden,
     cl::desc("Use dot format instead of plain text when dumping VPlans"));
 
+static cl::opt<unsigned> ScalarCostCalculationCoefForCangjie(
+    "scaler-cost-calculation-coefficient-for-cj", cl::init(100), cl::Hidden,
+    cl::desc("Coefficient for calculating scalar cost. "
+             "When vector cost < coef / 100 * scalar cost, vectorization is "
+             "more profitable. For example, coef = 90 means that benifits "
+             "greater than 10% are considered more profitable."));
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 /// A helper function that returns true if the given type is irregular. The
 /// type is irregular if its allocated size doesn't equal the store size of an
 /// element of the corresponding vector type.
@@ -476,6 +487,9 @@ public:
   /// Widen a single call instruction within the innermost loop.
   void widenCallInstruction(CallInst &CI, VPValue *Def, VPUser &ArgOperands,
                             VPTransformState &State);
+
+  void widenCJGCWrite(CallInst &CI, const VPUser &ArgOperands,
+                      VPTransformState &State);
 
   /// Fix the vectorized code, taking care of header phi's, live-outs, and more.
   void fixVectorizedLoop(VPTransformState &State, VPlan &Plan);
@@ -1551,6 +1565,8 @@ public:
   /// i.e. either vector version isn't available, or is too expensive.
   InstructionCost getVectorCallCost(CallInst *CI, ElementCount VF,
                                     bool &NeedToScalarize) const;
+
+  InstructionCost getGCWriteCost(CallInst *CI, ElementCount VF) const;
 
   /// Returns true if the per-lane cost of VectorizationFactor A is lower than
   /// that of B.
@@ -3419,6 +3435,9 @@ static void cse(BasicBlock *BB) {
 InstructionCost
 LoopVectorizationCostModel::getVectorCallCost(CallInst *CI, ElementCount VF,
                                               bool &NeedToScalarize) const {
+  if (isVectorizableCJGCWrite(CI)) {
+    return getGCWriteCost(CI, VF);
+  }
   Function *F = CI->getCalledFunction();
   Type *ScalarRetTy = CI->getType();
   SmallVector<Type *, 4> Tys, ScalarTys;
@@ -3463,6 +3482,42 @@ LoopVectorizationCostModel::getVectorCallCost(CallInst *CI, ElementCount VF,
     Cost = VectorCallCost;
   }
   return Cost;
+}
+
+InstructionCost
+LoopVectorizationCostModel::getGCWriteCost(CallInst *CI,
+                                           ElementCount VF) const {
+  if (!VF.isVector()) {
+    return 1;
+  }
+
+  InstWidening Decision = getWideningDecision(CI, VF);
+  if (Decision != CM_Widen && Decision != CM_Widen_Reverse) {
+    return InstructionCost::getMax();
+  }
+
+  Type *AT = CI->getArgOperand(0)->getType();
+  unsigned BitWidth = 0;
+  if (AT->getTypeID() == Type::IntegerTyID) {
+    BitWidth = CI->getArgOperand(0)->getType()->getIntegerBitWidth();
+  } else if (AT->getTypeID() == Type::HalfTyID) {
+    BitWidth = 16; // 16: fp16's bitwidth
+  } else if (AT->getTypeID() == Type::FloatTyID) {
+    BitWidth = 32; // 32: float's bitwidth
+  } else if (AT->getTypeID() == Type::DoubleTyID) {
+    BitWidth = 64; // 64: double's bitwidth
+  } else {
+    report_fatal_error("unsupport type for cj-gc-write vectorization!");
+  }
+  unsigned VFWidth = VF.getKnownMinValue();
+  // support <2 * f64>, <4 * f32>, <8 * f16>, <2 * i64>, <4 * i32>,
+  // <8 * i16>, <16 * i8> and <8 *i8> now.
+  // set related-cj_gcwrite's cost to 1 since vectorized can reduce
+  // the times of getGCPhase
+  if (BitWidth * VFWidth == 128 || ((BitWidth == 8) && (VFWidth == 8))) {
+    return 1;
+  }
+  return InstructionCost::getMax();
 }
 
 static Type *MaybeVectorizeType(Type *Elt, ElementCount VF) {
@@ -4170,9 +4225,89 @@ bool InnerLoopVectorizer::useOrderedReductions(
   return Cost->useOrderedReductions(RdxDesc);
 }
 
+static Value *createVecPtr(Instruction *I, unsigned Part, Value *Ptr,
+                           VPTransformState &State, bool Reverse) {
+  Type *ScalarDataTy = getLoadStoreType(I);
+  // Calculate the pointer for the specific unroll-part.
+  GetElementPtrInst *PartPtr = nullptr;
+  bool InBounds = false;
+  if (auto *Gep = dyn_cast<GetElementPtrInst>(Ptr->stripPointerCasts())) {
+    InBounds = Gep->isInBounds();
+  }
+  auto &Builder = State.Builder;
+  if (Reverse) {
+    // If the address is consecutive but reversed, then the
+    // wide store needs to start at the last vector element.
+    // RunTimeVF =  VScale * VF.getKnownMinValue()
+    // For fixed-width VScale is 1, then RunTimeVF = VF.getKnownMinValue()
+    Value *RunTimeVF = getRuntimeVF(Builder, Builder.getInt32Ty(), State.VF);
+    // NumElt = -Part * RunTimeVF
+    Value *NumElt = Builder.CreateMul(Builder.getInt32(-Part), RunTimeVF);
+    // LastLane = 1 - RunTimeVF
+    Value *LastLane = Builder.CreateSub(Builder.getInt32(1), RunTimeVF);
+    PartPtr =
+        cast<GetElementPtrInst>(Builder.CreateGEP(ScalarDataTy, Ptr, NumElt));
+    PartPtr->setIsInBounds(InBounds);
+    PartPtr = cast<GetElementPtrInst>(
+        Builder.CreateGEP(ScalarDataTy, PartPtr, LastLane));
+  } else {
+    Value *Increment =
+        createStepForVF(Builder, Builder.getInt32Ty(), State.VF, Part);
+    PartPtr = cast<GetElementPtrInst>(
+        Builder.CreateGEP(ScalarDataTy, Ptr, Increment));
+  }
+  PartPtr->setIsInBounds(InBounds);
+
+  return PartPtr;
+}
+
+void InnerLoopVectorizer::widenCJGCWrite(CallInst &CI,
+                                         const VPUser &ArgOperands,
+                                         VPTransformState &State) {
+  auto *DataTy = VectorType::get(getLoadStoreType(&CI), State.VF);
+  auto &CurBuilder = State.Builder;
+  State.setDebugLocFromInst(&CI);
+  LoopVectorizationCostModel::InstWidening Decision =
+      Cost->getWideningDecision(&CI, State.VF);
+  if (Decision != LoopVectorizationCostModel::CM_Widen &&
+      Decision != LoopVectorizationCostModel::CM_Widen_Reverse) {
+    report_fatal_error("only support consentive ptr");
+    return;
+  }
+  bool Reverse = (Decision == LoopVectorizationCostModel::CM_Widen_Reverse);
+  Value *Ptr = State.get(ArgOperands.getOperand(2), VPIteration(0, 0));
+  auto *Func = Intrinsic::getDeclaration(
+      CI.getModule(), llvm::Intrinsic::cj_gcwrite_ref);
+
+  for (unsigned Part = 0; Part < State.UF; ++Part) {
+    Value *StoredVal = State.get(ArgOperands.getOperand(0), Part);
+    if (Reverse) {
+      // If we store to reverse consecutive memory locations, then we need
+      // to reverse the order of elements in the stored value.
+      StoredVal = Builder.CreateVectorReverse(StoredVal, "reverse");
+      // We don't want to update the value in the map as it might be used in
+      // another expression. So don't call resetVectorValue(StoredVal).
+    }
+
+    Value *PartPtr = createVecPtr(&CI, Part, Ptr, State, Reverse);
+    unsigned AddressSpace = Ptr->getType()->getPointerAddressSpace();
+    Value *StoreVecPtr =  Builder.CreateBitCast(PartPtr, DataTy->getPointerTo(AddressSpace));
+    auto *NewCI =
+        CurBuilder.CreateCall(Func, {StoredVal, CI.getOperand(1), StoreVecPtr});
+    State.addMetadata(NewCI, &CI);
+  }
+
+  return;
+}
+
 void InnerLoopVectorizer::widenCallInstruction(CallInst &CI, VPValue *Def,
                                                VPUser &ArgOperands,
                                                VPTransformState &State) {
+  if (isVectorizableCJGCWrite(&CI)) {
+    widenCJGCWrite(CI, ArgOperands, State);
+    return;
+  }
+
   assert(!isa<DbgInfoIntrinsic>(CI) &&
          "DbgInfoIntrinsic should have been dropped during VPlan construction");
   State.setDebugLocFromInst(&CI);
@@ -4431,6 +4566,9 @@ bool LoopVectorizationCostModel::isScalarWithPredication(
     Instruction *I, ElementCount VF) const {
   if (!blockNeedsPredicationForAnyReason(I->getParent()))
     return false;
+  if (isVectorizableCJGCWrite(I)) {
+    return false;
+  }
   switch(I->getOpcode()) {
   default:
     break;
@@ -4532,7 +4670,8 @@ bool LoopVectorizationCostModel::interleavedAccessCanBeWidened(
 bool LoopVectorizationCostModel::memoryInstructionCanBeWidened(
     Instruction *I, ElementCount VF) {
   // Get and ensure we have a valid memory instruction.
-  assert((isa<LoadInst, StoreInst>(I)) && "Invalid memory instruction");
+  assert((isa<LoadInst, StoreInst>(I) || isVectorizableCJGCWrite(I)) &&
+         "Invalid memory instruction");
 
   auto *Ptr = getLoadStorePointerOperand(I);
   auto *ScalarTy = getLoadStoreType(I);
@@ -5257,6 +5396,14 @@ bool LoopVectorizationCostModel::isMoreProfitable(
   if (A.Width.isScalable() && !B.Width.isScalable())
     return (CostA * B.Width.getFixedValue()) <= (CostB * EstimatedWidthA);
 
+  if (EstimatedWidthB == 1 && CJPipeline) {
+    unsigned Coef = ScalarCostCalculationCoefForCangjie;
+    // To avoid the need for FP division:
+    //      (CostA / A.Width) * 100 < (CostB / B.Width) * Coef
+    // <=>  (CostA * B.Width) * 100 < (CostB * A.Width) * Coef
+    return CostA * 100 < CostB * EstimatedWidthA * Coef;
+  }
+
   // To avoid the need for FP division:
   //      (CostA / A.Width) < (CostB / B.Width)
   // <=>  (CostA * B.Width) < (CostB * A.Width)
@@ -5575,7 +5722,8 @@ void LoopVectorizationCostModel::collectElementTypesForWidening() {
         continue;
 
       // Only examine Loads, Stores and PHINodes.
-      if (!isa<LoadInst>(I) && !isa<StoreInst>(I) && !isa<PHINode>(I))
+      if (!isa<LoadInst>(I) && !isa<StoreInst>(I) && !isa<PHINode>(I) &&
+          !isVectorizableCJGCWrite(&I))
         continue;
 
       // Examine PHI nodes that are reduction variables. Update the type to
@@ -5594,8 +5742,9 @@ void LoopVectorizationCostModel::collectElementTypesForWidening() {
       }
 
       // Examine the stored values.
-      if (auto *ST = dyn_cast<StoreInst>(&I))
-        T = ST->getValueOperand()->getType();
+      if (isa<StoreInst>(&I) || isVectorizableCJGCWrite(&I)) {
+        T = getStoreValueOperand(&I)->getType();
+      }
 
       assert(T->isSized() &&
              "Expected the load/store/recurrence type to be sized");
@@ -5821,7 +5970,7 @@ unsigned LoopVectorizationCostModel::selectInterleaveCount(ElementCount VF,
       LoadsIC = std::min(LoadsIC, F);
     }
 
-    if (EnableLoadStoreRuntimeInterleave &&
+    if (EnableLoadStoreRuntimeInterleave && !TheLoop->HasGCWriteInLoop &&
         std::max(StoresIC, LoadsIC) > SmallIC) {
       LLVM_DEBUG(
           dbgs() << "LV: Interleaving to saturate store or load ports.\n");
@@ -6057,7 +6206,7 @@ bool LoopVectorizationCostModel::useEmulatedMaskMemRefHack(Instruction *I,
   assert((isPredicatedInst(I, VF) || Legal->isUniformMemOp(*I)) &&
          "Expecting a scalar emulated instruction");
   return isa<LoadInst>(I) ||
-         (isa<StoreInst>(I) &&
+         ((isa<StoreInst>(I) || isVectorizableCJGCWrite(I)) &&
           NumPredStores > NumberOfStoresToPredicate);
 }
 
@@ -6359,6 +6508,9 @@ LoopVectorizationCostModel::getMemInstScalarizationCost(Instruction *I,
 InstructionCost
 LoopVectorizationCostModel::getConsecutiveMemOpCost(Instruction *I,
                                                     ElementCount VF) {
+  if (isVectorizableCJGCWrite(I)) {
+    return getGCWriteCost(dyn_cast<CallInst>(I), VF);
+  }
   Type *ValTy = getLoadStoreType(I);
   auto *VectorTy = cast<VectorType>(ToVectorTy(ValTy, VF));
   Value *Ptr = getLoadStorePointerOperand(I);
@@ -6415,6 +6567,9 @@ LoopVectorizationCostModel::getUniformMemOpCost(Instruction *I,
 InstructionCost
 LoopVectorizationCostModel::getGatherScatterCost(Instruction *I,
                                                  ElementCount VF) {
+  if (isVectorizableCJGCWrite(I)) {
+    return InstructionCost::getMax();
+  }
   Type *ValTy = getLoadStoreType(I);
   auto *VectorTy = cast<VectorType>(ToVectorTy(ValTy, VF));
   const Align Alignment = getLoadStoreAlignment(I);
@@ -6761,7 +6916,8 @@ void LoopVectorizationCostModel::setCostBasedWideningDecision(ElementCount VF) {
       // predicated uniform stores. Today they are treated as any other
       // predicated store (see added test cases in
       // invariant-store-vectorization.ll).
-      if (isa<StoreInst>(&I) && isScalarWithPredication(&I, VF))
+      if ((isa<StoreInst>(&I) || isVectorizableCJGCWrite(&I)) &&
+          isScalarWithPredication(&I, VF))
         NumPredStores++;
 
       if (Legal->isUniformMemOp(I)) {
@@ -6801,6 +6957,11 @@ void LoopVectorizationCostModel::setCostBasedWideningDecision(ElementCount VF) {
         InstWidening Decision =
             ConsecutiveStride == 1 ? CM_Widen : CM_Widen_Reverse;
         setWideningDecision(&I, VF, Decision, Cost);
+        continue;
+      }
+      // only support Consecutive gcwrite now!
+      if (isVectorizableCJGCWrite(&I)) {
+        setWideningDecision(&I, VF, CM_Interleave, InstructionCost::getMax());
         continue;
       }
 
@@ -6953,6 +7114,23 @@ LoopVectorizationCostModel::getInstructionCost(Instruction *I, ElementCount VF,
     VectorTy = RetTy;
   } else
     VectorTy = ToVectorTy(RetTy, VF);
+
+  auto getLoadStoreVecCost = [this, &I, &VF, &VectorTy] {
+    ElementCount Width = VF;
+    if (Width.isVector()) {
+      InstWidening Decision = getWideningDecision(I, Width);
+      assert(Decision != CM_Unknown &&
+             "CM decision should be taken at this point");
+      if (getWideningCost(I, VF) == InstructionCost::getInvalid())
+        return InstructionCost::getInvalid();
+      if (Decision == CM_Scalarize)
+        Width = ElementCount::getFixed(1);
+    }
+    VectorTy = ToVectorTy(getLoadStoreType(I), Width);
+    if (auto *CI = dyn_cast<CallInst>(I))
+      return getGCWriteCost(CI, VF);
+    return getMemoryInstructionCost(I, VF);
+  };
 
   // TODO: We need to estimate the cost of intrinsic calls.
   switch (I->getOpcode()) {
@@ -7137,18 +7315,7 @@ LoopVectorizationCostModel::getInstructionCost(Instruction *I, ElementCount VF,
   }
   case Instruction::Store:
   case Instruction::Load: {
-    ElementCount Width = VF;
-    if (Width.isVector()) {
-      InstWidening Decision = getWideningDecision(I, Width);
-      assert(Decision != CM_Unknown &&
-             "CM decision should be taken at this point");
-      if (getWideningCost(I, VF) == InstructionCost::getInvalid())
-        return InstructionCost::getInvalid();
-      if (Decision == CM_Scalarize)
-        Width = ElementCount::getFixed(1);
-    }
-    VectorTy = ToVectorTy(getLoadStoreType(I), Width);
-    return getMemoryInstructionCost(I, VF);
+    return getLoadStoreVecCost();
   }
   case Instruction::BitCast:
     if (I->getType()->isPointerTy())
@@ -7243,6 +7410,9 @@ LoopVectorizationCostModel::getInstructionCost(Instruction *I, ElementCount VF,
     return TTI.getCastInstrCost(Opcode, VectorTy, SrcVecTy, CCH, CostKind, I);
   }
   case Instruction::Call: {
+    if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I);
+        II && II->getIntrinsicID() == Intrinsic::cj_gcwrite_ref)
+      return getLoadStoreVecCost();
     if (RecurrenceDescriptor::isFMulAddIntrinsic(I))
       if (auto RedCost = getReductionPatternCost(I, VF, VectorTy, CostKind))
         return *RedCost;
@@ -7309,10 +7479,11 @@ void LoopVectorizationCostModel::collectValuesToIgnore() {
   // outside the loop we do not need calculate cost for them.
   for (BasicBlock *BB : TheLoop->blocks())
     for (Instruction &I : *BB) {
-      StoreInst *SI;
-      if ((SI = dyn_cast<StoreInst>(&I)) &&
-          Legal->isInvariantAddressOfReduction(SI->getPointerOperand()))
+      if ((isa<StoreInst>(&I) || isVectorizableCJGCWrite(&I)) &&
+          Legal->isInvariantAddressOfReduction(
+              getLoadStorePointerOperand(&I))) {
         ValuesToIgnore.insert(&I);
+      }
     }
 
   // Ignore type-promoting instructions we identified during reduction
@@ -8259,6 +8430,9 @@ VPWidenCallRecipe *VPRecipeBuilder::tryToWidenCall(CallInst *CI,
     return nullptr;
 
   auto willWiden = [&](ElementCount VF) -> bool {
+    if (isVectorizableCJGCWrite(CI)) {
+      return true;
+    }
     Intrinsic::ID ID = getVectorIntrinsicIDForCall(CI, TLI);
     // The following case may be scalarized depending on the VF.
     // The flag shows whether we use Intrinsic or a usual Call for vectorized
@@ -8805,9 +8979,8 @@ VPlanPtr LoopVectorizationPlanner::buildVPlanWithVPRecipes(
 
       // Invariant stores inside loop will be deleted and a single store
       // with the final reduction value will be added to the exit block
-      StoreInst *SI;
-      if ((SI = dyn_cast<StoreInst>(&I)) &&
-          Legal->isInvariantAddressOfReduction(SI->getPointerOperand()))
+      if ((isa<StoreInst>(&I) || isVectorizableCJGCWrite(&I)) &&
+          Legal->isInvariantAddressOfReduction(getLoadStorePointerOperand(&I)))
         continue;
 
       if (auto RecipeOrValue = RecipeBuilder.tryToCreateWidenRecipe(
@@ -9604,44 +9777,6 @@ void VPWidenMemoryInstructionRecipe::execute(VPTransformState &State) {
     for (unsigned Part = 0; Part < State.UF; ++Part)
       BlockInMaskParts[Part] = State.get(getMask(), Part);
 
-  const auto CreateVecPtr = [&](unsigned Part, Value *Ptr) -> Value * {
-    // Calculate the pointer for the specific unroll-part.
-    GetElementPtrInst *PartPtr = nullptr;
-
-    bool InBounds = false;
-    if (auto *gep = dyn_cast<GetElementPtrInst>(Ptr->stripPointerCasts()))
-      InBounds = gep->isInBounds();
-    if (Reverse) {
-      // If the address is consecutive but reversed, then the
-      // wide store needs to start at the last vector element.
-      // RunTimeVF =  VScale * VF.getKnownMinValue()
-      // For fixed-width VScale is 1, then RunTimeVF = VF.getKnownMinValue()
-      Value *RunTimeVF = getRuntimeVF(Builder, Builder.getInt32Ty(), State.VF);
-      // NumElt = -Part * RunTimeVF
-      Value *NumElt = Builder.CreateMul(Builder.getInt32(-Part), RunTimeVF);
-      // LastLane = 1 - RunTimeVF
-      Value *LastLane = Builder.CreateSub(Builder.getInt32(1), RunTimeVF);
-      PartPtr =
-          cast<GetElementPtrInst>(Builder.CreateGEP(ScalarDataTy, Ptr, NumElt));
-      PartPtr->setIsInBounds(InBounds);
-      PartPtr = cast<GetElementPtrInst>(
-          Builder.CreateGEP(ScalarDataTy, PartPtr, LastLane));
-      PartPtr->setIsInBounds(InBounds);
-      if (isMaskRequired) // Reverse of a null all-one mask is a null mask.
-        BlockInMaskParts[Part] =
-            Builder.CreateVectorReverse(BlockInMaskParts[Part], "reverse");
-    } else {
-      Value *Increment =
-          createStepForVF(Builder, Builder.getInt32Ty(), State.VF, Part);
-      PartPtr = cast<GetElementPtrInst>(
-          Builder.CreateGEP(ScalarDataTy, Ptr, Increment));
-      PartPtr->setIsInBounds(InBounds);
-    }
-
-    unsigned AddressSpace = Ptr->getType()->getPointerAddressSpace();
-    return Builder.CreateBitCast(PartPtr, DataTy->getPointerTo(AddressSpace));
-  };
-
   // Handle Stores:
   if (SI) {
     State.setDebugLocFromInst(SI);
@@ -9662,8 +9797,14 @@ void VPWidenMemoryInstructionRecipe::execute(VPTransformState &State) {
           // We don't want to update the value in the map as it might be used in
           // another expression. So don't call resetVectorValue(StoredVal).
         }
-        auto *VecPtr =
-            CreateVecPtr(Part, State.get(getAddr(), VPIteration(0, 0)));
+        Value *Ptr = State.get(getAddr(), VPIteration(0, 0));
+        Value *PartPtr = createVecPtr(SI, Part, Ptr, State, Reverse);
+        if (Reverse && isMaskRequired) // Reverse of a null all-one mask is a null mask.
+          BlockInMaskParts[Part] =
+            Builder.CreateVectorReverse(BlockInMaskParts[Part], "reverse");
+
+        unsigned AddressSpace = Ptr->getType()->getPointerAddressSpace();
+        Value *VecPtr = Builder.CreateBitCast(PartPtr, DataTy->getPointerTo(AddressSpace));
         if (isMaskRequired)
           NewSI = Builder.CreateMaskedStore(StoredVal, VecPtr, Alignment,
                                             BlockInMaskParts[Part]);
@@ -9687,15 +9828,23 @@ void VPWidenMemoryInstructionRecipe::execute(VPTransformState &State) {
                                          nullptr, "wide.masked.gather");
       State.addMetadata(NewLI, LI);
     } else {
-      auto *VecPtr =
-          CreateVecPtr(Part, State.get(getAddr(), VPIteration(0, 0)));
-      if (isMaskRequired)
+      Value *Ptr = State.get(getAddr(), VPIteration(0, 0));
+      auto *PartPtr = createVecPtr(LI, Part, Ptr, State, Reverse);
+      if (Reverse && isMaskRequired) {
+        // Reverse of a null all-one mask is a null mask.
+        BlockInMaskParts[Part] =
+          Builder.CreateVectorReverse(BlockInMaskParts[Part], "reverse");
+      }
+      unsigned AddressSpace = Ptr->getType()->getPointerAddressSpace();
+      Value *VecPtr = Builder.CreateBitCast(PartPtr, DataTy->getPointerTo(AddressSpace));
+      if (isMaskRequired) {
         NewLI = Builder.CreateMaskedLoad(
             DataTy, VecPtr, Alignment, BlockInMaskParts[Part],
             PoisonValue::get(DataTy), "wide.masked.load");
-      else
+      } else {
         NewLI =
             Builder.CreateAlignedLoad(DataTy, VecPtr, Alignment, "wide.load");
+      }
 
       // Add metadata to the load, but setVectorValue to the reverse shuffle.
       State.addMetadata(NewLI, LI);
@@ -10185,7 +10334,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // If an override option has been passed in for interleaved accesses, use it.
   if (EnableInterleavedMemAccesses.getNumOccurrences() > 0)
     UseInterleaved = EnableInterleavedMemAccesses;
-
+  UseInterleaved &= (!L->HasGCWriteInLoop);
   // Analyze interleaved memory accesses.
   if (UseInterleaved) {
     IAI.analyzeInterleaving(useMaskedInterleavedAccesses(*TTI));
@@ -10499,8 +10648,9 @@ LoopVectorizeResult LoopVectorizePass::runImpl(
     // For the inner loops we actually process, form LCSSA to simplify the
     // transform.
     Changed |= formLCSSARecursively(*L, *DT, LI, SE);
-
+    L->IsInVectorizedProcess = true;
     Changed |= CFGChanged |= processLoop(L);
+    L->IsInVectorizedProcess = false;
   }
 
   // Process each loop nest in the function.

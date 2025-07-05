@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 /// This file provides helpers for the implementation of
@@ -640,6 +642,8 @@ public:
     case Intrinsic::var_annotation:
     case Intrinsic::experimental_gc_result:
     case Intrinsic::experimental_gc_relocate:
+    case Intrinsic::cj_gc_result:
+    case Intrinsic::cj_gc_relocate:
     case Intrinsic::coro_alloc:
     case Intrinsic::coro_begin:
     case Intrinsic::coro_free:

@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass performs various transformations related to eliminating memcpy
@@ -1094,12 +1096,17 @@ bool MemCpyOptPass::performCallSlotOptzn(Instruction *cpyLoad,
   // FIXME: MD_tbaa_struct and MD_mem_parallel_loop_access should also be
   // handled here, but combineMetadata doesn't support them yet
   unsigned KnownIDs[] = {LLVMContext::MD_tbaa, LLVMContext::MD_alias_scope,
-                         LLVMContext::MD_noalias,
+                         LLVMContext::MD_noalias, LLVMContext::MD_cj_agg,
                          LLVMContext::MD_invariant_group,
                          LLVMContext::MD_access_group};
+  MDNode *MD = nullptr;
+  if (auto *II = dyn_cast<IntrinsicInst>(C); II && II->isCJStructGCRead())
+    MD = C->getMetadata(LLVMContext::MD_cj_agg);
   combineMetadata(C, cpyLoad, KnownIDs, true);
   if (cpyLoad != cpyStore)
     combineMetadata(C, cpyStore, KnownIDs, true);
+  if (MD)
+    C->setMetadata(LLVMContext::MD_cj_agg, MD);
 
   ++NumCallSlot;
   return true;

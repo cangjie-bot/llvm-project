@@ -50,6 +50,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Statepoint.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
@@ -319,45 +320,7 @@ static void findLiveSetAtInst(Instruction *inst, GCPtrLivenessData &Data,
 // TODO: Once we can get to the GCStrategy, this becomes
 // Optional<bool> isGCManagedPointer(const Type *Ty) const override {
 
-static bool isGCPointerType(Type *T) {
-  if (auto *PT = dyn_cast<PointerType>(T))
-    // For the sake of this example GC, we arbitrarily pick addrspace(1) as our
-    // GC managed heap.  We know that a pointer into this heap needs to be
-    // updated and that no other pointer does.
-    return PT->getAddressSpace() == 1;
-  return false;
-}
-
-// Return true if this type is one which a) is a gc pointer or contains a GC
-// pointer and b) is of a type this code expects to encounter as a live value.
-// (The insertion code will assert that a type which matches (a) and not (b)
-// is not encountered.)
-static bool isHandledGCPointerType(Type *T) {
-  // We fully support gc pointers
-  if (isGCPointerType(T))
-    return true;
-  // We partially support vectors of gc pointers. The code will assert if it
-  // can't handle something.
-  if (auto VT = dyn_cast<VectorType>(T))
-    if (isGCPointerType(VT->getElementType()))
-      return true;
-  return false;
-}
-
 #ifndef NDEBUG
-/// Returns true if this type contains a gc pointer whether we know how to
-/// handle that type or not.
-static bool containsGCPtrType(Type *Ty) {
-  if (isGCPointerType(Ty))
-    return true;
-  if (VectorType *VT = dyn_cast<VectorType>(Ty))
-    return isGCPointerType(VT->getScalarType());
-  if (ArrayType *AT = dyn_cast<ArrayType>(Ty))
-    return containsGCPtrType(AT->getElementType());
-  if (StructType *ST = dyn_cast<StructType>(Ty))
-    return llvm::any_of(ST->elements(), containsGCPtrType);
-  return false;
-}
 
 // Returns true if this is a type which a) is a gc pointer or contains a GC
 // pointer and b) is of a type which the code doesn't expect (i.e. first class

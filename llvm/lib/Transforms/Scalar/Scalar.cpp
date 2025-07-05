@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements common infrastructure for libLLVMScalarOpts.a, which
@@ -105,12 +107,22 @@ void llvm::initializeScalarOpts(PassRegistry &Registry) {
   initializeSpeculativeExecutionLegacyPassPass(Registry);
   initializeStraightLineStrengthReduceLegacyPassPass(Registry);
   initializePlaceBackedgeSafepointsImplPass(Registry);
-  initializePlaceSafepointsPass(Registry);
+  initializePlaceSafepointsLegacyPassPass(Registry);
   initializeFloat2IntLegacyPassPass(Registry);
   initializeLoopDistributeLegacyPass(Registry);
   initializeLoopLoadEliminationPass(Registry);
   initializeLoopSimplifyCFGLegacyPassPass(Registry);
   initializeLoopVersioningLegacyPassPass(Registry);
+  // Cangjie pipeline pass
+  initializeCJFillMetadataLegacyPassPass(Registry);
+  initializeCJBarrierOptLegacyPassPass(Registry);
+  initializeCJBarrierSplitLegacyPassPass(Registry);
+  initializeCJLoopFloatOptLegacyPassPass(Registry);
+  initializeCJRuntimeLoweringLegacyPassPass(Registry);
+  initializeCangjieSpecificOptLegacyPassPass(Registry);
+  initializeInsertCJTBAALegacyPassPass(Registry);
+  initializeCJSimpleRangeAnalysisPass(Registry);
+  initializeCJRewriteStatepointLegacyPassPass(Registry);
 }
 
 void LLVMAddLoopSimplifyCFGPass(LLVMPassManagerRef PM) {

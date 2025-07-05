@@ -60,12 +60,15 @@
 #include "lldb/Utility/State.h"
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/Timer.h"
+#include "Commands/CommandObjCJThreadCommon.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SetVector.h"
 
 #include <memory>
 #include <mutex>
+#include <queue>
+#include <sstream>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -2463,6 +2466,153 @@ Target *Target::GetTargetFromContexts(const ExecutionContext *exe_ctx_ptr,
   return target;
 }
 
+static bool TypeMatch(lldb::ValueObjectSP valobj_sp)
+{
+  ConstString match("(^std[.]core.|^std[.]collection.)(HashSet|HashMap|Option|Range)<.+>$");
+  RegularExpression regex(match.GetStringRef());
+  if (regex.Execute(valobj_sp->GetDisplayTypeName().AsCString())) {
+    return true;
+  }
+
+  return false;
+}
+
+void SplitExpressionMembers(std::string &str, std::queue<std::string> &res)
+{
+  std::string members = str;
+  auto pos = members.find_first_of("]");
+  while (pos != std::string::npos) {
+    res.push(members.substr(0, std::min(pos + 1, members.size())));
+    members = members.substr(std::min(pos + 1, members.size()));
+    pos = members.find_first_of("]");
+  }
+
+  if (!members.empty()) {
+    res.push(members);
+  }
+}
+
+static lldb::ValueObjectSP FindMemberFromParentClass(lldb::ValueObjectSP &root, std::string member)
+{
+  if (root->IsCangjieDynamicType()) {
+    auto parent = root->GetChildAtIndex(0, true);
+    auto result = parent->GetValueForExpressionPath(member.c_str());
+    if (result != nullptr) {
+      return result;
+    }
+  }
+
+  return lldb::ValueObjectSP();
+}
+
+static lldb::ValueObjectSP GetCjValueForExpressionPath(lldb::ValueObjectSP &root, std::string &expression,
+                                                       lldb::TargetSP target)
+{
+  if (root == nullptr) {
+    return lldb::ValueObjectSP();
+  }
+
+  auto max_depth = target->GetMaximumDepthOfChildrenToDisplay();
+  std::queue<std::string> members;
+  SplitExpressionMembers(expression, members);
+  lldb::ValueObjectSP result;
+  uint64_t current_depth = 0;
+  while (root != nullptr) {
+    current_depth++;
+    if (current_depth >= max_depth.first) {
+      break;
+    }
+
+    std::string varname = members.front();
+    result = root->GetValueForExpressionPath(varname.c_str());
+    if (result == nullptr) {
+      result = FindMemberFromParentClass(root, varname);
+    }
+    if (result == nullptr) {
+      break;
+    }
+    members.pop();
+    if (members.empty()) {
+      return result;
+    }
+    root = result;
+    continue;
+  }
+
+  return lldb::ValueObjectSP();
+}
+
+static std::string StringTrim(std::string src) {
+  auto pos = std::min(src.size(), src.find_first_not_of(" \t\n\v\f\r"));
+  std::string temp = src.substr(pos);
+  pos = temp.size() - std::min(temp.size(), temp.find_last_not_of(" \t\n\v\f\r") + 1);
+  std::string result = temp.substr(0, temp.size() - pos);
+  return result;
+}
+
+static ExpressionResults EvaluateCjExpression(llvm::StringRef &expr, ExecutionContext &exe_ctx,
+    lldb::ValueObjectSP &result_valobj_sp) {
+  StackFrame *frame = exe_ctx.GetFramePtr();
+  if (!frame) {
+    return eExpressionParseError;
+  }
+
+  VariableListSP variable_list = frame->GetInScopeVariableList(true);
+  if (!variable_list) {
+    return eExpressionParseError;
+  }
+
+  std::string expression = expr.data();
+  std::string left = expression;
+  std::string right;
+  size_t pos = expression.find('=');
+  if (pos != std::string::npos) {
+    left = expression.substr(0, pos);
+    right = StringTrim(expression.substr(pos + 1));
+    if (right.empty()) {
+      return eExpressionParseError;
+    }
+  }
+
+  std::string base = StringTrim(left);
+  std::string member;
+  pos = left.find_first_of(".[");
+  if (pos != std::string::npos) {
+    base = StringTrim(left.substr(0, pos));
+    member = StringTrim(left.substr(pos));
+  }
+
+  VariableSP var_sp = variable_list->FindVariable(ConstString(base));
+  if (!var_sp) {
+    return eExpressionParseError;
+  }
+
+  lldb::ValueObjectSP valobj_sp = frame->FindVariable(ConstString(base));
+  if (!valobj_sp) {
+    valobj_sp = frame->GetValueObjectForFrameVariable(var_sp, eNoDynamicValues);
+  }
+
+  if (valobj_sp && !member.empty()) {
+    valobj_sp = TypeMatch(valobj_sp) ?
+      nullptr : GetCjValueForExpressionPath(valobj_sp, member, exe_ctx.GetTargetSP());
+  }
+
+  if (!valobj_sp) {
+    return eExpressionParseError;
+  }
+
+  if (!right.empty()) {
+    Status error;
+    valobj_sp->SetValueFromCString(right.c_str(), error);
+    if (error.Fail()) {
+      return eExpressionParseError;
+    }
+  }
+
+  result_valobj_sp = valobj_sp->Persist();
+  return eExpressionCompleted;
+}
+
 ExpressionResults Target::EvaluateExpression(
     llvm::StringRef expr, ExecutionContextScope *exe_scope,
     lldb::ValueObjectSP &result_valobj_sp,
@@ -2475,6 +2625,13 @@ ExpressionResults Target::EvaluateExpression(
   if (expr.empty()) {
     m_stats.GetExpressionStats().NotifyFailure();
     return execution_results;
+  }
+
+  bool use_cj_expression = false;
+  llvm::StringRef cangjie_expr_prefix = "[cj] ";
+  if (expr.startswith(cangjie_expr_prefix)) {
+    expr = expr.drop_front(cangjie_expr_prefix.size());
+    use_cj_expression = true;
   }
 
   // We shouldn't run stop hooks in expressions.
@@ -2513,11 +2670,15 @@ ExpressionResults Target::EvaluateExpression(
     result_valobj_sp = persistent_var_sp->GetValueObject();
     execution_results = eExpressionCompleted;
   } else {
-    llvm::StringRef prefix = GetExpressionPrefixContents();
-    Status error;
-    execution_results = UserExpression::Evaluate(exe_ctx, options, expr, prefix,
-                                                 result_valobj_sp, error,
-                                                 fixed_expression, ctx_obj);
+    if (use_cj_expression) {
+      execution_results = EvaluateCjExpression(expr, exe_ctx, result_valobj_sp);
+    } else {
+      llvm::StringRef prefix = GetExpressionPrefixContents();
+      Status error;
+      execution_results = UserExpression::Evaluate(exe_ctx, options, expr, prefix,
+                                                   result_valobj_sp, error,
+                                                   fixed_expression, ctx_obj);
+    }
   }
 
   if (execution_results == eExpressionCompleted)
@@ -4737,3 +4898,27 @@ std::recursive_mutex &Target::GetAPIMutex() {
 
 /// Get metrics associated with this target in JSON format.
 llvm::json::Value Target::ReportStatistics() { return m_stats.ToJSON(*this); }
+
+std::vector<std::shared_ptr<lldb_private::Target::CJThread>> Target::GetAllCJThreadStatus(
+  lldb_private::ExecutionContext &exe_ctx) {
+  CommandObjCJThreadCommon cjthread_help;
+  Status error;
+  std::vector<std::shared_ptr<struct CJThread>> cjthreads;
+  auto count = cjthread_help.GetCJThreadCount(exe_ctx, error);
+  auto info = cjthread_help.GetCJThreadInfo(exe_ctx, error);
+  std::lock_guard<std::recursive_mutex> guard(
+    exe_ctx.GetProcessPtr()->GetThreadList().GetMutex());
+  for (uint64_t i = 0; i < count; i++) {
+     auto cjthread_context = info->GetChildAtIndex(i, true);
+    cjthread_help.HandOneCJThread(exe_ctx.GetThreadSP(), cjthread_context, error, true);
+    auto frames = cjthread_help.m_frames;
+    StreamString strm;
+    auto name = cjthread_help.GetCJThreadName(cjthread_context);
+    auto id = cjthread_help.GetCJThreadID(cjthread_context);
+    auto state = cjthread_help.GetCJThreadState(cjthread_context);
+    auto cjthread = std::make_shared<struct CJThread>(frames, id, name, state);
+    cjthreads.push_back(cjthread);
+  }
+
+  return cjthreads;
+}

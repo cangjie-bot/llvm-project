@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file describes the target machine instruction set to the code generator.
@@ -331,6 +333,18 @@ public:
   /// Provide the identity of the two frame indices.
   virtual bool isStackSlotCopy(const MachineInstr &MI, int &DestFrameIndex,
                                int &SrcFrameIndex) const {
+    return false;
+  }
+
+  virtual bool isLEA64r(const MachineInstr &MI) const {
+    return false;
+  }
+
+  virtual bool isADDXri(const MachineInstr &MI) const {
+    return false;
+  }
+
+  virtual bool isORRXri(const MachineInstr &MI) const {
     return false;
   }
 

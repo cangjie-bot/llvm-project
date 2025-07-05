@@ -1468,6 +1468,10 @@ def : Pat<(readcyclecounter), (MRS 0xdce8)>;
 def : Pat<(i64 (int_aarch64_get_fpcr)), (MRS 0xda20)>;
 def : Pat<(int_aarch64_set_fpcr i64:$val), (MSR 0xda20, GPR64:$val)>;
 
+// FPSR register
+def : Pat<(i64 (int_aarch64_get_fpsr)), (MRS 0xda21)>;
+def : Pat<(int_aarch64_reset_fpsr), (MSR 0xda21, XZR)>;
+
 // Generic system instructions
 def SYSxt  : SystemXtI<0, "sys">;
 def SYSLxt : SystemLXtI<1, "sysl">;

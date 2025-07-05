@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the common initialization routines for the
@@ -26,6 +28,7 @@ void llvm::initializeCodeGen(PassRegistry &Registry) {
   initializeCFGuardLongjmpPass(Registry);
   initializeCFIFixupPass(Registry);
   initializeCFIInstrInserterPass(Registry);
+  initializeCJStackPointerInserterPass(Registry);
   initializeCheckDebugMachineModulePass(Registry);
   initializeCodeGenPreparePass(Registry);
   initializeDeadMachineInstructionElimPass(Registry);

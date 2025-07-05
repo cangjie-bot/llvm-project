@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file declares functions and classes used to support LTO. It is intended
@@ -276,6 +278,9 @@ public:
   /// The client will receive at most one callback (via either AddStream or
   /// Cache) for each task identifier.
   Error run(AddStreamFn AddStream, FileCache Cache = nullptr);
+
+  // Ckeck if all modules from cangjie bc files for cangjie LTO!
+  void checkCJBC();
 
   /// Static method that returns a list of libcall symbols that can be generated
   /// by LTO but might not be visible from bitcode symbol table.

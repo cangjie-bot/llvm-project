@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the MapValue interface which is used by various parts of
@@ -30,6 +32,8 @@ class Type;
 class Value;
 
 using ValueToValueMapTy = ValueMap<const Value *, WeakTrackingVH>;
+// map between old type and new type after llvm-link
+using TypeToTypeMapTy = DenseMap<StringRef, StringRef>;
 
 /// This is a class that can be implemented by clients to remap types when
 /// cloning constants and instructions.
@@ -42,6 +46,8 @@ public:
   /// The client should implement this method if they want to remap types while
   /// mapping values.
   virtual Type *remapType(Type *SrcTy) = 0;
+
+  virtual void mapMetadata(LLVMContext &C, Value *V) = 0;
 };
 
 /// This is a class that can be implemented by clients to materialize Values on

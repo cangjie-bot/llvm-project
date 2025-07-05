@@ -4,6 +4,12 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+//
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Core/ValueObjectDynamicValue.h"
@@ -381,4 +387,50 @@ void ValueObjectDynamicValue::SetLanguageFlags(uint64_t flags) {
     m_parent->SetLanguageFlags(flags);
   else
     this->ValueObject::SetLanguageFlags(flags);
+}
+
+void ValueObjectDynamicValue::UpdateDynamicType() {
+  ExecutionContext exe_ctx(GetExecutionContextRef());
+  Process *process = exe_ctx.GetProcessPtr();
+  if (!m_parent || !process) {
+    return;
+  }
+
+  bool found_dynamic_type = false;
+  TypeAndOrName class_type_or_name;
+  Address dynamic_address;
+  Value::ValueType value_type;
+  LanguageRuntime *runtime = nullptr;
+  lldb::LanguageType known_type = m_parent->GetObjectRuntimeLanguage();
+  if (known_type != lldb::eLanguageTypeUnknown && known_type != lldb::eLanguageTypeC) {
+    runtime = process->GetLanguageRuntime(known_type);
+    if (runtime) {
+      found_dynamic_type = runtime->GetDynamicTypeAndAddress(
+          *m_parent, m_use_dynamic, class_type_or_name, dynamic_address, value_type);
+    }
+  } else {
+    runtime = process->GetLanguageRuntime(lldb::eLanguageTypeC_plus_plus);
+    if (runtime) {
+      found_dynamic_type = runtime->GetDynamicTypeAndAddress(
+          *m_parent, m_use_dynamic, class_type_or_name, dynamic_address, value_type);
+    }
+    if (!found_dynamic_type) {
+      runtime = process->GetLanguageRuntime(lldb::eLanguageTypeObjC);
+      if (runtime) {
+        found_dynamic_type = runtime->GetDynamicTypeAndAddress(
+            *m_parent, m_use_dynamic, class_type_or_name, dynamic_address, value_type);
+      }
+    }
+  }
+  if (!found_dynamic_type) {
+    return;
+  }
+  m_value.SetCompilerType(class_type_or_name.GetCompilerType());
+  m_value.SetValueType(value_type);
+  Log *log = GetLog(LLDBLog::Types);
+  if (log) {
+    LLDB_LOGF(log, "[%s %p] has a new dynamic type %s", GetName().GetCString(),
+              static_cast<void *>(this), GetTypeName().GetCString());
+  }
+  return;
 }

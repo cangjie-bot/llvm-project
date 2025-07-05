@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Value, ValueHandle, and User classes.
@@ -830,7 +832,8 @@ bool Value::canBeFreed() const {
     // usual trick of requesting declaration of the intrinsic from the module
     // doesn't work.
     for (auto &Fn : *F->getParent())
-      if (Fn.getIntrinsicID() == Intrinsic::experimental_gc_statepoint)
+      if (Fn.getIntrinsicID() == Intrinsic::experimental_gc_statepoint ||
+          Fn.getIntrinsicID() == Intrinsic::cj_gc_statepoint)
         return true;
     return false;
   }

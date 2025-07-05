@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Implements the layout of a stack frame on the target machine.
@@ -13,6 +15,7 @@
 #include "llvm/ADT/BitVector.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
@@ -60,6 +63,12 @@ TargetFrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
   return StackOffset::getFixed(MFI.getObjectOffset(FI) + MFI.getStackSize() -
                                getOffsetOfLocalArea() +
                                MFI.getOffsetAdjustment());
+}
+
+StackOffset
+TargetFrameLowering::getFrameIndexRefForCJ(const MachineFunction &MF, int FI,
+                                           Register &FrameReg) const {
+  return getFrameIndexReference(MF, FI, FrameReg);
 }
 
 bool TargetFrameLowering::needsFrameIndexResolution(
@@ -161,6 +170,56 @@ bool TargetFrameLowering::isSafeForNoCSROpt(const Function &F) {
       if (CB->isTailCall())
         return false;
   return true;
+}
+
+// Prepare for Cangjie StackCheck: find CJ_MCC_StackCheck, and
+// store the size.
+// For X86: the size is frame size
+// For aarch64: the size is addsize calculated for sp
+MachineBasicBlock::iterator TargetFrameLowering::preCJStackCheck(
+    MachineFunction &MF, MachineBasicBlock::iterator InsertPos, int32_t Size,
+    bool NeedRecoverStack) const {
+  if (!MF.getFunction().hasCangjieGC()) {
+    return InsertPos;
+  }
+
+  for (auto BBI = MF.front().begin(); BBI != MF.front().end(); BBI++) {
+    MachineInstr *MI = &*BBI;
+    if (MI->getOpcode() != TargetOpcode::STATEPOINT)
+      continue;
+
+    StatepointOpers SO(MI);
+    if (!SO.isCJStackCheck())
+      continue;
+
+    assert((Size >= 0) && "Size should not be less than 0!");
+    unsigned FrameSize = Size;
+    if (!NeedRecoverStack) {
+      // Use MSB(Most Significant Bit)to mark
+      // whether the stack needs to be recovered.
+      FrameSize = FrameSize | (1 << 31);
+    }
+
+    MachineBasicBlock *CurBB = BBI->getParent();
+    // This is not the last inst in BB, we move to the current inst.
+    // Otherwise, it is placed at the end of BB.
+    if (InsertPos == BBI) {
+      MI->setCJStackSize(FrameSize);
+      return ++BBI;
+    } else if (InsertPos != CurBB->end()) {
+      MI->moveBefore(&*InsertPos);
+      MI->setCJStackSize(FrameSize);
+    } else {
+      auto CloneMI = MF.CloneMachineInstr(MI);
+      CurBB->push_back(CloneMI);
+      // The size is stored in DebugInstrNum interface temporarily and
+      // it will be used for emitStackCheck.
+      CloneMI->setCJStackSize(FrameSize);
+      MI->eraseFromParent();
+    }
+    break;
+  }
+  return InsertPos;
 }
 
 int TargetFrameLowering::getInitialCFAOffset(const MachineFunction &MF) const {

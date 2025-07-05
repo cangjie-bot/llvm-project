@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines classes that make it really easy to deal with intrinsic
@@ -105,6 +107,38 @@ public:
       return true;
     }
     return false;
+  }
+
+  bool isCJStructGCRead() const {
+    auto ID = getIntrinsicID();
+    return ID == Intrinsic::cj_gcread_static_struct ||
+           ID == Intrinsic::cj_gcread_struct;
+  }
+
+  bool isCJRefGCRead() const {
+    auto ID = getIntrinsicID();
+    return ID == Intrinsic::cj_gcread_static_ref ||
+           ID == Intrinsic::cj_gcread_ref;
+  }
+
+  bool isCJStructGCWrite() const {
+    auto ID = getIntrinsicID();
+    return ID == Intrinsic::cj_gcwrite_static_struct ||
+           ID == Intrinsic::cj_gcwrite_struct;
+  }
+
+  bool isCJRefGCWrite() const {
+    auto ID = getIntrinsicID();
+    return ID == Intrinsic::cj_gcwrite_static_ref ||
+           ID == Intrinsic::cj_gcwrite_ref;
+  }
+
+  Value *getCJRefGCReadPtr() const {
+    if (!isCJRefGCRead())
+      return nullptr;
+    auto ID = getIntrinsicID();
+    return ID == Intrinsic::cj_gcread_static_ref ? getArgOperand(0)
+                                                 : getArgOperand(1);
   }
 
   /// Check if the intrinsic might lower into a regular function call in the
@@ -1366,7 +1400,9 @@ class GCProjectionInst : public IntrinsicInst {
 public:
   static bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::experimental_gc_relocate ||
-      I->getIntrinsicID() == Intrinsic::experimental_gc_result;
+           I->getIntrinsicID() == Intrinsic::experimental_gc_result ||
+           I->getIntrinsicID() == Intrinsic::cj_gc_relocate ||
+           I->getIntrinsicID() == Intrinsic::cj_gc_result;
   }
 
   static bool classof(const Value *V) {
@@ -1389,7 +1425,8 @@ public:
 class GCRelocateInst : public GCProjectionInst {
 public:
   static bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::experimental_gc_relocate;
+    return I->getIntrinsicID() == Intrinsic::experimental_gc_relocate ||
+           I->getIntrinsicID() == Intrinsic::cj_gc_relocate;
   }
 
   static bool classof(const Value *V) {
@@ -1417,14 +1454,14 @@ public:
 class GCResultInst : public GCProjectionInst {
 public:
   static bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::experimental_gc_result;
+    return I->getIntrinsicID() == Intrinsic::experimental_gc_result ||
+           I->getIntrinsicID() == Intrinsic::cj_gc_result;
   }
 
   static bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 };
-
 
 /// This represents the llvm.assume intrinsic.
 class AssumeInst : public IntrinsicInst {

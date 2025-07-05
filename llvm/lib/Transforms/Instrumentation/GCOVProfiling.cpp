@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass implements GCOV-style profiling. When this pass is run it emits
@@ -19,6 +21,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/EHPersonalities.h"
@@ -30,6 +33,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Support/CRC.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -111,6 +115,8 @@ public:
   }
   void writeBytes(const char *Bytes, int Size) { os->write(Bytes, Size); }
 
+  sys::path::Style getPathStyle() { return PathStyle; }
+
 private:
   // Create the .gcno files for the Module based on DebugInfo.
   bool
@@ -161,6 +167,40 @@ private:
   std::vector<Regex> ExcludeRe;
   DenseSet<const BasicBlock *> ExecBlocks;
   StringMap<bool> InstrumentedFiles;
+  sys::path::Style PathStyle = sys::path::Style::native;
+};
+
+class GCOVProfilerLegacyPass : public ModulePass {
+public:
+  static char ID;
+  GCOVProfilerLegacyPass()
+      : GCOVProfilerLegacyPass(GCOVOptions::getDefault()) {}
+  GCOVProfilerLegacyPass(const GCOVOptions &Opts)
+      : ModulePass(ID), Profiler(Opts) {
+    initializeGCOVProfilerLegacyPassPass(*PassRegistry::getPassRegistry());
+  }
+  StringRef getPassName() const override { return "GCOV Profiler"; }
+
+  bool runOnModule(Module &M) override {
+    auto GetBFI = [this](Function &F) {
+      return &this->getAnalysis<BlockFrequencyInfoWrapperPass>(F).getBFI();
+    };
+    auto GetBPI = [this](Function &F) {
+      return &this->getAnalysis<BranchProbabilityInfoWrapperPass>(F).getBPI();
+    };
+    auto GetTLI = [this](Function &F) -> const TargetLibraryInfo & {
+      return this->getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
+    };
+    return Profiler.runOnModule(M, GetBFI, GetBPI, GetTLI);
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<BlockFrequencyInfoWrapperPass>();
+    AU.addRequired<TargetLibraryInfoWrapperPass>();
+  }
+
+private:
+  GCOVProfiler Profiler;
 };
 
 struct BBInfo {
@@ -198,6 +238,21 @@ struct Edge {
 };
 }
 
+char GCOVProfilerLegacyPass::ID = 0;
+INITIALIZE_PASS_BEGIN(
+    GCOVProfilerLegacyPass, "insert-gcov-profiling",
+    "Insert instrumentation for GCOV profiling", false, false)
+  INITIALIZE_PASS_DEPENDENCY(BlockFrequencyInfoWrapperPass)
+  INITIALIZE_PASS_DEPENDENCY(BranchProbabilityInfoWrapperPass)
+  INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+INITIALIZE_PASS_END(
+    GCOVProfilerLegacyPass, "insert-gcov-profiling",
+    "Insert instrumentation for GCOV profiling", false, false)
+
+ModulePass *llvm::createGCOVProfilerPass(const GCOVOptions &Options) {
+  return new GCOVProfilerLegacyPass(Options);
+}
+
 static StringRef getFunctionName(const DISubprogram *SP) {
   if (!SP->getLinkageName().empty())
     return SP->getLinkageName();
@@ -209,13 +264,14 @@ static StringRef getFunctionName(const DISubprogram *SP) {
 /// Prefer relative paths in the coverage notes. Clang also may split
 /// up absolute paths into a directory and filename component. When
 /// the relative path doesn't exist, reconstruct the absolute path.
-static SmallString<128> getFilename(const DISubprogram *SP) {
+static SmallString<128> getFilename(const DISubprogram *SP,
+                                    sys::path::Style PathStyle) {
   SmallString<128> Path;
   StringRef RelPath = SP->getFilename();
   if (sys::fs::exists(RelPath))
     Path = RelPath;
   else
-    sys::path::append(Path, SP->getDirectory(), SP->getFilename());
+    sys::path::append(Path, PathStyle, SP->getDirectory(), SP->getFilename());
   return Path;
 }
 
@@ -358,7 +414,7 @@ namespace {
 
     void writeOut(uint32_t CfgChecksum) {
       write(GCOV_TAG_FUNCTION);
-      SmallString<128> Filename = getFilename(SP);
+      SmallString<128> Filename = getFilename(SP, P->getPathStyle());
       uint32_t BlockLen =
           2 + (Version >= 47) + wordsOfString(getFunctionName(SP));
       if (Version < 80)
@@ -472,7 +528,7 @@ bool GCOVProfiler::isFunctionInstrumented(const Function &F) {
   if (FilterRe.empty() && ExcludeRe.empty()) {
     return true;
   }
-  SmallString<128> Filename = getFilename(F.getSubprogram());
+  SmallString<128> Filename = getFilename(F.getSubprogram(), PathStyle);
   auto It = InstrumentedFiles.find(Filename);
   if (It != InstrumentedFiles.end()) {
     return It->second;
@@ -564,6 +620,10 @@ bool GCOVProfiler::runOnModule(
 
   FilterRe = createRegexesFromString(Options.Filter);
   ExcludeRe = createRegexesFromString(Options.Exclude);
+  Triple T(M.getTargetTriple());
+  if (T.isOSWindows()) {
+    PathStyle = sys::path::Style::windows;
+  }
   emitProfileNotes(CUNode, HasExecOrFork, GetBFI, GetBPI, this->GetTLI);
   return true;
 }
@@ -801,7 +861,10 @@ bool GCOVProfiler::emitProfileNotes(
       // Add the function line number to the lines of the entry block
       // to have a counter for the function definition.
       uint32_t Line = SP->getLine();
-      auto Filename = getFilename(SP);
+      auto Filename = getFilename(SP, PathStyle);
+      if (Filename == "./") {
+        continue;
+      }
 
       BranchProbabilityInfo *BPI = GetBPI(F);
       BlockFrequencyInfo *BFI = GetBFI(F);
@@ -1120,9 +1183,11 @@ Function *GCOVProfiler::insertCounterWriteout(
 
     std::string FilenameGcda = mangleName(CU, GCovFileType::GCDA);
     uint32_t CfgChecksum = FileChecksums.empty() ? 0 : FileChecksums[i];
+    Constant *GcdaStringPtr =
+        Builder.CreateGlobalStringPtr(FilenameGcda, "__gcov_gcda");
     auto *StartFileCallArgs = ConstantStruct::get(
         StartFileCallArgsTy,
-        {Builder.CreateGlobalStringPtr(FilenameGcda),
+        {GcdaStringPtr,
          Builder.getInt32(endian::read32be(Options.Version)),
          Builder.getInt32(CfgChecksum)});
 

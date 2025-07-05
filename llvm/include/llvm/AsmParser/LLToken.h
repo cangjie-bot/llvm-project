@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the enums for the .ll lexer.
@@ -171,6 +173,7 @@ enum Kind {
   kw_amdgpu_kernel,
   kw_amdgpu_gfx,
   kw_tailcc,
+  kw_cangjiegccc,
 
   // Attributes:
   kw_attributes,

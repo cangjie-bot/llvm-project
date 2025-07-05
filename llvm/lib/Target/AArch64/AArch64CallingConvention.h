@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file declares the entry points for AArch64 calling convention analysis.
@@ -46,6 +48,10 @@ bool RetCC_AArch64_AAPCS(unsigned ValNo, MVT ValVT, MVT LocVT,
 bool RetCC_AArch64_WebKit_JS(unsigned ValNo, MVT ValVT, MVT LocVT,
                              CCValAssign::LocInfo LocInfo,
                              ISD::ArgFlagsTy ArgFlags, CCState &State);
+bool RetCC_AArch64_Cangjie_GCCheck(unsigned ValNo, MVT ValVT, MVT LocVT,
+                                   CCValAssign::LocInfo LocInfo,
+                                   ISD::ArgFlagsTy ArgFlags, CCState &State);
+
 } // namespace llvm
 
 #endif

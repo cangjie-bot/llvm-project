@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements a simple interprocedural pass which walks the
@@ -194,6 +196,15 @@ static bool SimplifyFunction(Function *F, CallGraphUpdater &CGU) {
         MadeChange = true;
       }
 
+    // WorkAround: For N2CStub functions, the reachable block cannot be
+    // deleted. If the callee function contains the unreachable block of
+    // ThrowException, here, the runtime EH needs to unwind based on the return
+    // instruction.
+    // In the future, if EH does not rely on the epilog to return to unwind,
+    // remove the process.
+    if (F->hasFnAttribute("cjstub")) {
+      continue;
+    }
     for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; )
       if (CallInst *CI = dyn_cast<CallInst>(I++))
         if (CI->doesNotReturn() && !CI->isMustTailCall() &&

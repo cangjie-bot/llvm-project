@@ -3,6 +3,10 @@ add_llvm_component_library(LLVMScalarOpts
   AlignmentFromAssumptions.cpp
   AnnotationRemarks.cpp
   BDCE.cpp
+  CJIRVerifier.cpp
+  CJBarrierSplit.cpp
+  CJDevirtualOpt.cpp
+  CJRuntimeLowering.cpp
   CallSiteSplitting.cpp
   ConstantHoisting.cpp
   ConstraintElimination.cpp
@@ -12,6 +16,16 @@ add_llvm_component_library(LLVMScalarOpts
   DFAJumpThreading.cpp
   DivRemPairs.cpp
   EarlyCSE.cpp
+  CJBarrierOpt.cpp
+  CJSimpleOpt.cpp
+  CJGenericIntrinsicOpt.cpp
+  CJSimpleRangeAnalysis.cpp
+  CJRSSCE.cpp
+  CJLoopFloatOpt.cpp
+  CJSpecificOpt.cpp
+  CJRewriteStatepoint.cpp
+  CJFillMetadata.cpp
+  CJGCLiveAnalysis.cpp
   FlattenCFGPass.cpp
   Float2Int.cpp
   GuardWidening.cpp
@@ -22,6 +36,7 @@ add_llvm_component_library(LLVMScalarOpts
   InductiveRangeCheckElimination.cpp
   IndVarSimplify.cpp
   InferAddressSpaces.cpp
+  InsertCJTBAA.cpp
   InstSimplifyPass.cpp
   JumpThreading.cpp
   LICM.cpp
@@ -96,4 +111,5 @@ add_llvm_component_library(LLVMScalarOpts
   InstCombine
   Support
   TransformUtils
+  Instrumentation
   )

@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Bitcode writer implementation.
@@ -780,6 +782,8 @@ static uint64_t getAttrKindEncoding(Attribute::AttrKind Kind) {
     return bitc::ATTR_KIND_MUSTPROGRESS;
   case Attribute::PresplitCoroutine:
     return bitc::ATTR_KIND_PRESPLIT_COROUTINE;
+  case Attribute::CJStackPointer:
+    return bitc::ATTR_KIND_CJ_STACK_POINTER;
   case Attribute::EndAttrKinds:
     llvm_unreachable("Can not encode end-attribute kinds marker.");
   case Attribute::None:

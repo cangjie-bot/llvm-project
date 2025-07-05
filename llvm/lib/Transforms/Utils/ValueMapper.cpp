@@ -949,6 +949,8 @@ void Mapper::remapInstruction(Instruction *I) {
   if (!TypeMapper)
     return;
 
+  TypeMapper->mapMetadata(I->getContext(), I);
+
   // If the instruction's type is being remapped, do so now.
   if (auto *CB = dyn_cast<CallBase>(I)) {
     SmallVector<Type *, 3> Tys;

@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This header file defines prototypes for accessor functions that expose passes
@@ -470,7 +472,7 @@ FunctionPass *createStraightLineStrengthReducePass();
 // RewriteStatepointsForGC which can be run at an arbitrary point in the pass
 // order following this pass.
 //
-FunctionPass *createPlaceSafepointsPass();
+ModulePass *createPlaceSafepointsLegacyPass();
 
 //===----------------------------------------------------------------------===//
 //
@@ -549,13 +551,75 @@ Pass *createWarnMissedTransformationsPass();
 //
 FunctionPass *createInstSimplifyLegacyPass();
 
-
 //===----------------------------------------------------------------------===//
 //
 // createScalarizeMaskedMemIntrinPass - Replace masked load, store, gather
 // and scatter intrinsics with scalar code when target doesn't support them.
 //
 FunctionPass *createScalarizeMaskedMemIntrinLegacyPass();
-} // End llvm namespace
+
+//===----------------------------------------------------------------------===//
+//
+// CJLoopFloatOpt - optimizes cangjie Loop Float Computation
+//
+FunctionPass *createCJLoopFloatOptLegacyPass();
+
+//===----------------------------------------------------------------------===//
+//
+// CJSimpleRangeAnalysis - simple range analysis of cangjie
+//
+FunctionPass *createCJSimpleRangeAnalysis();
+
+//===----------------------------------------------------------------------===//
+//
+// CJFillMetadata - Fill size/bitmap/flag fields for klass global varible
+// CJFillMetadata - Fill size/bitmap/flag fields for klass global varible
+//
+ModulePass *createCJFillMetadataLegacyPass();
+ModulePass *createCJFillMetadataLegacyPass();
+
+//===----------------------------------------------------------------------===//
+//
+// CJRuntimeLowering - Rewrite frontend method to runtime interfaces
+//
+ModulePass *createCJRuntimeLoweringLegacyPass();
+
+//===----------------------------------------------------------------------===//
+//
+// CheckFastCall - Checks the fastcall from the optimized code and marks it
+//
+ModulePass *createCangjieSpecificOptLegacyPass(unsigned OptLevel);
+
+//===----------------------------------------------------------------------===//
+//
+// CJRewriteStatepoint - Rewrite any gc.statepoints which do not yet
+// have explicit relocations according to Cangjie GC.
+//
+ModulePass *createCJRewriteStatepointLegacyPass(unsigned OptLevel);
+
+//===----------------------------------------------------------------------===//
+//
+// CJBarrierOpt - optimizes cangjie write barriers
+//
+ModulePass *createCJBarrierOptLegacyPass();
+
+//===----------------------------------------------------------------------===//
+//
+// CJBarrierSplit - Splitting the cangjie barriers
+//
+ModulePass *createCJBarrierSplitLegacyPass();
+
+//===----------------------------------------------------------------------===//
+//
+// CJGenericIntrinsicOpt - optimizes cangjie generic intrinsics
+//
+FunctionPass *createCJGenericIntrinsicOptLegacyPass();
+
+//===----------------------------------------------------------------------===//
+//
+// InsertCJTBAA - insert Cangjie TBAA Metadata
+//
+FunctionPass *createInsertCJTBAALegacyPass();
+} // namespace llvm
 
 #endif

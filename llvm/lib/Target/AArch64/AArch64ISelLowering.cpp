@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the AArch64TargetLowering class.
@@ -706,6 +708,8 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
 
   setOperationAction(ISD::PREFETCH, MVT::Other, Custom);
 
+  setOperationAction(ISD::GET_FP_STATE, MVT::i64, Custom);
+  setOperationAction(ISD::RESET_FP_STATE, MVT::Other, Custom);
   setOperationAction(ISD::FLT_ROUNDS_, MVT::i32, Custom);
   setOperationAction(ISD::SET_ROUNDING, MVT::Other, Custom);
 
@@ -4269,6 +4273,26 @@ static bool isAddSubZExt(SDNode *N, SelectionDAG &DAG) {
   return false;
 }
 
+SDValue AArch64TargetLowering::LowerGET_FP_STATE(SDValue Op,
+                                                 SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue Chain = Op.getOperand(1); // chain to fptosi
+
+  return DAG.getNode(
+      ISD::INTRINSIC_W_CHAIN, DL, {MVT::i64, MVT::Other},
+      {Chain, DAG.getConstant(Intrinsic::aarch64_get_fpsr, DL, MVT::i64)});
+}
+
+SDValue AArch64TargetLowering::LowerRESET_FP_STATE(SDValue Op,
+                                                 SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue Chain = Op->getOperand(0);
+
+  return DAG.getNode(
+      ISD::INTRINSIC_VOID, DL, MVT::Other,
+      {Chain, DAG.getConstant(Intrinsic::aarch64_reset_fpsr, DL, MVT::i64)});
+}
+
 SDValue AArch64TargetLowering::LowerFLT_ROUNDS_(SDValue Op,
                                                 SelectionDAG &DAG) const {
   // The rounding mode is in bits 23:22 of the FPSCR.
@@ -5507,6 +5531,10 @@ SDValue AArch64TargetLowering::LowerOperation(SDValue Op,
     return LowerFP_TO_INT_SAT(Op, DAG);
   case ISD::FSINCOS:
     return LowerFSINCOS(Op, DAG);
+  case ISD::GET_FP_STATE:
+    return LowerGET_FP_STATE(Op, DAG);
+  case ISD::RESET_FP_STATE:
+    return LowerRESET_FP_STATE(Op, DAG);
   case ISD::FLT_ROUNDS_:
     return LowerFLT_ROUNDS_(Op, DAG);
   case ISD::SET_ROUNDING:
@@ -5746,8 +5774,10 @@ CCAssignFn *AArch64TargetLowering::CCAssignFnForCall(CallingConv::ID CC,
 
 CCAssignFn *
 AArch64TargetLowering::CCAssignFnForReturn(CallingConv::ID CC) const {
-  return CC == CallingConv::WebKit_JS ? RetCC_AArch64_WebKit_JS
-                                      : RetCC_AArch64_AAPCS;
+  return CC == CallingConv::WebKit_JS
+             ? RetCC_AArch64_WebKit_JS
+             : CC == CallingConv::CangjieGC ? RetCC_AArch64_Cangjie_GCCheck
+                                            : RetCC_AArch64_AAPCS;
 }
 
 SDValue AArch64TargetLowering::LowerFormalArguments(
@@ -6557,6 +6587,7 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
 
   // Get a count of how many bytes are to be pushed on the stack.
   unsigned NumBytes = CCInfo.getNextStackOffset();
+  unsigned CallFrameSizeForCJFFI = NumBytes;
 
   if (IsSibCall) {
     // Since we're not changing the ABI to make this a tail call, the memory
@@ -6577,6 +6608,7 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
     // Since callee will pop argument stack as a tail call, we must keep the
     // popped size 16-byte aligned.
     NumBytes = alignTo(NumBytes, 16);
+    CallFrameSizeForCJFFI = NumBytes;
 
     // FPDiff will be negative if this tail call requires more space than we
     // would automatically have in our incoming argument space. Positive if we
@@ -6841,6 +6873,9 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
   // direct call is) turn it into a TargetGlobalAddress/TargetExternalSymbol
   // node so that legalize doesn't hack it.
   if (auto *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
+    auto *CalleeFunc = dyn_cast<Function>(G->getGlobal());
+    CCInfo.AddAlignedCallFrameSizeMetaDataForCJFFI(
+        const_cast<Function *>(CalleeFunc), CallFrameSizeForCJFFI);
     auto GV = G->getGlobal();
     unsigned OpFlags =
         Subtarget->classifyGlobalFunctionReference(GV, getTargetMachine());
@@ -8700,7 +8735,11 @@ SDValue AArch64TargetLowering::LowerSPONENTRY(SDValue Op,
 // this table could be generated automatically from RegInfo.
 Register AArch64TargetLowering::
 getRegisterByName(const char* RegName, LLT VT, const MachineFunction &MF) const {
-  Register Reg = MatchRegisterName(RegName);
+  StringRef NameStr(RegName);
+  if (NameStr == "LR") {
+    return AArch64::LR;
+  }
+  Register Reg = MatchRegisterName(NameStr);
   if (AArch64::X1 <= Reg && Reg <= AArch64::X28) {
     const MCRegisterInfo *MRI = Subtarget->getRegisterInfo();
     unsigned DwarfRegNum = MRI->getDwarfRegNum(Reg, false);
@@ -8709,8 +8748,7 @@ getRegisterByName(const char* RegName, LLT VT, const MachineFunction &MF) const 
   }
   if (Reg)
     return Reg;
-  report_fatal_error(Twine("Invalid register name \""
-                              + StringRef(RegName)  + "\"."));
+  report_fatal_error(Twine("Invalid register name \"" + NameStr + "\"."));
 }
 
 SDValue AArch64TargetLowering::LowerADDROFRETURNADDR(SDValue Op,
@@ -13634,6 +13672,10 @@ bool AArch64TargetLowering::generateFMAsInMachineCombiner(
     EVT VT, CodeGenOpt::Level OptLevel) const {
   return (OptLevel >= CodeGenOpt::Aggressive) && !VT.isScalableVector() &&
          !useSVEForFixedLengthVectorVT(VT);
+}
+
+bool AArch64TargetLowering::isCangjieGetFPStateInstr(unsigned Opcode) const {
+  return Opcode == AArch64::MRS;
 }
 
 const MCPhysReg *

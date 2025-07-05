@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass assigns local frame indices to stack slots relative to one another
@@ -44,6 +46,11 @@ using namespace llvm;
 STATISTIC(NumAllocations, "Number of frame indices allocated into local block");
 STATISTIC(NumBaseRegisters, "Number of virtual frame base registers allocated");
 STATISTIC(NumReplacements, "Number of frame indices references replaced");
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> EnableStackGrow;
+}
 
 namespace {
 
@@ -327,6 +334,14 @@ bool LocalStackSlotPass::insertFrameReferenceRegisters(MachineFunction &Fn) {
           if (!MFI.isObjectPreAllocated(MO.getIndex()))
             break;
           int Idx = MO.getIndex();
+          auto AI = Fn.getFrameInfo().getObjectAllocation(Idx);
+          // For cj-stack-grow, the FrameBaseReg will make a new spill opreation
+          // in the entry, which cannot be identified in the rewrite-statepoint-
+          // for-cangjie-gc. Therefore, we do not perform it temporarily.
+          if (AI && EnableStackGrow && CJPipeline &&
+              Fn.getFunction().hasCangjieGC())
+            break;
+
           int64_t LocalOffset = LocalOffsets[Idx];
           if (!TRI->needsFrameBaseReg(&MI, LocalOffset))
             break;

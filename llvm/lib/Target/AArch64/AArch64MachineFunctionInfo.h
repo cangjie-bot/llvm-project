@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file declares AArch64-specific per-machine-function information.
@@ -175,6 +177,9 @@ class AArch64FunctionInfo final : public MachineFunctionInfo {
   /// The stack slot where the Swift asynchronous context is stored.
   int SwiftAsyncContextFrameIdx = std::numeric_limits<int>::max();
 
+  /// The stack slot where the Cangjie method PC info is stored in MacOS of Mx.
+  int CJMachOPCContextFrameIdx = std::numeric_limits<int>::max();
+
   bool IsMTETagged = false;
 
   /// The function has Scalable Vector or Scalable Predicate register argument
@@ -283,6 +288,14 @@ public:
       if (SwiftAsyncContextFrameIdx != std::numeric_limits<int>::max()) {
         int64_t Offset = MFI.getObjectOffset(getSwiftAsyncContextFrameIdx());
         int64_t ObjSize = MFI.getObjectSize(getSwiftAsyncContextFrameIdx());
+        MinOffset = std::min<int64_t>(Offset, MinOffset);
+        MaxOffset = std::max<int64_t>(Offset + ObjSize, MaxOffset);
+      }
+
+      if (CJMachOPCContextFrameIdx != std::numeric_limits<int>::max()) {
+        // Update cangjie size for CJ method PC info and Lmethod_desc.xxx
+        int64_t Offset = MFI.getObjectOffset(getCJMachOPCContextFrameIdx());
+        int64_t ObjSize = MFI.getObjectSize(getCJMachOPCContextFrameIdx());
         MinOffset = std::min<int64_t>(Offset, MinOffset);
         MaxOffset = std::max<int64_t>(Offset + ObjSize, MaxOffset);
       }
@@ -430,6 +443,13 @@ public:
     SwiftAsyncContextFrameIdx = FI;
   }
   int getSwiftAsyncContextFrameIdx() const { return SwiftAsyncContextFrameIdx; }
+
+  void setCJMachOPCContextFrameIdx(int FI) {
+    CJMachOPCContextFrameIdx = FI;
+  }
+  int getCJMachOPCContextFrameIdx() const {
+    return CJMachOPCContextFrameIdx;
+  }
 
   bool needsDwarfUnwindInfo() const;
   bool needsAsyncDwarfUnwindInfo() const;

@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Interface to describe the layout of a stack frame on the target machine.
@@ -14,6 +16,9 @@
 #define LLVM_CODEGEN_TARGETFRAMELOWERING_H
 
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/StackMaps.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/TypeSize.h"
 #include <vector>
 
@@ -32,6 +37,9 @@ enum Value {
   NoAlloc = 255
 };
 }
+
+// see MCRegister.h
+using MCPhysReg = uint16_t;
 
 /// Information about stack frame layout on the target.  It holds the direction
 /// of stack growth, the known stack alignment on entry to each function, and
@@ -110,6 +118,21 @@ public:
     }
     return SPAdj;
   }
+
+  virtual const std::vector<MCPhysReg>
+  getArgRegs(const MachineFunction &MF) const {
+    return {};
+  };
+
+  virtual MCPhysReg getX8Register() const { return 0; }
+
+  // Prepare for Cangjie StackCheck: find CJ_MCC_StackCheck, and
+  // store the size.
+  // For X86: the size is frame size
+  // For aarch64: the size is addsize calculated for sp
+  MachineBasicBlock::iterator
+  preCJStackCheck(MachineFunction &MF, MachineBasicBlock::iterator InsertPos,
+                  int32_t Size, bool NeedRecoverStack = true) const;
 
   /// getTransientStackAlignment - This method returns the number of bytes to
   /// which the stack pointer must be aligned at all times, even between
@@ -314,6 +337,10 @@ public:
   /// returned directly, and the base register is returned via FrameReg.
   virtual StackOffset getFrameIndexReference(const MachineFunction &MF, int FI,
                                              Register &FrameReg) const;
+
+  /// getFrameIndexRefForCJ - This method should be used for cangjie function
+  virtual StackOffset getFrameIndexRefForCJ(const MachineFunction &MF, int FI,
+                                            Register &FrameReg) const;
 
   /// Same as \c getFrameIndexReference, except that the stack pointer (as
   /// opposed to the frame pointer) will be the preferred value for \p

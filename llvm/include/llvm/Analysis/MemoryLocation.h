@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 /// This file provides utility analysis objects describing memory locations.
@@ -17,6 +19,7 @@
 
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/TypeSize.h"
 
@@ -236,6 +239,7 @@ public:
   /// instruction.
   static MemoryLocation get(const LoadInst *LI);
   static MemoryLocation get(const StoreInst *SI);
+  static MemoryLocation get(const CallBase *CI);
   static MemoryLocation get(const VAArgInst *VI);
   static MemoryLocation get(const AtomicCmpXchgInst *CXI);
   static MemoryLocation get(const AtomicRMWInst *RMWI);
@@ -248,6 +252,7 @@ public:
   static MemoryLocation getForSource(const MemTransferInst *MTI);
   static MemoryLocation getForSource(const AtomicMemTransferInst *MTI);
   static MemoryLocation getForSource(const AnyMemTransferInst *MTI);
+  static Optional<MemoryLocation> getCJMemTransferSource(const IntrinsicInst *II);
 
   /// Return a location representing the destination of a memory set or
   /// transfer.

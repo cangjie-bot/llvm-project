@@ -347,6 +347,8 @@ public:
     return m_update_point.GetExecutionContextRef().GetFrameSP();
   }
 
+  CompilerType GetDynamicType();
+
   void SetNeedsUpdate();
 
   CompilerType GetCompilerType() { return MaybeCalculateCompleteType(); }
@@ -790,6 +792,25 @@ public:
 
   virtual void SetLanguageFlags(uint64_t flags) { m_language_flags = flags; }
 
+  bool IsInternalType() { return is_internal; }
+
+  void SetIsInternalType(bool internal) { is_internal = internal; }
+
+  bool IsOptionlikeReference() { return is_optionlike_reference; }
+
+  void SetIsOptionlikeReference(bool reference) { is_optionlike_reference = reference; }
+
+  bool GetCangjieDynamicType(TypeAndOrName &class_type_or_name, bool should_update = true, bool should_check_parent = true);
+
+  bool IsCangjieDynamicType();
+
+  bool IsCangjieGenericType();
+
+  void SetOverrideType(CompilerType type) { m_override_type = type; }
+
+  void SetGenericValueType(bool is_value_type) { is_generic_value_type = is_value_type; }
+  bool IsGenericValueType();
+
 protected:
   typedef ClusterManager<ValueObject> ValueObjectManager;
 
@@ -903,6 +924,14 @@ protected:
 
   /// Unique identifier for every value object.
   UserID m_id;
+
+  bool is_internal = false;
+
+  bool is_optionlike_reference = false;
+
+  bool has_typeinfo = false;
+
+  bool is_generic_value_type = false;
 
   // Utility class for initializing all bitfields in ValueObject's constructors.
   // FIXME: This could be done via default initializers once we have C++20.

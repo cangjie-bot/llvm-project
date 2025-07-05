@@ -10,7 +10,10 @@ set(LLDB_CURSES_LIBS)
 set(LLDB_LIBEDIT_LIBS)
 
 if (LLDB_ENABLE_CURSES)
-  list(APPEND LLDB_CURSES_LIBS ${CURSES_LIBRARIES} ${PANEL_LIBRARIES})
+  # Since PANEL_LIBRARIES uses CURSES_LIBRARIES, to link them statically we have to
+  # link CURSES_LIBRARIES twice so all PANEL_LIBRARIES symbols could be resolved.
+  # Linking twice here should not affect dynamic linking.
+  list(APPEND LLDB_CURSES_LIBS ${CURSES_LIBRARIES} ${PANEL_LIBRARIES} ${CURSES_LIBRARIES})
   if(LLVM_ENABLE_TERMINFO)
     list(APPEND LLDB_CURSES_LIBS ${TERMINFO_LIB})
   endif()
@@ -18,6 +21,14 @@ if (LLDB_ENABLE_CURSES)
     list(APPEND LLDB_CURSES_LIBS gpm)
   endif()
 endif()
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/demangle)
+link_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/demangle)
+
+set(LLDB_DEMANGLE_LIBS)
+if (CMAKE_SYSTEM_NAME MATCHES "Windows")
+  list(APPEND LLDB_DEMANGLE_LIBS ssp)
+endif ()
 
 add_lldb_library(lldbCore
   Address.cpp
@@ -86,6 +97,8 @@ add_lldb_library(lldbCore
     lldbPluginCPlusPlusLanguage
     lldbPluginObjCLanguage
     ${LLDB_CURSES_LIBS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/demangle/libcangjie-demangle.a
+    ${LLDB_DEMANGLE_LIBS}
 
   CLANG_LIBS
     clangDriver

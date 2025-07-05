@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file describes an abstract interface used to get information about a
@@ -1119,6 +1121,13 @@ public:
   /// in certain cases.
   virtual bool isNonallocatableRegisterCalleeSave(MCRegister Reg) const {
     return false;
+  }
+
+  virtual MCPhysReg getX8Register() const { return 0; }
+
+  virtual const std::vector<MCPhysReg>
+  getArgRegs(const MachineFunction &MF) const {
+    return {};
   }
 };
 

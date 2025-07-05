@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This family of functions perform manipulations on basic blocks, and
@@ -56,6 +58,10 @@ static cl::opt<unsigned> MaxDeoptOrUnreachableSuccessorCheckDepth(
     cl::desc("Set the maximum path length when checking whether a basic block "
              "is followed by a block that either has a terminating "
              "deoptimizing call or is terminated with an unreachable"));
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 
 void llvm::detachDeadBlocks(
     ArrayRef<BasicBlock *> BBs,
@@ -1094,8 +1100,7 @@ SplitBlockPredecessorsImpl(BasicBlock *BB, ArrayRef<BasicBlock *> Preds,
   // Delegate this work to the SplitLandingPadPredecessors.
   if (BB->isLandingPad()) {
     SmallVector<BasicBlock*, 2> NewBBs;
-    std::string NewName = std::string(Suffix) + ".split-lp";
-
+    std::string NewName = std::string(Suffix) + (CJPipeline ? "" : ".split-lp");
     SplitLandingPadPredecessorsImpl(BB, Preds, Suffix, NewName.c_str(), NewBBs,
                                     DTU, DT, LI, MSSAU, PreserveLCSSA);
     return NewBBs[0];

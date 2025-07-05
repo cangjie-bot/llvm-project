@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Transforms/Utils/PredicateInfo.h"
 #include <vector>
 
@@ -41,6 +42,7 @@ struct AnalysisResultsForFn {
   std::unique_ptr<PredicateInfo> PredInfo;
   DominatorTree *DT;
   PostDominatorTree *PDT;
+  LoopInfo *LI = nullptr;
 };
 
 /// Helper struct shared between Function Specialization and SCCP Solver.

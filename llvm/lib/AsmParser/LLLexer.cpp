@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Implement the Lexer for .ll files.
@@ -629,6 +631,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(amdgpu_kernel);
   KEYWORD(amdgpu_gfx);
   KEYWORD(tailcc);
+  KEYWORD(cangjiegccc);
 
   KEYWORD(cc);
   KEYWORD(c);

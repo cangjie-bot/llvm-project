@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the PHITransAddr class.
@@ -20,6 +22,10 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
 
 static cl::opt<bool> EnableAddPhiTranslation(
     "gvn-add-phi-translation", cl::init(false), cl::Hidden,
@@ -197,15 +203,21 @@ Value *PHITransAddr::PHITranslateSubExpr(Value *V, BasicBlock *CurBB,
     if (Constant *C = dyn_cast<Constant>(PHIIn))
       return AddAsInput(ConstantExpr::getCast(Cast->getOpcode(),
                                               C, Cast->getType()));
-
-    // Otherwise we have to see if a casted version of the incoming pointer
-    // is available.  If so, we can use it, otherwise we have to fail.
-    for (User *U : PHIIn->users()) {
-      if (CastInst *CastI = dyn_cast<CastInst>(U))
-        if (CastI->getOpcode() == Cast->getOpcode() &&
-            CastI->getType() == Cast->getType() &&
-            (!DT || DT->dominates(CastI->getParent(), PredBB)))
-          return CastI;
+    SmallVector<Value *, 4> CastValues = {PHIIn};
+    if (CJPipeline) {
+      if (auto *CI = dyn_cast<CastInst>(PHIIn))
+        CastValues.push_back(CI->getOperand(0));
+    }
+    for (auto *V : CastValues) {
+      // Otherwise we have to see if a casted version of the incoming pointer
+      // is available.  If so, we can use it, otherwise we have to fail.
+      for (User *U : V->users()) {
+        if (CastInst *CastI = dyn_cast<CastInst>(U))
+          if (CastI->getOpcode() == Cast->getOpcode() &&
+              CastI->getType() == Cast->getType() &&
+              (!DT || DT->dominates(CastI->getParent(), PredBB)))
+            return CastI;
+      }
     }
     return nullptr;
   }

@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the legacy LLVM Pass Manager infrastructure.
@@ -13,7 +15,6 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/IR/DiagnosticInfo.h"
-#include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManagers.h"
 #include "llvm/IR/Module.h"
@@ -238,74 +239,6 @@ void PassManagerPrettyStackEntry::print(raw_ostream &OS) const {
 namespace llvm {
 namespace legacy {
 bool debugPassSpecified() { return PassDebugging != Disabled; }
-
-//===----------------------------------------------------------------------===//
-// FunctionPassManagerImpl
-//
-/// FunctionPassManagerImpl manages FPPassManagers
-class FunctionPassManagerImpl : public Pass,
-                                public PMDataManager,
-                                public PMTopLevelManager {
-  virtual void anchor();
-private:
-  bool wasRun;
-public:
-  static char ID;
-  explicit FunctionPassManagerImpl()
-      : Pass(PT_PassManager, ID), PMTopLevelManager(new FPPassManager()),
-        wasRun(false) {}
-
-  /// \copydoc FunctionPassManager::add()
-  void add(Pass *P) {
-    schedulePass(P);
-  }
-
-  /// createPrinterPass - Get a function printer pass.
-  Pass *createPrinterPass(raw_ostream &O,
-                          const std::string &Banner) const override {
-    return createPrintFunctionPass(O, Banner);
-  }
-
-  // Prepare for running an on the fly pass, freeing memory if needed
-  // from a previous run.
-  void releaseMemoryOnTheFly();
-
-  /// run - Execute all of the passes scheduled for execution.  Keep track of
-  /// whether any of the passes modifies the module, and if so, return true.
-  bool run(Function &F);
-
-  /// doInitialization - Run all of the initializers for the function passes.
-  ///
-  bool doInitialization(Module &M) override;
-
-  /// doFinalization - Run all of the finalizers for the function passes.
-  ///
-  bool doFinalization(Module &M) override;
-
-
-  PMDataManager *getAsPMDataManager() override { return this; }
-  Pass *getAsPass() override { return this; }
-  PassManagerType getTopLevelPassManagerType() override {
-    return PMT_FunctionPassManager;
-  }
-
-  /// Pass Manager itself does not invalidate any analysis info.
-  void getAnalysisUsage(AnalysisUsage &Info) const override {
-    Info.setPreservesAll();
-  }
-
-  FPPassManager *getContainedManager(unsigned N) {
-    assert(N < PassManagers.size() && "Pass number out of range!");
-    FPPassManager *FP = static_cast<FPPassManager *>(PassManagers[N]);
-    return FP;
-  }
-
-  void dumpPassStructure(unsigned Offset) override {
-    for (unsigned I = 0; I < getNumContainedManagers(); ++I)
-      getContainedManager(I)->dumpPassStructure(Offset);
-  }
-};
-
 void FunctionPassManagerImpl::anchor() {}
 
 char FunctionPassManagerImpl::ID = 0;
@@ -341,7 +274,7 @@ bool FunctionPassManagerImpl::doFinalization(Module &M) {
 }
 
 void FunctionPassManagerImpl::releaseMemoryOnTheFly() {
-  if (!wasRun)
+  if (!WasRun)
     return;
   for (unsigned Index = 0; Index < getNumContainedManagers(); ++Index) {
     FPPassManager *FPPM = getContainedManager(Index);
@@ -349,7 +282,7 @@ void FunctionPassManagerImpl::releaseMemoryOnTheFly() {
       FPPM->getContainedPass(Index)->releaseMemory();
     }
   }
-  wasRun = false;
+  WasRun = false;
 }
 
 // Execute all the passes managed by this top level manager.
@@ -366,7 +299,7 @@ bool FunctionPassManagerImpl::run(Function &F) {
   for (unsigned Index = 0; Index < getNumContainedManagers(); ++Index)
     getContainedManager(Index)->cleanup();
 
-  wasRun = true;
+  WasRun = true;
   return Changed;
 }
 } // namespace legacy
@@ -1289,6 +1222,38 @@ void PMDataManager::addLowerLevelRequiredPass(Pass *P, Pass *RequiredPass) {
   llvm_unreachable("Unable to schedule pass");
 }
 
+/// Add RequiredPass into list of lower level passes required by pass P.
+void PMDataManager::addLowerLevelRequiredPassImpl(
+    MapVector<Pass *, legacy::FunctionPassManagerImpl *> &OnTheFlyManagers,
+    Pass *P, Pass *RequiredPass) {
+  legacy::FunctionPassManagerImpl *FPP = OnTheFlyManagers[P];
+  if (!FPP) {
+    FPP = new legacy::FunctionPassManagerImpl();
+    // FPP is the top level manager.
+    FPP->setTopLevelManager(FPP);
+
+    OnTheFlyManagers[P] = FPP;
+  }
+  const PassInfo *RequiredPassPI =
+      TPM->findAnalysisPassInfo(RequiredPass->getPassID());
+
+  Pass *FoundPass = nullptr;
+  if (RequiredPassPI && RequiredPassPI->isAnalysis()) {
+    FoundPass =
+        ((PMTopLevelManager *)FPP)->findAnalysisPass(RequiredPass->getPassID());
+  }
+  if (!FoundPass) {
+    FoundPass = RequiredPass;
+    // This should be guaranteed to add RequiredPass to the passmanager given
+    // that we checked for an available analysis above.
+    FPP->add(RequiredPass);
+  }
+  // Register P as the last user of FoundPass or RequiredPass.
+  SmallVector<Pass *, 1> LU;
+  LU.push_back(FoundPass);
+  FPP->setLastUser(LU, P);
+}
+
 std::tuple<Pass *, bool> PMDataManager::getOnTheFlyPass(Pass *P, AnalysisID PI,
                                                         Function &F) {
   llvm_unreachable("Unable to find on the fly pass");
@@ -1603,32 +1568,7 @@ void MPPassManager::addLowerLevelRequiredPass(Pass *P, Pass *RequiredPass) {
           RequiredPass->getPotentialPassManagerType()) &&
          "Unable to handle Pass that requires lower level Analysis pass");
 
-  legacy::FunctionPassManagerImpl *FPP = OnTheFlyManagers[P];
-  if (!FPP) {
-    FPP = new legacy::FunctionPassManagerImpl();
-    // FPP is the top level manager.
-    FPP->setTopLevelManager(FPP);
-
-    OnTheFlyManagers[P] = FPP;
-  }
-  const PassInfo *RequiredPassPI =
-      TPM->findAnalysisPassInfo(RequiredPass->getPassID());
-
-  Pass *FoundPass = nullptr;
-  if (RequiredPassPI && RequiredPassPI->isAnalysis()) {
-    FoundPass =
-      ((PMTopLevelManager*)FPP)->findAnalysisPass(RequiredPass->getPassID());
-  }
-  if (!FoundPass) {
-    FoundPass = RequiredPass;
-    // This should be guaranteed to add RequiredPass to the passmanager given
-    // that we checked for an available analysis above.
-    FPP->add(RequiredPass);
-  }
-  // Register P as the last user of FoundPass or RequiredPass.
-  SmallVector<Pass *, 1> LU;
-  LU.push_back(FoundPass);
-  FPP->setLastUser(LU,  P);
+  addLowerLevelRequiredPassImpl(OnTheFlyManagers, P, RequiredPass);
 }
 
 /// Return function pass corresponding to PassInfo PI, that is

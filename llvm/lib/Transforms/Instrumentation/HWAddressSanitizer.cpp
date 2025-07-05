@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -42,6 +44,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
@@ -74,6 +77,10 @@ static const uint64_t kDynamicShadowSentinel =
     std::numeric_limits<uint64_t>::max();
 
 static const unsigned kShadowBaseAlignment = 32;
+
+static cl::opt<bool> ClEnableCjHwAsan(
+    "cj-hwasan", cl::desc("Enable Cangjie Hwasan Support"),
+    cl::Hidden, cl::init(false));
 
 static cl::opt<std::string>
     ClMemoryAccessCallbackPrefix("hwasan-memory-access-callback-prefix",
@@ -418,6 +425,20 @@ PreservedAnalyses HWAddressSanitizerPass::run(Module &M,
   if (shouldUseStackSafetyAnalysis(TargetTriple, Options.DisableOptimization))
     SSI = &MAM.getResult<StackSafetyGlobalAnalysis>(M);
 
+  // on cangjie, disable the followings
+  if (ClEnableCjHwAsan) {
+    Options.CompileKernel = false;
+    Options.Recover = false;
+    ClInstrumentWithCalls.setValue(false, true);
+    ClInstrumentReads.setValue(false, true);
+    ClInstrumentWrites.setValue(false, true);
+    ClInstrumentAtomics.setValue(false, true);
+    ClInstrumentByval.setValue(false, true);
+    ClEnableKhwasan.setValue(false, true);
+    ClInstrumentMemIntrinsics.setValue(false, true);
+    ClUseShortGranules.setValue(false, true);
+  }
+
   HWAddressSanitizer HWASan(M, Options.CompileKernel, Options.Recover, SSI);
   bool Modified = false;
   auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
@@ -670,9 +691,13 @@ void HWAddressSanitizer::initializeCallbacks(Module &M) {
   HWAsanMemset = M.getOrInsertFunction(MemIntrinCallbackPrefix + "memset",
                                        IRB.getInt8PtrTy(), IRB.getInt8PtrTy(),
                                        IRB.getInt32Ty(), IntptrTy);
-
-  HWAsanHandleVfork =
-      M.getOrInsertFunction("__hwasan_handle_vfork", IRB.getVoidTy(), IntptrTy);
+  if (ClEnableCjHwAsan) {
+    HWAsanHandleVfork =
+      M.getOrInsertFunction("CJ_MCC_AsanHandleNoReturn", IRB.getVoidTy(), IntptrTy);
+  } else {
+    HWAsanHandleVfork =
+        M.getOrInsertFunction("__hwasan_handle_vfork", IRB.getVoidTy(), IntptrTy);
+  }
 }
 
 Value *HWAddressSanitizer::getOpaqueNoopCast(IRBuilder<> &IRB, Value *Val) {
@@ -1405,7 +1430,9 @@ bool HWAddressSanitizer::isInterestingAlloca(const AllocaInst &AI) {
           // swifterror allocas are register promoted by ISel
           !AI.isSwiftError()) &&
          // safe allocas are not interesting
-         !(SSI && SSI->isSafe(AI));
+         !(SSI && SSI->isSafe(AI)) &&
+         // for cjasan, do not instrument gc ptr
+         !(ClEnableCjHwAsan && containsGCPtrType(AI.getAllocatedType()));
 }
 
 bool HWAddressSanitizer::sanitizeFunction(Function &F,
@@ -1413,8 +1440,13 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F,
   if (&F == HwasanCtorFunction)
     return false;
 
-  if (!F.hasFnAttribute(Attribute::SanitizeHWAddress))
-    return false;
+  if (ClEnableCjHwAsan) {
+    if (!F.hasFnAttribute("address_sanitize_stack"))
+      return false;
+  } else {
+    if (!F.hasFnAttribute(Attribute::SanitizeHWAddress))
+      return false;
+  }
 
   LLVM_DEBUG(dbgs() << "Function: " << F.getName() << "\n");
 
@@ -1432,11 +1464,13 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F,
     if (InstrumentLandingPads && isa<LandingPadInst>(Inst))
       LandingPadVec.push_back(&Inst);
 
-    getInterestingMemoryOperands(&Inst, OperandsToInstrument);
+    if (!ClEnableCjHwAsan) {
+      getInterestingMemoryOperands(&Inst, OperandsToInstrument);
 
-    if (MemIntrinsic *MI = dyn_cast<MemIntrinsic>(&Inst))
-      if (!ignoreMemIntrinsic(MI))
-        IntrinToInstrument.push_back(MI);
+      if (MemIntrinsic *MI = dyn_cast<MemIntrinsic>(&Inst))
+        if (!ignoreMemIntrinsic(MI))
+          IntrinToInstrument.push_back(MI);
+    }
   }
 
   memtag::StackInfo &SInfo = SIB.get();
@@ -1491,12 +1525,14 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F,
     }
   }
 
-  for (auto &Operand : OperandsToInstrument)
-    instrumentMemAccess(Operand);
+  if (!ClEnableCjHwAsan) {
+    for (auto &Operand : OperandsToInstrument)
+      instrumentMemAccess(Operand);
 
-  if (ClInstrumentMemIntrinsics && !IntrinToInstrument.empty()) {
-    for (auto Inst : IntrinToInstrument)
-      instrumentMemIntrinsic(cast<MemIntrinsic>(Inst));
+    if (ClInstrumentMemIntrinsics && !IntrinToInstrument.empty()) {
+      for (auto Inst : IntrinToInstrument)
+        instrumentMemIntrinsic(cast<MemIntrinsic>(Inst));
+    }
   }
 
   ShadowBase = nullptr;
@@ -1601,6 +1637,14 @@ void HWAddressSanitizer::instrumentGlobals() {
     // which would be broken both by adding tags and potentially by the extra
     // padding/alignment that we insert.
     if (GV.hasSection())
+      continue;
+
+    // only sanitize cangjie variables
+    if (ClEnableCjHwAsan && !GV.hasAttribute("address_sanitize_global"))
+      continue;
+
+      // Globals which have GC type cannot be instrumented
+    if (ClEnableCjHwAsan && containsGCPtrType(GV.getInitializer()->getType()))
       continue;
 
     Globals.push_back(&GV);

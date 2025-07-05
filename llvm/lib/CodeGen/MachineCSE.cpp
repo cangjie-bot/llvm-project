@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass performs global common subexpression elimination on machine
@@ -427,6 +429,9 @@ bool MachineCSE::isCSECandidate(MachineInstr *MI) {
   if (MI->getOpcode() == TargetOpcode::LOAD_STACK_GUARD)
     return false;
 
+  if (MI->isCalDerivedPtrInCangjieCopyGC(MRI)) {
+    return false;
+  }
   return true;
 }
 
@@ -797,6 +802,9 @@ bool MachineCSE::isPRECandidate(MachineInstr *MI) {
   for (const auto &def : MI->defs())
     if (!Register::isVirtualRegister(def.getReg()))
       return false;
+  if (MI->isCalDerivedPtrInCangjieCopyGC(MRI)) {
+    return false;
+  }
 
   for (const auto &use : MI->uses())
     if (use.isReg() && !Register::isVirtualRegister(use.getReg()))

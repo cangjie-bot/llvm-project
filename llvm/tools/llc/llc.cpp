@@ -189,7 +189,14 @@ static cl::opt<std::string> RemarksFormat(
     "pass-remarks-format",
     cl::desc("The format used for serializing remarks (default: YAML)"),
     cl::value_desc("format"), cl::init("yaml"));
-
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> DisableGCSupport;
+extern cl::opt<bool> EnableBarrierOnly;
+extern cl::opt<bool> EnableSafepointOnly;
+}
+extern cl::opt<bool> EnableCalledSaveForStackMap;
+extern cl::opt<cl::boolOrDefault> EnableGlobalISelOption;
 namespace {
 
 std::vector<std::string> &getRunPassNames() {
@@ -379,6 +386,12 @@ int main(int argc, char **argv) {
 
   cl::ParseCommandLineOptions(argc, argv, "llvm system compiler\n");
 
+  if (DisableGCSupport + EnableBarrierOnly + EnableSafepointOnly > 1) {
+    errs() << "At most one of the three options (DisableGCSupport, "
+              "EnableBarrierOnly and EnableSafepointOnly) should be set true.\n";
+    return 1;
+  }
+
   if (TimeTrace)
     timeTraceProfilerInitialize(TimeTraceGranularity, argv[0]);
   auto TimeTraceScopeExit = make_scope_exit([]() {
@@ -452,6 +465,14 @@ static bool addPass(PassManagerBase &PM, const char *argv0,
   return false;
 }
 
+// enable CJ Options when -cangjie-pipeline='true'
+static void initCangjieOptions() {
+  EnableCalledSaveForStackMap = CJPipeline && EnableCalledSaveForStackMap;
+  if (CJPipeline) {
+    EnableGlobalISelOption = cl::BOU_FALSE;
+  }
+}
+
 static int compileModule(char **argv, LLVMContext &Context) {
   // Load the module to be compiled...
   SMDiagnostic Err;
@@ -476,7 +497,11 @@ static int compileModule(char **argv, LLVMContext &Context) {
     WithColor::error(errs(), argv[0]) << "invalid optimization level.\n";
     return 1;
   case ' ': break;
-  case '0': OLvl = CodeGenOpt::None; break;
+  case '0': {
+    OLvl = CodeGenOpt::None;
+    EnableCalledSaveForStackMap = false;
+    break;
+  }
   case '1': OLvl = CodeGenOpt::Less; break;
   case '2': OLvl = CodeGenOpt::Default; break;
   case '3': OLvl = CodeGenOpt::Aggressive; break;
@@ -612,6 +637,8 @@ static int compileModule(char **argv, LLVMContext &Context) {
   }
 
   assert(M && "Should have exited if we didn't have a module!");
+  initCangjieOptions();
+
   if (codegen::getFloatABIForCalls() != FloatABI::Default)
     Options.FloatABIType = codegen::getFloatABIForCalls();
 

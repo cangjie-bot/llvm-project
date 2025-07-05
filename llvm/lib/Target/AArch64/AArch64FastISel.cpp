@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the AArch64-specific support for the FastISel class. Some
@@ -340,6 +342,8 @@ CCAssignFn *AArch64FastISel::CCAssignFnForCall(CallingConv::ID CC) const {
     return CC_AArch64_GHC;
   if (CC == CallingConv::CFGuard_Check)
     return CC_AArch64_Win64_CFGuard_Check;
+  if (CC == CallingConv::CangjieGC)
+    return RetCC_AArch64_Cangjie_GCCheck;
   return Subtarget->isTargetDarwin() ? CC_AArch64_DarwinPCS : CC_AArch64_AAPCS;
 }
 
@@ -2998,6 +3002,11 @@ bool AArch64FastISel::processCallArgs(CallLoweringInfo &CLI,
 
   // Get a count of how many bytes are to be pushed on the stack.
   NumBytes = CCInfo.getNextStackOffset();
+  // Cangjie need to add frame info for CFFI stub.
+  if (CLI.Callee) {
+    CCInfo.AddAlignedCallFrameSizeMetaDataForCJFFI(
+        const_cast<Function *>(dyn_cast<Function>(CLI.Callee)), NumBytes);
+  }
 
   // Issue CALLSEQ_START
   unsigned AdjStackDown = TII.getCallFrameSetupOpcode();
@@ -3787,7 +3796,9 @@ bool AArch64FastISel::selectRet(const Instruction *I) {
     SmallVector<CCValAssign, 16> ValLocs;
     CCState CCInfo(CC, F.isVarArg(), *FuncInfo.MF, ValLocs, I->getContext());
     CCAssignFn *RetCC = CC == CallingConv::WebKit_JS ? RetCC_AArch64_WebKit_JS
-                                                     : RetCC_AArch64_AAPCS;
+                        : (CC == CallingConv::CangjieGC
+                            ? RetCC_AArch64_Cangjie_GCCheck
+                            : RetCC_AArch64_AAPCS);
     CCInfo.AnalyzeReturn(Outs, RetCC);
 
     // Only handle a single return value for now.

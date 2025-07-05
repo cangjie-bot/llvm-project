@@ -1172,10 +1172,15 @@ static void readConfigs(opt::InputArgList &args) {
     }
   }
 
+  if (args.hasArg(OPT_no_rosegment)) {
+    error("The --no-rosegment option does not supported for Cangjie!");
+  }
+
   config->searchPaths = args::getStrings(args, OPT_library_path);
   config->sectionStartMap = getSectionStartMap(args);
   config->shared = args.hasArg(OPT_shared);
-  config->singleRoRx = !args.hasFlag(OPT_rosegment, OPT_no_rosegment, true);
+  // The --no-rosegment option does not supported for Cangjie.
+  config->singleRoRx = false;
   config->soName = args.getLastArgValue(OPT_soname);
   config->sortSection = getSortSection(args);
   config->splitStackAdjustSize = args::getInteger(args, OPT_split_stack_adjust_size, 16384);

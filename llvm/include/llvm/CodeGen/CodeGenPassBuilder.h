@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 ///
@@ -21,6 +23,7 @@
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/CFLAndersAliasAnalysis.h"
 #include "llvm/Analysis/CFLSteensAliasAnalysis.h"
+#include "llvm/Analysis/CJAliasAnalysis.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
@@ -52,6 +55,10 @@
 #include <cassert>
 #include <type_traits>
 #include <utility>
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
 
 namespace llvm {
 
@@ -511,6 +518,9 @@ static inline AAManager registerAAAnalyses(CFLAAType UseCFLAA) {
   AA.registerFunctionAnalysis<TypeBasedAA>();
   AA.registerFunctionAnalysis<ScopedNoAliasAA>();
   AA.registerFunctionAnalysis<BasicAA>();
+
+  if (CJPipeline)
+    AA.registerFunctionAnalysis<CangjieAA>();
 
   return AA;
 }

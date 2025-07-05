@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass looks for safe point where the prologue and epilogue can be
@@ -86,7 +88,9 @@
 #include <memory>
 
 using namespace llvm;
-
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 #define DEBUG_TYPE "shrink-wrap"
 
 STATISTIC(NumFunc, "Number of functions");
@@ -584,7 +588,10 @@ bool ShrinkWrap::runOnMachineFunction(MachineFunction &MF) {
                     << Restore->getName() << '\n');
 
   MachineFrameInfo &MFI = MF.getFrameInfo();
-  MFI.setSavePoint(Save);
+  // cangjie require prologue to be inserted at the entry BB for unwind reason
+  if (!CJPipeline) {
+    MFI.setSavePoint(Save);
+  }
   MFI.setRestorePoint(Restore);
   ++NumCandidates;
   return false;

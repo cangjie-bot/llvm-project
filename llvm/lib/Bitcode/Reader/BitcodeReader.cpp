@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -2003,6 +2005,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
     return Attribute::Hot;
   case bitc::ATTR_KIND_PRESPLIT_COROUTINE:
     return Attribute::PresplitCoroutine;
+  case bitc::ATTR_KIND_CJ_STACK_POINTER:
+    return Attribute::CJStackPointer;
   }
 }
 
@@ -4041,7 +4045,6 @@ Error BitcodeReader::parseGlobalIndirectSymbolRecord(
         StringRef(Strtab.data() + Record[OpNum], Record[OpNum + 1]));
     OpNum += 2;
   }
-
   ValueList.push_back(NewGA, getVirtualTypeID(NewGA->getType(), TypeID));
   IndirectSymbolInits.push_back(std::make_pair(NewGA, Val));
   return Error::success();

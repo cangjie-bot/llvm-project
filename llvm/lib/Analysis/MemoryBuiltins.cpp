@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This family of functions identifies calls to builtin functions that allocate
@@ -48,6 +50,10 @@
 #include <utility>
 
 using namespace llvm;
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
 
 #define DEBUG_TYPE "memory-builtins"
 
@@ -360,6 +366,9 @@ bool llvm::isRemovableAlloc(const CallBase *CB, const TargetLibraryInfo *TLI) {
 
   // Historically we've treated the C family allocation routines and operator
   // new as removable
+  if (CJPipeline && CB->getCalledFunction() &&
+      CB->getCalledFunction()->hasFnAttribute("cj-heapmalloc"))
+    return true;
   return isAllocLikeFn(CB, TLI);
 }
 

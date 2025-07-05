@@ -112,16 +112,17 @@ define <4 x float> @test6(<4 x float> %a, <4 x float> %b) {
 define double @test7(double %a, double %b) nounwind {
 ; CHECK-LABEL: test7:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    str d8, [sp, #-16]! // 8-byte Folded Spill
+; CHECK-NEXT:    str x30, [sp, #-16]! // 8-byte Folded Spill
 ; CHECK-NEXT:    fmov d2, #-2.00000000
-; CHECK-NEXT:    str x30, [sp, #8] // 8-byte Folded Spill
+; CHECK-NEXT:    str d8, [sp, #8] // 8-byte Folded Spill
 ; CHECK-NEXT:    fmul d1, d1, d2
 ; CHECK-NEXT:    fadd d8, d0, d1
 ; CHECK-NEXT:    fmov d0, d1
 ; CHECK-NEXT:    bl use
-; CHECK-NEXT:    ldr x30, [sp, #8] // 8-byte Folded Reload
 ; CHECK-NEXT:    fmov d0, d8
-; CHECK-NEXT:    ldr d8, [sp], #16 // 8-byte Folded Reload
+; CHECK-NEXT:    ldr d8, [sp, #8] // 8-byte Folded Reload
+
+; CHECK-NEXT:    ldr x30, [sp], #16 // 8-byte Folded Reload
 ; CHECK-NEXT:    ret
   %mul = fmul double %b, -2.000000e+00
   %add1 = fadd double %a, %mul

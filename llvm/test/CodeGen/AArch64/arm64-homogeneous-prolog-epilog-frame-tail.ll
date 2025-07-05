@@ -9,11 +9,11 @@
 ; CHECK:      b       _OUTLINED_FUNCTION_EPILOG_TAIL_x30x29x19x20d8d9d10d11
 
 ; CHECK-LINUX-LABEL: _Z3foofffi:
-; CHECK-LINUX:      stp     x29, x30, [sp, #-32]!
-; CHECK-LINUX-NEXT: bl      OUTLINED_FUNCTION_PROLOG_FRAME32_x19x20x30x29d8d9d10d11
+; CHECK-LINUX:      stp     x29, x30, [sp, #-64]!
+; CHECK-LINUX-NEXT: bl      OUTLINED_FUNCTION_PROLOG_FRAME0_x19x20d8d9d10d11x30x29
 ; CHECK-LINUX:      bl      _Z3goof
 ; CHECK-LINUX:      bl      _Z3goof
-; CHECK-LINUX:      b       OUTLINED_FUNCTION_EPILOG_TAIL_x19x20x30x29d8d9d10d11
+; CHECK-LINUX:      b       OUTLINED_FUNCTION_EPILOG_TAIL_x19x20d8d9d10d11x30x29
 
 define float @_Z3foofffi(float %b, float %x, float %y, i32 %z) ssp minsize "frame-pointer"="non-leaf" {
 entry:
@@ -66,18 +66,18 @@ declare i32 @_Z3hoov() nounwind ssp optsize
 ; CHECK:      ldp     x29, x30, [sp], #16
 ; CHECK-NEXT: ret
 
-; CHECK-LINUX-LABEL:  OUTLINED_FUNCTION_PROLOG_FRAME32_x19x20x30x29d8d9d10d11:
-; CHECK-LINUX:      stp     d11, d10, [sp, #-32]!
-; CHECK-LINUX-NEXT: stp     d9, d8, [sp, #16]
+; CHECK-LINUX-LABEL:  OUTLINED_FUNCTION_PROLOG_FRAME0_x19x20d8d9d10d11x30x29:
+; CHECK-LINUX:      stp     d11, d10, [sp, #16]
+; CHECK-LINUX-NEXT: stp     d9, d8, [sp, #32]
 ; CHECK-LINUX-NEXT: stp     x20, x19, [sp, #48]
-; CHECK-LINUX-NEXT: add     x29, sp, #32
+; CHECK-LINUX-NEXT: mov	x29, sp
 ; CHECK-LINUX-NEXT: ret
 
-; CHECK-LINUX-LABEL: OUTLINED_FUNCTION_EPILOG_TAIL_x19x20x30x29d8d9d10d11:
+; CHECK-LINUX-LABEL: OUTLINED_FUNCTION_EPILOG_TAIL_x19x20d8d9d10d11x30x29:
 ; CHECK-LINUX:      ldp     x20, x19, [sp, #48]
-; CHECK-LINUX-NEXT: ldp     x29, x30, [sp, #32]
-; CHECK-LINUX-NEXT: ldp     d9, d8, [sp, #16]
-; CHECK-LINUX-NEXT: ldp     d11, d10, [sp], #64
+; CHECK-LINUX-NEXT: ldp     d9, d8, [sp, #32]
+; CHECK-LINUX-NEXT: ldp     d11, d10, [sp, #16]
+; CHECK-LINUX-NEXT: ldp     x29, x30, [sp], #64
 ; CHECK-LINUX-NEXT: ret
 
 ; CHECK-LINUX-LABEL: OUTLINED_FUNCTION_EPILOG_TAIL_x30x29:

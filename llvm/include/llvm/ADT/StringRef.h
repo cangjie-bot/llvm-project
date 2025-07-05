@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_ADT_STRINGREF_H
@@ -900,6 +902,38 @@ namespace llvm {
       if (Pos > 0 && Data[Pos - 1] == '\n')
         return "\n\r"; // You monster!
       return "\r";     // Classic Mac
+    }
+
+    bool isCJMutexLock() const { return equals("CJ_MCC_MutexLock"); }
+
+    bool isCangjieNewObjFunction() const {
+      return equals("CJ_MCC_NewObject") || equals("CJ_MCC_NewFinalizer");
+    }
+
+    bool isCangjieTypeInfo() const { return startswith("TypeInfo"); }
+
+    bool isCangjieArrayLayout() const { return startswith("ArrayLayout"); }
+
+    bool isCangjieArrayRecord() const {
+      return startswith("record.std.core:Array");
+    }
+
+    bool isCJStackCheck() const { return equals("CJ_MCC_StackCheck"); }
+
+    bool isGetGCPhase() const { return equals("GetGCPhase"); }
+
+    bool isSetDebugLocation() const { return equals("SetDebugLocation"); }
+
+    bool isExtendFromFP16Func() const {
+        return equals("__extendhfsf2") || equals("__extendhfdf2") ||
+               equals("__fixhfsi") || equals("__fixhfdi") ||
+               equals("__fixunshfsi") || equals("__fixunshfdi");
+    }
+
+    bool isTruncToFP16Func() const {
+        return equals("__truncsfhf2") || equals("__truncdfhf2") ||
+               equals("__floatsihf") || equals("__floatdihf") ||
+               equals("__floatunsihf") || equals("__floatundihf");
     }
     /// @}
   };

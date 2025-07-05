@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/Triple.h"
@@ -193,6 +195,7 @@ StringRef Triple::getVendorTypeName(VendorType Kind) {
   case PC: return "pc";
   case SCEI: return "scei";
   case SUSE: return "suse";
+  case Harmony: return "hm";
   }
 
   llvm_unreachable("Invalid VendorType!");
@@ -249,6 +252,7 @@ StringRef Triple::getEnvironmentTypeName(EnvironmentType Kind) {
   switch (Kind) {
   case UnknownEnvironment: return "unknown";
   case Android: return "android";
+  case OpenHOS: return "ohos";
   case CODE16: return "code16";
   case CoreCLR: return "coreclr";
   case Cygnus: return "cygnus";
@@ -543,6 +547,7 @@ static Triple::VendorType parseVendor(StringRef VendorName) {
     .Case("mesa", Triple::Mesa)
     .Case("suse", Triple::SUSE)
     .Case("oe", Triple::OpenEmbedded)
+    .Case("hm", Triple::Harmony)
     .Default(Triple::UnknownVendor);
 }
 
@@ -613,6 +618,7 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
       .StartsWith("coreclr", Triple::CoreCLR)
       .StartsWith("simulator", Triple::Simulator)
       .StartsWith("macabi", Triple::MacABI)
+      .StartsWith("ohos", Triple::OpenHOS)
       .StartsWith("pixel", Triple::Pixel)
       .StartsWith("vertex", Triple::Vertex)
       .StartsWith("geometry", Triple::Geometry)

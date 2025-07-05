@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This library implements `print` family of functions in classes like
@@ -297,6 +299,7 @@ static void PrintCallingConv(unsigned cc, raw_ostream &Out) {
   case CallingConv::CXX_FAST_TLS:  Out << "cxx_fast_tlscc"; break;
   case CallingConv::GHC:           Out << "ghccc"; break;
   case CallingConv::Tail:          Out << "tailcc"; break;
+  case CallingConv::CangjieGC:     Out << "cangjiegccc"; break;
   case CallingConv::CFGuard_Check: Out << "cfguard_checkcc"; break;
   case CallingConv::X86_StdCall:   Out << "x86_stdcallcc"; break;
   case CallingConv::X86_FastCall:  Out << "x86_fastcallcc"; break;

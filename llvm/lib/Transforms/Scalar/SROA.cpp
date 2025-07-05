@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 /// This transformation implements the well known scalar replacement of
@@ -65,6 +67,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
@@ -78,6 +81,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/InsertCJTBAA.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include <algorithm>
@@ -106,14 +110,19 @@ STATISTIC(NumPromoted, "Number of allocas promoted to SSA values");
 STATISTIC(NumLoadsSpeculated, "Number of loads speculated to allow promotion");
 STATISTIC(NumDeleted, "Number of instructions deleted");
 STATISTIC(NumVectorized, "Number of vectorized aggregates");
-
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 /// Hidden option to experiment with completely strict handling of inbounds
 /// GEPs.
 static cl::opt<bool> SROAStrictInbounds("sroa-strict-inbounds", cl::init(false),
                                         cl::Hidden);
 
 namespace {
-
+/// 8: default vector size.
+static SmallVector<uint64_t, 8> GCPtrOffsets;
+/// Pointer size of current target.
+static size_t PointerSize = 0;
 /// A custom IRBuilder inserter which prefixes all names, but only in
 /// Assert builds.
 class IRBuilderPrefixedInserter final : public IRBuilderDefaultInserter {
@@ -412,6 +421,18 @@ public:
   ArrayRef<Slice *> splitSliceTails() const { return SplitTails; }
 };
 
+/// Try to find the first GC Pointer offset in given range.
+/// If found, return true.
+/// If not, return false.
+static bool containGCPtr(uint64_t BeginOffset, uint64_t EndOffset) {
+  for (auto GCOffset : GCPtrOffsets) {
+    if (GCOffset >= BeginOffset && GCOffset < EndOffset) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// An iterator over partitions of the alloca's slices.
 ///
 /// This iterator implements the core algorithm for partitioning the alloca's
@@ -437,6 +458,15 @@ class AllocaSlices::partition_iterator
   /// FIXME: Do we really?
   uint64_t MaxSplitSliceEndOffset = 0;
 
+  /// We need to keep track of the EndOffset in split unalignment.
+  uint64_t NextEndOffset = 0;
+
+  /// We need to keep track of the SI iterator in split unalignment.
+  AllocaSlices::iterator NextSJ = SE;
+
+  /// We need to mark whether it is in the process of split unalignment.
+  bool NeedContinue = false;
+
   /// Sets the partition to be empty at given iterator, and sets the
   /// end iterator.
   partition_iterator(AllocaSlices::iterator SI, AllocaSlices::iterator SE)
@@ -447,12 +477,58 @@ class AllocaSlices::partition_iterator
       advance();
   }
 
+  /// If the start offset of partition is not alignment,
+  /// we need to split it for record stackmaps.
+  void splitUnAlginment() {
+    assert(PointerSize > 0 && "Unexpected PointerSize!");
+    if (!CJPipeline ||                                // Only for Cangjie
+        P.EndOffset - P.BeginOffset <= PointerSize || // Less than pointer size
+        P.BeginOffset % PointerSize == 0 ||           // Already alignment
+        !containGCPtr(P.BeginOffset, P.EndOffset))    // No GC pointer
+      return;
+    // Record original end offset.
+    NextEndOffset = P.EndOffset;
+    // Split current P by align the beginOffset.
+    P.EndOffset = ((P.BeginOffset + PointerSize - 1) & (~(PointerSize - 1)));
+    // Record original SJ.
+    NextSJ = P.SJ;
+    // Keep the SI and SJ within the range of P
+    for (Slice &S : P) {
+      if (S.beginOffset() >= P.EndOffset) {
+        P.SJ = &S;
+        break;
+      }
+    }
+    // Need to process remained part in next advance().
+    NeedContinue = true;
+    return;
+  }
+
   /// Advance the iterator to the next partition.
   ///
   /// Requires that the iterator not be at the end of the slices.
   void advance() {
     assert((P.SI != SE || !P.SplitTails.empty()) &&
            "Cannot advance past the end of the slices!");
+
+    if (NeedContinue) {
+      P.BeginOffset = P.EndOffset;
+      P.EndOffset = NextEndOffset;
+      // If SJ == NextSJ, it means that SI, SJ have not changed in
+      // splitUnAlginment(), so there is no need to modify the value
+      // of SI and SJ.
+      if (P.SJ != NextSJ) {
+        P.SI = P.SJ;
+        P.SJ = NextSJ;
+      }
+      // Reset the variables.
+      NextEndOffset = 0;
+      NeedContinue = false;
+      NextSJ = SE;
+      // Since this is the second part of the split unalignment,
+      // we need to return directly.
+      return;
+    }
 
     // Clear out any split uses which have ended.
     if (!P.SplitTails.empty()) {
@@ -505,6 +581,7 @@ class AllocaSlices::partition_iterator
       if (P.SI == SE) {
         P.BeginOffset = P.EndOffset;
         P.EndOffset = MaxSplitSliceEndOffset;
+        splitUnAlginment();
         return;
       }
 
@@ -515,6 +592,7 @@ class AllocaSlices::partition_iterator
           !P.SI->isSplittable()) {
         P.BeginOffset = P.EndOffset;
         P.EndOffset = P.SI->beginOffset();
+        splitUnAlginment();
         return;
       }
     }
@@ -567,6 +645,8 @@ class AllocaSlices::partition_iterator
       assert(!P.SJ->isSplittable());
       P.EndOffset = P.SJ->beginOffset();
     }
+
+    splitUnAlginment();
   }
 
 public:
@@ -842,8 +922,9 @@ private:
     if (II.isVolatile() && II.getDestAddressSpace() != DL.getAllocaAddrSpace())
       return PI.setAborted(&II);
 
-    insertUse(II, Offset, Length ? Length->getLimitedValue()
-                                 : AllocSize - Offset.getLimitedValue(),
+    insertUse(II, Offset,
+              Length ? Length->getLimitedValue()
+                     : AllocSize - Offset.getLimitedValue(),
               (bool)Length);
   }
 
@@ -971,16 +1052,16 @@ private:
       std::tie(UsedI, I) = Uses.pop_back_val();
 
       if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
-        Size = std::max(Size,
-                        DL.getTypeStoreSize(LI->getType()).getFixedSize());
+        Size =
+            std::max(Size, DL.getTypeStoreSize(LI->getType()).getFixedSize());
         continue;
       }
       if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
         Value *Op = SI->getOperand(0);
         if (Op == UsedI)
           return SI;
-        Size = std::max(Size,
-                        DL.getTypeStoreSize(Op->getType()).getFixedSize());
+        Size =
+            std::max(Size, DL.getTypeStoreSize(Op->getType()).getFixedSize());
         continue;
       }
 
@@ -1211,7 +1292,20 @@ static bool isSafePHIToSpeculate(PHINode &PN) {
   Align MaxAlign;
   uint64_t APWidth = DL.getIndexTypeSizeInBits(PN.getType());
   Type *LoadType = nullptr;
+  SmallVector<User*, 8> PNUsers;
   for (User *U : PN.users()) {
+    PNUsers.push_back(U);
+  }
+  while (!PNUsers.empty()) {
+    User *U = PNUsers.pop_back_val();
+    if (CJPipeline) {
+      if (auto *CI = dyn_cast<AddrSpaceCastInst>(U)) {
+        for (User *CIU : CI->users()) {
+          PNUsers.push_back(CIU);
+        }
+        continue;
+      }
+    }
     LoadInst *LI = dyn_cast<LoadInst>(U);
     if (!LI || !LI->isSimple())
       return false;
@@ -1273,10 +1367,37 @@ static bool isSafePHIToSpeculate(PHINode &PN) {
   return true;
 }
 
+static void getSomeLoadsAndCasts(SmallVectorImpl<LoadInst *> &SomeLoads,
+                                 SmallVectorImpl<CastInst *> &SomeCasts,
+                                 PHINode &PN) {
+  SmallVector<User *, 8> PNUsers;
+  for (User *U : PN.users()) {
+    PNUsers.push_back(U);
+  }
+  while (!PNUsers.empty()) {
+    User *U = PNUsers.pop_back_val();
+    if (CastInst *CI = dyn_cast<CastInst>(U)) {
+      for (User *CIU : CI->users()) {
+        PNUsers.push_back(CIU);
+      }
+      SomeCasts.push_back(CI);
+    } else if (LoadInst *LI = dyn_cast<LoadInst>(U)) {
+      SomeLoads.push_back(LI);
+    } else {
+      report_fatal_error("unsupported type on speculatePHINodeLoads.");
+    }
+  }
+}
+
 static void speculatePHINodeLoads(IRBuilderTy &IRB, PHINode &PN) {
   LLVM_DEBUG(dbgs() << "    original: " << PN << "\n");
 
-  LoadInst *SomeLoad = cast<LoadInst>(PN.user_back());
+  SmallVector<LoadInst *, 8> SomeLoads;
+  SmallVector<CastInst *, 8> SomeCasts;
+  getSomeLoadsAndCasts(SomeLoads, SomeCasts, PN);
+  assert(SomeLoads.size() != 0 && "don't hanve any load Inst.");
+  LoadInst *SomeLoad = SomeLoads[0];
+
   Type *LoadTy = SomeLoad->getType();
   IRB.SetInsertPoint(&PN);
   PHINode *NewPN = IRB.CreatePHI(LoadTy, PN.getNumIncomingValues(),
@@ -1288,14 +1409,19 @@ static void speculatePHINodeLoads(IRBuilderTy &IRB, PHINode &PN) {
   Align Alignment = SomeLoad->getAlign();
 
   // Rewrite all loads of the PN to use the new PHI.
-  while (!PN.use_empty()) {
-    LoadInst *LI = cast<LoadInst>(PN.user_back());
+  for (unsigned Index = 0; Index < SomeLoads.size(); Index++) {
+    LoadInst *LI = SomeLoads[Index];
     LI->replaceAllUsesWith(NewPN);
     LI->eraseFromParent();
   }
 
+  while (!SomeCasts.empty()) {
+    CastInst *Cast = SomeCasts.pop_back_val();
+    Cast->eraseFromParent();
+  }
+
   // Inject loads into all of the pred blocks.
-  DenseMap<BasicBlock*, Value*> InjectedLoads;
+  DenseMap<BasicBlock *, Value *> InjectedLoads;
   for (unsigned Idx = 0, Num = PN.getNumIncomingValues(); Idx != Num; ++Idx) {
     BasicBlock *Pred = PN.getIncomingBlock(Idx);
     Value *InVal = PN.getIncomingValue(Idx);
@@ -1304,7 +1430,7 @@ static void speculatePHINodeLoads(IRBuilderTy &IRB, PHINode &PN) {
     // basic block, as long as the value is the same. So if we already injected
     // a load in the predecessor, then we should reuse the same load for all
     // duplicated entries.
-    if (Value* V = InjectedLoads.lookup(Pred)) {
+    if (Value *V = InjectedLoads.lookup(Pred)) {
       NewPN->addIncoming(V, Pred);
       continue;
     }
@@ -1318,6 +1444,8 @@ static void speculatePHINodeLoads(IRBuilderTy &IRB, PHINode &PN) {
     ++NumLoadsSpeculated;
     if (AATags)
       Load->setAAMetadata(AATags);
+    if (CJPipeline)
+      updateTBAA(Load->getModule()->getDataLayout(), Load);
     NewPN->addIncoming(Load, Pred);
     InjectedLoads[Pred] = Load;
   }
@@ -1359,11 +1487,11 @@ static bool isSafeSelectToSpeculate(SelectInst &SI) {
     // Both operands to the select need to be dereferenceable, either
     // absolutely (e.g. allocas) or at this point because we can see other
     // accesses to it.
-    if (!isSafeToLoadUnconditionally(TValue, LI->getType(),
-                                     LI->getAlign(), DL, LI))
+    if (!isSafeToLoadUnconditionally(TValue, LI->getType(), LI->getAlign(), DL,
+                                     LI))
       return false;
-    if (!isSafeToLoadUnconditionally(FValue, LI->getType(),
-                                     LI->getAlign(), DL, LI))
+    if (!isSafeToLoadUnconditionally(FValue, LI->getType(), LI->getAlign(), DL,
+                                     LI))
       return false;
   }
 
@@ -1650,8 +1778,7 @@ static Value *getAdjustedPtr(IRBuilderTy &IRB, const DataLayout &DL, Value *Ptr,
 
   // On the off chance we were targeting i8*, guard the bitcast here.
   if (cast<PointerType>(Ptr->getType()) != TargetPtrTy) {
-    Ptr = IRB.CreatePointerBitCastOrAddrSpaceCast(Ptr,
-                                                  TargetPtrTy,
+    Ptr = IRB.CreatePointerBitCastOrAddrSpaceCast(Ptr, TargetPtrTy,
                                                   NamePrefix + "sroa_cast");
   }
 
@@ -1793,8 +1920,7 @@ static bool isVectorPromotionViableForSlice(Partition &P, const Slice &S,
   if (BeginIndex * ElementSize != BeginOffset ||
       BeginIndex >= cast<FixedVectorType>(Ty)->getNumElements())
     return false;
-  uint64_t EndOffset =
-      std::min(S.endOffset(), P.endOffset()) - P.beginOffset();
+  uint64_t EndOffset = std::min(S.endOffset(), P.endOffset()) - P.beginOffset();
   uint64_t EndIndex = EndOffset / ElementSize;
   if (EndIndex * ElementSize != EndOffset ||
       EndIndex > cast<FixedVectorType>(Ty)->getNumElements())
@@ -1887,8 +2013,7 @@ static VectorType *isVectorPromotionViable(Partition &P, const DataLayout &DL) {
   };
   // Consider any loads or stores that are the exact size of the slice.
   for (const Slice &S : P)
-    if (S.beginOffset() == P.beginOffset() &&
-        S.endOffset() == P.endOffset()) {
+    if (S.beginOffset() == P.beginOffset() && S.endOffset() == P.endOffset()) {
       if (auto *LI = dyn_cast<LoadInst>(S.getUse()->getUser()))
         CheckCandidateType(LI->getType());
       else if (auto *SI = dyn_cast<StoreInst>(S.getUse()->getUser()))
@@ -2360,8 +2485,8 @@ public:
     Instruction *OldUserI = cast<Instruction>(OldUse->getUser());
     IRB.SetInsertPoint(OldUserI);
     IRB.SetCurrentDebugLocation(OldUserI->getDebugLoc());
-    IRB.getInserter().SetNamePrefix(
-        Twine(NewAI.getName()) + "." + Twine(BeginOffset) + ".");
+    IRB.getInserter().SetNamePrefix(Twine(NewAI.getName()) + "." +
+                                    Twine(BeginOffset) + ".");
 
     CanSROA &= visit(cast<Instruction>(OldUse->getUser()));
     if (VecTy || IntTy)
@@ -2414,7 +2539,7 @@ private:
 #else
                           Twine()
 #endif
-                          );
+    );
   }
 
   /// Compute suitable alignment to access this slice of the *new*
@@ -2508,6 +2633,9 @@ private:
                                               LI.getName());
       if (AATags)
         NewLI->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
+      if (CJPipeline)
+        updateTBAA(DL, NewLI);
+
       if (LI.isVolatile())
         NewLI->setAtomic(LI.getOrdering(), LI.getSyncScopeID());
       if (NewLI->isAtomic())
@@ -2547,6 +2675,8 @@ private:
                                 getSliceAlign(), LI.isVolatile(), LI.getName());
       if (AATags)
         NewLI->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
+      if (CJPipeline)
+        updateTBAA(DL, NewLI);
       if (LI.isVolatile())
         NewLI->setAtomic(LI.getOrdering(), LI.getSyncScopeID());
       NewLI->copyMetadata(LI, {LLVMContext::MD_mem_parallel_loop_access,
@@ -2614,6 +2744,8 @@ private:
                              LLVMContext::MD_access_group});
     if (AATags)
       Store->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
+    if (CJPipeline)
+      updateTBAA(DL, Store);
     Pass.DeadInsts.push_back(&SI);
 
     LLVM_DEBUG(dbgs() << "          to: " << *Store << "\n");
@@ -2638,6 +2770,8 @@ private:
                              LLVMContext::MD_access_group});
     if (AATags)
       Store->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
+    if (CJPipeline)
+      updateTBAA(DL, Store);
     Pass.DeadInsts.push_back(&SI);
     LLVM_DEBUG(dbgs() << "          to: " << *Store << "\n");
     return true;
@@ -2706,6 +2840,8 @@ private:
                              LLVMContext::MD_access_group});
     if (AATags)
       NewSI->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
+    if (CJPipeline)
+      updateTBAA(DL, NewSI);
     if (SI.isVolatile())
       NewSI->setAtomic(SI.getOrdering(), SI.getSyncScopeID());
     if (NewSI->isAtomic())
@@ -2779,8 +2915,7 @@ private:
     const bool CanContinue = [&]() {
       if (VecTy || IntTy)
         return true;
-      if (BeginOffset > NewAllocaBeginOffset ||
-          EndOffset < NewAllocaEndOffset)
+      if (BeginOffset > NewAllocaBeginOffset || EndOffset < NewAllocaEndOffset)
         return false;
       // Length must be in range for FixedVectorType.
       auto *C = cast<ConstantInt>(II.getLength());
@@ -2793,14 +2928,20 @@ private:
              DL.isLegalInteger(DL.getTypeSizeInBits(ScalarTy).getFixedSize());
     }();
 
+    bool NeedCJMemset = containGCPtr(NewBeginOffset, NewEndOffset);
     // If this doesn't map cleanly onto the alloca type, and that type isn't
     // a single value type, just emit a memset.
     if (!CanContinue) {
       Type *SizeTy = II.getLength()->getType();
       Constant *Size = ConstantInt::get(SizeTy, NewEndOffset - NewBeginOffset);
-      CallInst *New = IRB.CreateMemSet(
-          getNewAllocaSlicePtr(IRB, OldPtr->getType()), II.getValue(), Size,
-          MaybeAlign(getSliceAlign()), II.isVolatile());
+      CallInst *New =
+          NeedCJMemset
+              ? IRB.CreateCJMemSet(getNewAllocaSlicePtr(IRB, OldPtr->getType()),
+                                   II.getValue(), Size,
+                                   MaybeAlign(getSliceAlign()), II.isVolatile())
+              : IRB.CreateMemSet(getNewAllocaSlicePtr(IRB, OldPtr->getType()),
+                                 II.getValue(), Size,
+                                 MaybeAlign(getSliceAlign()), II.isVolatile());
       if (AATags)
         New->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
       LLVM_DEBUG(dbgs() << "          to: " << *New << "\n");
@@ -2874,6 +3015,8 @@ private:
                            LLVMContext::MD_access_group});
     if (AATags)
       New->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
+    if (CJPipeline)
+      updateTBAA(DL, New);
     LLVM_DEBUG(dbgs() << "          to: " << *New << "\n");
     return !II.isVolatile();
   }
@@ -2904,8 +3047,7 @@ private:
       if (IsDest) {
         II.setDest(AdjustedPtr);
         II.setDestAlignment(SliceAlign);
-      }
-      else {
+      } else {
         II.setSource(AdjustedPtr);
         II.setSourceAlignment(SliceAlign);
       }
@@ -3050,6 +3192,8 @@ private:
                               LLVMContext::MD_access_group});
       if (AATags)
         Load->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
+      if (CJPipeline)
+        updateTBAA(DL, Load);
       Src = Load;
     }
 
@@ -3072,6 +3216,8 @@ private:
                              LLVMContext::MD_access_group});
     if (AATags)
       Store->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
+    if (CJPipeline)
+      updateTBAA(DL, Store);
     LLVM_DEBUG(dbgs() << "          to: " << *Store << "\n");
     return !II.isVolatile();
   }
@@ -3108,7 +3254,8 @@ private:
                          NewEndOffset - NewBeginOffset);
     // Lifetime intrinsics always expect an i8* so directly get such a pointer
     // for the new alloca slice.
-    Type *PointerTy = IRB.getInt8PtrTy(OldPtr->getType()->getPointerAddressSpace());
+    Type *PointerTy =
+        IRB.getInt8PtrTy(OldPtr->getType()->getPointerAddressSpace());
     Value *Ptr = getNewAllocaSlicePtr(IRB, PointerTy);
     Value *New;
     if (II.getIntrinsicID() == Intrinsic::lifetime_start)
@@ -3381,9 +3528,12 @@ private:
 
       APInt Offset(
           DL.getIndexSizeInBits(Ptr->getType()->getPointerAddressSpace()), 0);
-      if (AATags &&
-          GEPOperator::accumulateConstantOffset(BaseTy, GEPIndices, DL, Offset))
+      if (AATags && GEPOperator::accumulateConstantOffset(BaseTy, GEPIndices,
+                                                          DL, Offset)) {
         Load->setAAMetadata(AATags.shift(Offset.getZExtValue()));
+        if (CJPipeline)
+          updateTBAA(DL, Load);
+      }
 
       Agg = IRB.CreateInsertValue(Agg, Load, Indices, Name + ".insert");
       LLVM_DEBUG(dbgs() << "          to: " << *Load << "\n");
@@ -3432,9 +3582,12 @@ private:
 
       APInt Offset(
           DL.getIndexSizeInBits(Ptr->getType()->getPointerAddressSpace()), 0);
-      if (AATags &&
-          GEPOperator::accumulateConstantOffset(BaseTy, GEPIndices, DL, Offset))
+      if (AATags && GEPOperator::accumulateConstantOffset(BaseTy, GEPIndices,
+                                                          DL, Offset)) {
         Store->setAAMetadata(AATags.shift(Offset.getZExtValue()));
+        if (CJPipeline)
+          updateTBAA(DL, Store);
+      }
 
       LLVM_DEBUG(dbgs() << "          to: " << *Store << "\n");
     }
@@ -3475,8 +3628,8 @@ private:
     SelectInst *Sel = cast<SelectInst>(GEPI.getPointerOperand());
 
     LLVM_DEBUG(dbgs() << "  Rewriting gep(select) -> select(gep):"
-                      << "\n    original: " << *Sel
-                      << "\n              " << GEPI);
+                      << "\n    original: " << *Sel << "\n              "
+                      << GEPI);
 
     IRB.SetInsertPoint(&GEPI);
     SmallVector<Value *, 4> Index(GEPI.indices());
@@ -3501,9 +3654,8 @@ private:
     Visited.insert(NSelI);
     enqueueUsers(*NSelI);
 
-    LLVM_DEBUG(dbgs() << "\n          to: " << *NTrue
-                      << "\n              " << *NFalse
-                      << "\n              " << *NSel << '\n');
+    LLVM_DEBUG(dbgs() << "\n          to: " << *NTrue << "\n              "
+                      << *NFalse << "\n              " << *NSel << '\n');
 
     return true;
   }
@@ -3524,15 +3676,15 @@ private:
       return false;
 
     LLVM_DEBUG(dbgs() << "  Rewriting gep(phi) -> phi(gep):"
-                      << "\n    original: " << *PHI
-                      << "\n              " << GEPI
-                      << "\n          to: ");
+                      << "\n    original: " << *PHI << "\n              "
+                      << GEPI << "\n          to: ");
 
     SmallVector<Value *, 4> Index(GEPI.indices());
     bool IsInBounds = GEPI.isInBounds();
     IRB.SetInsertPoint(GEPI.getParent()->getFirstNonPHI());
-    PHINode *NewPN = IRB.CreatePHI(GEPI.getType(), PHI->getNumIncomingValues(),
-                                   PHI->getName() + ".sroa.phi");
+    PHINode *NewPN =
+      IRB.CreatePHI(GEPI.getType(), PHI->getNumIncomingValues(),
+                    PHI->getName() + ".sroa.phi");
     for (unsigned I = 0, E = PHI->getNumIncomingValues(); I != E; ++I) {
       BasicBlock *B = PHI->getIncomingBlock(I);
       Value *NewVal = nullptr;
@@ -3556,20 +3708,19 @@ private:
     Visited.insert(NewPN);
     enqueueUsers(*NewPN);
 
-    LLVM_DEBUG(for (Value *In : NewPN->incoming_values())
-                 dbgs() << "\n              " << *In;
+    LLVM_DEBUG(for (Value *In
+                    : NewPN->incoming_values()) dbgs()
+                   << "\n              " << *In;
                dbgs() << "\n              " << *NewPN << '\n');
 
     return true;
   }
 
   bool visitGetElementPtrInst(GetElementPtrInst &GEPI) {
-    if (isa<SelectInst>(GEPI.getPointerOperand()) &&
-        foldGEPSelect(GEPI))
+    if (isa<SelectInst>(GEPI.getPointerOperand()) && foldGEPSelect(GEPI))
       return true;
 
-    if (isa<PHINode>(GEPI.getPointerOperand()) &&
-        foldGEPPhi(GEPI))
+    if (isa<PHINode>(GEPI.getPointerOperand()) && foldGEPPhi(GEPI))
       return true;
 
     enqueueUsers(GEPI);
@@ -3619,6 +3770,68 @@ static Type *stripAggregateTypeWrapping(const DataLayout &DL, Type *Ty) {
   return stripAggregateTypeWrapping(DL, InnerTy);
 }
 
+// Do recursively down through the last element in the sub-struct to find
+// all elements.
+static void getInnerTys(const DataLayout &DL, StructType *STy,
+                        SmallVectorImpl<Type *> &InnerTys, uint64_t Offset,
+                        uint64_t EndOffset) {
+  const StructLayout *SL = DL.getStructLayout(STy);
+  while (Offset < EndOffset) {
+    unsigned Index = SL->getElementContainingOffset(Offset);
+    Type *ElementTy = STy->getElementType(Index);
+    uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedSize();
+    // Insert alignment paddings.
+    if (Offset - SL->getElementOffset(Index) >= ElementSize) {
+      uint64_t NextOffset = (Index + 1 == STy->getNumElements())
+                                ? EndOffset
+                                : SL->getElementOffset(Index + 1);
+      InnerTys.push_back(ArrayType::get(Type::getInt8Ty(STy->getContext()),
+                                        NextOffset - Offset));
+      Offset = NextOffset;
+      continue;
+    }
+    if (isa<StructType>(ElementTy)) {
+      uint64_t ElementBegin = SL->getElementOffset(Index);
+      uint64_t ElementEnd = SL->getElementOffset(Index) + ElementSize;
+      if (ElementEnd > EndOffset) {
+        assert(Offset == ElementBegin);
+        getInnerTys(DL, dyn_cast<StructType>(ElementTy), InnerTys,
+                    Offset - ElementBegin, EndOffset - ElementBegin);
+        Offset = EndOffset;
+      } else if (ElementBegin < Offset) {
+        assert(ElementEnd < EndOffset);
+        getInnerTys(DL, dyn_cast<StructType>(ElementTy), InnerTys,
+                    Offset - ElementBegin, ElementEnd - ElementBegin);
+        Offset = ElementEnd;
+      } else {
+        InnerTys.push_back(ElementTy);
+        Offset = ElementEnd;
+      }
+    } else {
+      InnerTys.push_back(ElementTy);
+      Offset += ElementSize;
+    }
+  }
+}
+
+static Type *constructPackedSubStruct(const DataLayout &DL, StructType *STy,
+                                      uint64_t Offset, uint64_t Size) {
+  if (!CJPipeline) {
+    return nullptr;
+  }
+  uint64_t EndOffset = Offset + Size;
+  if (!containGCPtr(Offset, EndOffset)) {
+    return nullptr;
+  }
+  // 8: default vector size.
+  SmallVector<Type *, 8> InnerTys;
+  getInnerTys(DL, STy, InnerTys, Offset, EndOffset);
+  StructType *SubTy = StructType::get(STy->getContext(), InnerTys, true);
+  assert(Size == DL.getStructLayout(SubTy)->getSizeInBytes() &&
+         "Size must be equal!");
+  return SubTy;
+}
+
 /// Try to find a partition of the aggregate type passed in for a given
 /// offset and size.
 ///
@@ -3641,17 +3854,17 @@ static Type *getTypePartition(const DataLayout &DL, Type *Ty, uint64_t Offset,
     return nullptr;
 
   if (isa<ArrayType>(Ty) || isa<VectorType>(Ty)) {
-     Type *ElementTy;
-     uint64_t TyNumElements;
-     if (auto *AT = dyn_cast<ArrayType>(Ty)) {
-       ElementTy = AT->getElementType();
-       TyNumElements = AT->getNumElements();
-     } else {
-       // FIXME: This isn't right for vectors with non-byte-sized or
-       // non-power-of-two sized elements.
-       auto *VT = cast<FixedVectorType>(Ty);
-       ElementTy = VT->getElementType();
-       TyNumElements = VT->getNumElements();
+    Type *ElementTy;
+    uint64_t TyNumElements;
+    if (auto *AT = dyn_cast<ArrayType>(Ty)) {
+      ElementTy = AT->getElementType();
+      TyNumElements = AT->getNumElements();
+    } else {
+      // FIXME: This isn't right for vectors with non-byte-sized or
+      // non-power-of-two sized elements.
+      auto *VT = cast<FixedVectorType>(Ty);
+      ElementTy = VT->getElementType();
+      TyNumElements = VT->getNumElements();
     }
     uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedSize();
     uint64_t NumSkippedElements = Offset / ElementSize;
@@ -3694,20 +3907,32 @@ static Type *getTypePartition(const DataLayout &DL, Type *Ty, uint64_t Offset,
 
   Type *ElementTy = STy->getElementType(Index);
   uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedSize();
-  if (Offset >= ElementSize)
-    return nullptr; // The offset points into alignment padding.
+
+  // In cangjie, we will process alignment in constructPackedSubStruct()
+  if (!CJPipeline) {
+    if (Offset >= ElementSize) {
+      return nullptr; // The offset points into alignment padding.
+    }
+  }
 
   // See if any partition must be contained by the element.
   if (Offset > 0 || Size < ElementSize) {
+    // 1. Part of element(struct or padding) and extends to next
+    // 2. Part of element(struct or padding)
     if ((Offset + Size) > ElementSize)
-      return nullptr;
+      return constructPackedSubStruct(
+          DL, STy, Offset + SL->getElementOffset(Index), Size);
+    // Part of element(struct)
     return getTypePartition(DL, ElementTy, Offset, Size);
   }
   assert(Offset == 0);
 
+  // Complete element
   if (Size == ElementSize)
     return stripAggregateTypeWrapping(DL, ElementTy);
 
+  // 1. Multi-elements
+  // 2. Complete element and extend(Offset == 0 && Size > ElementSize)
   StructType::element_iterator EI = STy->element_begin() + Index,
                                EE = STy->element_end();
   if (EndOffset < SL->getSizeInBytes()) {
@@ -3717,10 +3942,12 @@ static Type *getTypePartition(const DataLayout &DL, Type *Ty, uint64_t Offset,
 
     // Don't try to form "natural" types if the elements don't line up with the
     // expected size.
-    // FIXME: We could potentially recurse down through the last element in the
-    // sub-struct to find a natural end point.
+    // if EndIndex = SL->getElementContainingOffset(EndOffset) &&
+    // SL->getElementOffset(EndIndex) != EndOffset
+    // It's means that the EndOffset is in the middle of this element
     if (SL->getElementOffset(EndIndex) != EndOffset)
-      return nullptr;
+      return constructPackedSubStruct(
+          DL, STy, Offset + SL->getElementOffset(Index), Size);
 
     assert(Index < EndIndex);
     EE = STy->element_begin() + EndIndex;
@@ -3730,8 +3957,12 @@ static Type *getTypePartition(const DataLayout &DL, Type *Ty, uint64_t Offset,
   StructType *SubTy =
       StructType::get(STy->getContext(), makeArrayRef(EI, EE), STy->isPacked());
   const StructLayout *SubSL = DL.getStructLayout(SubTy);
-  if (Size != SubSL->getSizeInBytes())
-    return nullptr; // The sub-struct doesn't have quite the size needed.
+  if (Size != SubSL->getSizeInBytes()) {
+    // The sub-struct doesn't have quite the size needed. Construct the
+    // sub-struct with padding.
+    return constructPackedSubStruct(DL, STy,
+                                    Offset + SL->getElementOffset(Index), Size);
+  }
 
   return SubTy;
 }
@@ -4395,6 +4626,20 @@ AllocaInst *SROAPass::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
   return NewAI;
 }
 
+static void extractGCPtrOffsets(const DataLayout &DL, StructType *STy,
+                                uint64_t BaseOffset) {
+  uint32_t Idx = 0;
+  for (auto ElementTy : STy->elements()) {
+    uint64_t Offset = DL.getStructLayout(STy)->getElementOffset(Idx);
+    if (isGCPointerType(ElementTy)) {
+      GCPtrOffsets.push_back(BaseOffset + Offset);
+    } else if (isa<StructType>(ElementTy)) {
+      extractGCPtrOffsets(DL, cast<StructType>(ElementTy), BaseOffset + Offset);
+    }
+    Idx++;
+  }
+}
+
 /// Walks the slices of an alloca and form partitions based on them,
 /// rewriting each of their uses.
 bool SROAPass::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
@@ -4404,6 +4649,13 @@ bool SROAPass::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
   unsigned NumPartitions = 0;
   bool Changed = false;
   const DataLayout &DL = AI.getModule()->getDataLayout();
+
+  if (CJPipeline) {
+    GCPtrOffsets.clear();
+    if (auto *STy = dyn_cast<StructType>(AI.getAllocatedType())) {
+      extractGCPtrOffsets(DL, STy, 0);
+    }
+  }
 
   // First try to pre-split loads and stores.
   Changed |= presplitLoadsAndStores(AI, AS);
@@ -4442,8 +4694,7 @@ bool SROAPass::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
         IsSorted = false;
       }
     }
-  }
-  else {
+  } else {
     // We only allow whole-alloca splittable loads and stores
     // for a large alloca to avoid creating too large BitVector.
     for (Slice &S : AS) {
@@ -4471,7 +4722,7 @@ bool SROAPass::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
     uint64_t Offset;
     uint64_t Size;
     Fragment(AllocaInst *AI, uint64_t O, uint64_t S)
-      : Alloca(AI), Offset(O), Size(S) {}
+        : Alloca(AI), Offset(O), Size(S) {}
   };
   SmallVector<Fragment, 4> Fragments;
 
@@ -4485,7 +4736,8 @@ bool SROAPass::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
             DL.getTypeSizeInBits(NewAI->getAllocatedType()).getFixedSize();
         // Don't include any padding.
         uint64_t Size = std::min(AllocaSize, P.size() * SizeOfByte);
-        Fragments.push_back(Fragment(NewAI, P.beginOffset() * SizeOfByte, Size));
+        Fragments.push_back(
+            Fragment(NewAI, P.beginOffset() * SizeOfByte, Size));
       }
     }
     ++NumPartitions;
@@ -4560,8 +4812,8 @@ bool SROAPass::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
           OldDII->eraseFromParent();
       }
 
-      DIB.insertDeclare(Fragment.Alloca, DbgDeclare->getVariable(), FragmentExpr,
-                        DbgDeclare->getDebugLoc(), &AI);
+      DIB.insertDeclare(Fragment.Alloca, DbgDeclare->getVariable(),
+                        FragmentExpr, DbgDeclare->getDebugLoc(), &AI);
     }
   }
   return Changed;
@@ -4582,6 +4834,22 @@ void SROAPass::clobberUse(Use &U) {
     }
 }
 
+static bool isStructContainArray(Type *Ty) {
+  if (auto AT = dyn_cast<ArrayType>(Ty)) {
+    return true;
+  }
+  auto ST = dyn_cast<StructType>(Ty);
+  if (ST == nullptr) {
+    return false;
+  }
+  for (unsigned Index = 0; Index < ST->getNumElements(); Index++) {
+    if (isStructContainArray(ST->getStructElementType(Index))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// Analyze an alloca for SROA.
 ///
 /// This analyzes the alloca to ensure we can reason about it, builds
@@ -4598,11 +4866,17 @@ bool SROAPass::runOnAlloca(AllocaInst &AI) {
   }
   const DataLayout &DL = AI.getModule()->getDataLayout();
 
+  PointerSize = DL.getPointerSize();
+
   // Skip alloca forms that this analysis can't handle.
   auto *AT = AI.getAllocatedType();
   if (AI.isArrayAllocation() || !AT->isSized() || isa<ScalableVectorType>(AT) ||
       DL.getTypeAllocSize(AT).getFixedSize() == 0)
     return false;
+
+  if (CJPipeline && isa<StructType>(AT) && isStructContainArray(AT)) {
+    return false;
+  }
 
   bool Changed = false;
 
@@ -4667,7 +4941,8 @@ bool SROAPass::deleteDeadInstructions(
   bool Changed = false;
   while (!DeadInsts.empty()) {
     Instruction *I = dyn_cast_or_null<Instruction>(DeadInsts.pop_back_val());
-    if (!I) continue; 
+    if (!I)
+      continue;
     LLVM_DEBUG(dbgs() << "Deleting dead instruction: " << *I << "\n");
 
     // If the instruction is an alloca, find the possible dbg.declare connected
@@ -4723,13 +4998,15 @@ PreservedAnalyses SROAPass::runImpl(Function &F, DominatorTree &RunDT,
   BasicBlock &EntryBB = F.getEntryBlock();
   for (BasicBlock::iterator I = EntryBB.begin(), E = std::prev(EntryBB.end());
        I != E; ++I) {
-    if (AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
-      if (isa<ScalableVectorType>(AI->getAllocatedType())) {
-        if (isAllocaPromotable(AI))
-          PromotableAllocas.push_back(AI);
-      } else {
-        Worklist.insert(AI);
-      }
+    AllocaInst *AI = dyn_cast<AllocaInst>(I);
+    if (AI == nullptr) {
+      continue;
+    }
+    if (isa<ScalableVectorType>(AI->getAllocatedType())) {
+      if (isAllocaPromotable(AI))
+        PromotableAllocas.push_back(AI);
+    } else {
+      Worklist.insert(AI);
     }
   }
 

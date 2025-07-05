@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines two classes: AliasSetTracker and AliasSet. These interfaces
@@ -180,6 +182,8 @@ class AliasSet : public ilist_node<AliasSet> {
 
   unsigned SetSize = 0;
 
+  Value *BasePtr = nullptr;
+
   void addRef() { ++RefCount; }
 
   void dropRef(AliasSetTracker &AST) {
@@ -209,6 +213,10 @@ public:
 
   /// Merge the specified alias set into this alias set.
   void mergeSetIn(AliasSet &AS, AliasSetTracker &AST);
+
+  Value *getBasePtr() const { return BasePtr; }
+  void setBasePtr(Value *Ptr) { BasePtr = Ptr; }
+  void clearBasePtr() { BasePtr = nullptr; }
 
   // Alias Set iteration - Allow access to all of the pointers which are part of
   // this alias set.

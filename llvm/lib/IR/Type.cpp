@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Type class for the IR library.
@@ -448,6 +450,19 @@ void StructType::setBody(ArrayRef<Type*> Elements, bool isPacked) {
   setSubclassData(getSubclassData() | SCDB_HasBody);
   if (isPacked)
     setSubclassData(getSubclassData() | SCDB_Packed);
+
+  NumContainedTys = Elements.size();
+
+  if (Elements.empty()) {
+    ContainedTys = nullptr;
+    return;
+  }
+
+  ContainedTys = Elements.copy(getContext().pImpl->Alloc).data();
+}
+
+void StructType::setBodyForCJ(ArrayRef<Type*> Elements) {
+  setSubclassData(getSubclassData() | SCDB_HasBody);
 
   NumContainedTys = Elements.size();
 

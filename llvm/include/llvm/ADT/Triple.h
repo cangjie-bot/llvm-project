@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_ADT_TRIPLE_H
@@ -176,6 +178,7 @@ public:
     Mesa,
     SUSE,
     OpenEmbedded,
+    Harmony,
     LastVendorType = OpenEmbedded
   };
   enum OSType {
@@ -238,6 +241,7 @@ public:
     Musl,
     MuslEABI,
     MuslEABIHF,
+    OpenHOS,
     MuslX32,
 
     MSVC,
@@ -680,6 +684,12 @@ public:
     return getObjectFormat() == Triple::XCOFF;
   }
 
+  /// Tests whether the target is the webm platform.
+  bool isWebm() const {
+    return getArch() == Triple::aarch64 &&
+           getVendor() == Triple::Harmony;
+  }
+
   /// Tests whether the target is the PS4 platform.
   bool isPS4() const {
     return getArch() == Triple::x86_64 &&
@@ -699,6 +709,8 @@ public:
 
   /// Tests whether the target is Android
   bool isAndroid() const { return getEnvironment() == Triple::Android; }
+
+  bool isOpenHOS() const { return getEnvironment() == Triple::OpenHOS; }
 
   bool isAndroidVersionLT(unsigned Major) const {
     assert(isAndroid() && "Not an Android triple!");
@@ -919,7 +931,7 @@ public:
 
   /// Tests whether the target uses emulated TLS as default.
   bool hasDefaultEmulatedTLS() const {
-    return isAndroid() || isOSOpenBSD() || isWindowsCygwinEnvironment();
+    return isOpenHOS() || isAndroid() || isOSOpenBSD() || isWindowsCygwinEnvironment();
   }
 
   /// Tests whether the target uses -data-sections as default.

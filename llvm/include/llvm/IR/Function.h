@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains the declaration of the Function class, which represents a
@@ -74,6 +76,7 @@ private:
   BasicBlockListType BasicBlocks;         ///< The basic blocks
   mutable Argument *Arguments = nullptr;  ///< The formal arguments
   size_t NumArgs;
+  uint64_t EscapedInfo = 0;
   std::unique_ptr<ValueSymbolTable>
       SymTab;                             ///< Symbol table of args/instructions
   AttributeList AttributeSets;            ///< Parameter attributes
@@ -209,6 +212,10 @@ public:
   /// returns Intrinsic::not_intrinsic!
   bool isIntrinsic() const { return HasLLVMReservedName; }
 
+  /// isCangjieIntrinsic - Returns true if IID is an Cangjie intrinsic specific.
+  /// If it is a generic intrinsic or other function, false is returned.
+  bool isCJIntrinsic() const;
+
   /// isTargetIntrinsic - Returns true if IID is an intrinsic specific to a
   /// certain target. If it is a generic intrinsic false is returned.
   static bool isTargetIntrinsic(Intrinsic::ID IID);
@@ -222,6 +229,8 @@ public:
   /// Intrinsics". Returns false if not, and returns false when
   /// getIntrinsicID() returns Intrinsic::not_intrinsic.
   bool isConstrainedFPIntrinsic() const;
+
+  bool hasCangjieGC() const { return hasGC() && getGC() == "cangjie"; }
 
   static Intrinsic::ID lookupIntrinsicID(StringRef Name);
 
@@ -890,6 +899,52 @@ public:
   /// Return value: false => null pointer dereference is undefined.
   /// Return value: true =>  null pointer dereference is not undefined.
   bool nullPointerIsDefined() const;
+
+  bool isCangjieSafePoint() const {
+    return getName().equals("CJ_MCC_HandleSafepoint");
+  }
+
+  bool isGetCJThreadId() const {
+    return getName().equals("GetCJThreadIdForMutexOpt");
+  }
+
+  bool isCangjieNewObject() const {
+    return getName().isCangjieNewObjFunction();
+  }
+
+  bool isCangjieNativeStub(const Function &Caller) const {
+    return hasFnAttribute("cj2c") ||
+           // @C can be called by native and CJ func. only native call need stub
+           (hasFnAttribute("c2cj") && Caller.hasFnAttribute("cjstub"));
+  }
+
+  bool isCangjieStackCheck() const {
+    return getName().equals("CJ_MCC_StackCheck");
+  }
+
+  bool isCangjieThrowException() const {
+    return getName().equals("CJ_MCC_ThrowException");
+  }
+
+  bool isCangjieIntrinsic() const {
+    return isIntrinsic() && getName().startswith("llvm.cj.");
+  }
+
+  void setEscapeAnalysis() {
+    addFnAttr(StringRef("EscapeAnalysis"));
+  }
+
+  bool hasEscapeAnalysis() const {
+    return hasFnAttribute("EscapeAnalysis");
+  }
+
+  void setEscapeInfo(uint64_t EI) {
+    EscapedInfo = EI;
+  }
+
+  uint64_t getEscapeInfo() {
+    return EscapedInfo;
+  }
 
 private:
   void allocHungoffUselist();

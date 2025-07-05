@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This family of functions perform various local transformations to the
@@ -2485,6 +2487,16 @@ void llvm::removeUnwindEdge(BasicBlock *BB, DomTreeUpdater *DTU) {
 /// otherwise.
 bool llvm::removeUnreachableBlocks(Function &F, DomTreeUpdater *DTU,
                                    MemorySSAUpdater *MSSAU) {
+  // WorkAround: For N2CStub functions, the reachable block cannot be
+  // deleted. If the callee function contains the unreachable block of
+  // ThrowException, here, the runtime EH needs to unwind based on the return
+  // instruction.
+  // In the future, if EH does not rely on the epilog to return to unwind,
+  // remove the process.
+  if (F.hasFnAttribute("cjstub")) {
+    return false;
+  }
+
   SmallPtrSet<BasicBlock *, 16> Reachable;
   bool Changed = markAliveBlocks(F, Reachable, DTU);
 
@@ -2588,6 +2600,9 @@ void llvm::combineMetadata(Instruction *K, const Instruction *J,
       case LLVMContext::MD_preserve_access_index:
         // Preserve !preserve.access.index in K.
         break;
+      case LLVMContext::MD_cj_agg:
+        K->setMetadata(Kind, JMD);
+        break;
     }
   }
   // Set !invariant.group from J if J has it. If both instructions have it
@@ -2608,7 +2623,7 @@ void llvm::combineMetadataForCSE(Instruction *K, const Instruction *J,
       LLVMContext::MD_noalias,         LLVMContext::MD_range,
       LLVMContext::MD_invariant_load,  LLVMContext::MD_nonnull,
       LLVMContext::MD_invariant_group, LLVMContext::MD_align,
-      LLVMContext::MD_dereferenceable,
+      LLVMContext::MD_dereferenceable, LLVMContext::MD_cj_agg,
       LLVMContext::MD_dereferenceable_or_null,
       LLVMContext::MD_access_group,    LLVMContext::MD_preserve_access_index};
   combineMetadata(K, J, KnownIDs, KDominatesJ);
@@ -2642,6 +2657,10 @@ void llvm::copyMetadataForLoad(LoadInst &Dest, const LoadInst &Source) {
     case LLVMContext::MD_nontemporal:
     case LLVMContext::MD_mem_parallel_loop_access:
     case LLVMContext::MD_access_group:
+    case LLVMContext::MD_virtual_call:
+    case LLVMContext::MD_intro_type:
+    case LLVMContext::MD_func_table:
+    case LLVMContext::MD_untrusted_ref:
       // All of these directly apply.
       Dest.setMetadata(ID, N);
       break;
@@ -2693,7 +2712,8 @@ void llvm::patchReplacementInstruction(Instruction *I, Value *Repl) {
       LLVMContext::MD_noalias,         LLVMContext::MD_range,
       LLVMContext::MD_fpmath,          LLVMContext::MD_invariant_load,
       LLVMContext::MD_invariant_group, LLVMContext::MD_nonnull,
-      LLVMContext::MD_access_group,    LLVMContext::MD_preserve_access_index};
+      LLVMContext::MD_access_group,    LLVMContext::MD_preserve_access_index,
+      LLVMContext::MD_cj_agg};
   combineMetadata(ReplInst, I, KnownIDs, false);
 }
 
@@ -2762,7 +2782,8 @@ bool llvm::callsGCLeafFunction(const CallBase *Call,
       return IID != Intrinsic::experimental_gc_statepoint &&
              IID != Intrinsic::experimental_deoptimize &&
              IID != Intrinsic::memcpy_element_unordered_atomic &&
-             IID != Intrinsic::memmove_element_unordered_atomic;
+             IID != Intrinsic::memmove_element_unordered_atomic &&
+             IID != Intrinsic::cj_gc_statepoint;
     }
   }
 

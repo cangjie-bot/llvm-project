@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// @file
@@ -369,6 +371,9 @@ public:
                                      AttributeList AttributeList);
 
   FunctionCallee getOrInsertFunction(StringRef Name, FunctionType *T);
+
+  Function *declareCJRuntimeFunc(StringRef Name, FunctionType *T,
+                                 bool GCLeafFunc, bool GCMalloc = false);
 
   /// Look up the specified function in the module symbol table. If it does not
   /// exist, add a prototype for the function and return it. This function

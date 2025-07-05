@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements inline cost analysis.
@@ -34,6 +36,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/GlobalAlias.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Operator.h"
@@ -131,11 +134,11 @@ static cl::opt<size_t>
                        cl::desc("Do not inline functions with a stack size "
                                 "that exceeds the specified limit"));
 
-static cl::opt<size_t>
-    RecurStackSizeThreshold("recursive-inline-max-stacksize", cl::Hidden,
-                       cl::init(InlineConstants::TotalAllocaSizeRecursiveCaller),
-                       cl::desc("Do not inline recursive functions with a stack "
-                                "size that exceeds the specified limit"));
+static cl::opt<size_t> RecurStackSizeThreshold(
+    "recursive-inline-max-stacksize", cl::Hidden,
+    cl::init(InlineConstants::TotalAllocaSizeRecursiveCaller),
+    cl::desc("Do not inline recursive functions with a stack "
+             "size that exceeds the specified limit"));
 
 static cl::opt<bool> OptComputeFullInlineCost(
     "inline-cost-full", cl::Hidden,
@@ -151,7 +154,62 @@ static cl::opt<bool> DisableGEPConstOperand(
     "disable-gep-const-evaluation", cl::Hidden, cl::init(false),
     cl::desc("Disables evaluation of GetElementPtr with constant operands"));
 
+// This flag puts a limit on the maximum amount of recursion inlining.
+// The default is 0, which turns off recursion inlining.
+//
+// For direct recursion (i.e. A->A or "A calls A"), it bounds the times
+// that a function can be inlined into itself. For MaxRecursionInl = 2,
+// two inlining steps are performed at most. Step one yields A1 = A+A,
+// and step 2 yields A2 = A1+A1 = A+A+A+A.
+//
+// For indirect recursion (e.g. A->B->A), the first inline step yields
+// A1 = A+B and the recursion turns into a direct one: A1->A1. The second
+// step yields A2 = A1+A1 = A+B+A+B, with recursion staying as A2->A2.
+// Note that the first step will be performed regardless of MaxRecursionInl,
+// as inlining B into A does not change recursion.
+cl::opt<int> MaxRecursionInl("max-recursion-inline", cl::init(0), cl::Hidden,
+                             cl::ZeroOrMore,
+                             cl::desc("Control the maximum levels of recursion"
+                                      " inlining"));
+
 namespace llvm {
+cl::opt<bool>
+    CJPipeline("cangjie-pipeline", cl::init(false), cl::Hidden,
+               cl::desc("use the customized pass pipeline for cangjie"));
+cl::opt<bool> CangjieJIT("cangjie-JIT", cl::init(false), cl::Hidden,
+                         cl::desc("use the customized JIT for cangjie"));
+cl::opt<bool>
+    EnableStackGrow("cj-stack-grow", cl::Hidden, cl::init(true),
+                    cl::desc("support stack capacity expansion on callsite"));
+cl::opt<int>
+    CJInlinePerStackMapThreshold("cj-inline-per-stackmap-threshold", cl::Hidden,
+                              cl::init(15),
+                              cl::desc("use for inline cost calculate"));
+cl::opt<int>
+    CJInlineStackMapCalleecallnumThreshold("cj-inline-stackmap-Calleecallnum-threshold", cl::Hidden,
+                              cl::init(50),
+                              cl::desc("use for inline cost calculate"));
+cl::opt<unsigned>
+    CangjieStackCheckSize("cangjie-stack-check-size", cl::Hidden,
+                          cl::init(1024),
+                          cl::desc("Set Cangjie stack check threshold."));
+cl::opt<bool> DisableGCSupport("no-gc-support", cl::Hidden, cl::init(false),
+                               cl::desc("Disable barriers and safepoints"));
+cl::opt<bool>
+    EnableSafepointOnly("only-safepoint", cl::Hidden, cl::init(false),
+                        cl::desc("Enable safepoints but disable barriers"));
+cl::opt<bool>
+    EnableBarrierOnly("only-barrier", cl::Hidden, cl::init(false),
+                      cl::desc("Enable barriers but disable safepoints"));
+cl::opt<bool> CJLTOOpt("cj-lto-opt", cl::Hidden, cl::init(false),
+                       cl::desc("This is optimization during cangjie lto!"));
+cl::opt<bool> LICMDisableBarrier("disable-licm-barrier", cl::Hidden,
+                                 cl::init(false));
+cl::opt<bool> GVNDisableBarrier("disable-gvn-barrier", cl::Hidden,
+                                cl::init(false));
+cl::opt<bool> EnableCJIRCEPass("enable-cj-irce-pass", cl::Hidden,
+                               cl::init(true));
+
 Optional<int> getStringFnAttrAsInt(CallBase &CB, StringRef AttrKind) {
   Attribute Attr = CB.getFnAttr(AttrKind);
   int AttrValue;
@@ -629,6 +687,14 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
     // We account for the average 1 instruction per call argument setup here.
     addCost(Call.arg_size() * InlineConstants::InstrCost);
 
+    // Operand(2) of NewArray is poison, and it is fake argument.
+    if (CJPipeline && Call.getCalledFunction() &&
+        Call.getCalledFunction()->getName().startswith("CJ_MCC_NewArray")) {
+      addCost(-Call.arg_size() * InlineConstants::InstrCost);
+      // 2: valid operand num
+      addCost(2 * InlineConstants::InstrCost);
+    }
+
     // If we have a constant that we are calling as a function, we can peer
     // through it and see the function target. This happens not infrequently
     // during devirtualization and so we want to give it a hefty bonus for
@@ -991,6 +1057,9 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
     // Check if we're done. This can happen due to bonuses and penalties.
     if (Cost >= Threshold && !ComputeFullInlineCost)
       return InlineResult::failure("high cost");
+
+    if (CJPipeline && !checkCJStackMapThreshold(CandidateCall, F))
+      return InlineResult::failure("high stackmap cost");
 
     return InlineResult::success();
   }
@@ -2113,6 +2182,8 @@ bool CallAnalyzer::simplifyCallSite(Function *F, CallBase &Call) {
 }
 
 bool CallAnalyzer::visitCallBase(CallBase &Call) {
+  if (CJPipeline && isa<UnreachableInst>(Call.getParent()->getTerminator()))
+    return false;
   if (!onCallBaseVisitStart(Call))
     return true;
 
@@ -2183,7 +2254,7 @@ bool CallAnalyzer::visitCallBase(CallBase &Call) {
     }
   }
 
-  if (F == Call.getFunction()) {
+  if (MaxRecursionInl == 0 && F == Call.getFunction()) {
     // This flag will fully abort the analysis, so don't bother with anything
     // else.
     IsRecursiveCall = true;
@@ -2620,6 +2691,8 @@ InlineResult CallAnalyzer::analyze() {
   BBSetVector BBWorklist;
   BBWorklist.insert(&F.getEntryBlock());
 
+  SmallSetVector<StringRef, 8> ExecptionBB;
+
   // Note that we *must not* cache the size, this loop grows the worklist.
   for (unsigned Idx = 0; Idx != BBWorklist.size(); ++Idx) {
     if (shouldStop())
@@ -2678,11 +2751,40 @@ InlineResult CallAnalyzer::analyze() {
       }
     }
 
-    // If we're unable to select a particular successor, just count all of
-    // them.
-    for (unsigned TIdx = 0, TSize = TI->getNumSuccessors(); TIdx != TSize;
-         ++TIdx)
-      BBWorklist.insert(TI->getSuccessor(TIdx));
+    if (CJPipeline) {
+      for (unsigned TIdx = 0, TSize = TI->getNumSuccessors(); TIdx != TSize;
+           ++TIdx) {
+        BasicBlock *BB = TI->getSuccessor(TIdx);
+        if (!isa<UnreachableInst>(BB->getTerminator())) {
+          BBWorklist.insert(TI->getSuccessor(TIdx));
+          continue;
+        }
+
+        // Each type of unreachable BB is combined into one in the llc phase.
+        // Therefore, InlineCost can calculate only once.
+        for (auto &I : *BB) {
+          if (auto *CI = dyn_cast<CallInst>(&I)) {
+            auto *Func = CI->getCalledFunction();
+            if (!Func)
+              continue;
+            const auto &FuncName = Func->getName();
+            // TODO Currently, only the following implicit exceptions are
+            // considered
+            if ((FuncName.contains("IndexOutOfBoundsException") ||
+                 FuncName.contains("NegativeArraySizeException") ||
+                 FuncName.contains("OverflowException")) &&
+                ExecptionBB.insert(FuncName)) {
+              BBWorklist.insert(TI->getSuccessor(TIdx));
+              break;
+            }
+          }
+        }
+      }
+    } else {
+      for (unsigned TIdx = 0, TSize = TI->getNumSuccessors(); TIdx != TSize;
+           ++TIdx)
+        BBWorklist.insert(TI->getSuccessor(TIdx));
+    }
 
     onBlockAnalyzed(BB);
   }
@@ -2776,6 +2878,47 @@ int llvm::getCallsiteCost(CallBase &Call, const DataLayout &DL) {
   // The call instruction also disappears after inlining.
   Cost += InlineConstants::InstrCost + CallPenalty;
   return Cost;
+}
+
+// Calculate the cost of the stackmap based on the number of callsites. This
+// check is not precises.
+bool llvm::checkCJStackMapThreshold(CallBase &Call, Function &F) {
+  Function *Caller = Call.getCaller();
+  Function *Callee = &F;
+  int CallSiteNum1 = 0;
+  int CallSiteNum2 = 0;
+  for (auto &I : instructions(Caller)) {
+    CallBase *CB = dyn_cast<CallBase>(&I);
+    if (CB && !isa<IntrinsicInst>(&I)) {
+      Function *F = CB->getCalledFunction();
+      // Functions has cj-runtime, gc-leaf-function and gc-safepoint does not
+      // need relocate
+      if (!F || F->hasFnAttribute("cj-runtime") ||
+          F->hasFnAttribute("gc-leaf-function") ||
+          F->hasFnAttribute("gc-safepoint"))
+        continue;
+      ++CallSiteNum1;
+    }
+  }
+
+  for (auto &I : instructions(Callee)) {
+    CallBase *CB = dyn_cast<CallBase>(&I);
+    if (CB && !isa<IntrinsicInst>(&I)) {
+      Function *F = CB->getCalledFunction();
+      // Functions has cj-runtime, gc-leaf-function and gc-safepoint does not
+      // need relocate
+      if (!F || F->hasFnAttribute("cj-runtime") ||
+          F->hasFnAttribute("gc-leaf-function") ||
+          F->hasFnAttribute("gc-safepoint"))
+        continue;
+      ++CallSiteNum2;
+    }
+  }
+  if (CallSiteNum1 == 0 || CallSiteNum2 <= CJInlineStackMapCalleecallnumThreshold)
+    return true;
+  // 100: percentage
+  return CallSiteNum2 * 1.0 / CallSiteNum1 <=
+         CJInlinePerStackMapThreshold * 1.0 / 100;
 }
 
 InlineCost llvm::getInlineCost(

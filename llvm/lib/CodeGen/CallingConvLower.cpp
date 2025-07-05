@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the CCState class, used for lowering and implementing
@@ -74,6 +76,40 @@ bool CCState::IsShadowAllocatedReg(MCRegister Reg) const {
     if (ValAssign.isRegLoc() && TRI.regsOverlap(ValAssign.getLocReg(), Reg))
       return false;
   return true;
+}
+
+void CCState::AddAlignedCallFrameSizeMetaDataForCJFFI(
+    Function *Func, unsigned CallFrameSize) const {
+  if (Func == nullptr) { // FFI call can not use funcPtr.
+    return;
+  }
+  if (!Func->hasFnAttribute("cj2c") && !Func->hasFnAttribute("c2cj")) {
+    return;
+  }
+  StringRef MetaName = "CallFrameSizeForCJFFI";
+  MDNode *Metadata = Func->getMetadata(MetaName);
+  if (!Func->isVarArg() && Metadata != nullptr) {
+    return;
+  }
+  LLVMContext &Ctx = Func->getContext();
+  if (Metadata != nullptr) { // Use max CallFrameSize for VarArg Func
+    unsigned OriValue = dyn_cast<ConstantInt>(dyn_cast<ConstantAsMetadata>(
+                                                  Metadata->getOperand(0).get())
+                                                  ->getValue())
+                            ->getSExtValue();
+    if (OriValue >= CallFrameSize) {
+      return;
+    }
+    Func->eraseMetadata(Ctx.getMDKindID(MetaName));
+  }
+  // MCC_XXXStub require CallFrameSize to be 16 bytes align
+  CallFrameSize = alignTo(CallFrameSize, 16);
+  MDNode *CallFrameSizeMD =
+      MDTuple::get(Ctx, ValueAsMetadata::getConstant(ConstantInt::get(
+                            Type::getInt64Ty(Ctx), CallFrameSize)));
+
+  Func->setMetadata(MetaName, CallFrameSizeMD);
+  return;
 }
 
 /// Analyze an array of argument values,

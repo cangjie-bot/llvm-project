@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the AliasSetTracker and AliasSet classes.
@@ -438,7 +440,15 @@ void AliasSetTracker::add(Instruction *I) {
     return add(MTI);
 
   // Handle all calls with known mod/ref sets genericall
-  if (auto *Call = dyn_cast<CallBase>(I))
+  if (auto *Call = dyn_cast<CallBase>(I)) {
+    if (Call->getIntrinsicID() == Intrinsic::cj_gcwrite_ref) {
+      auto &AS = addPointer(MemoryLocation::get(Call), AliasSet::ModAccess);
+      if (AS.isMustAlias() && !AS.getBasePtr())
+        AS.setBasePtr(Call->getOperand(1));
+      else if (!AS.isMustAlias())
+        AS.clearBasePtr();
+      return;
+    }
     if (Call->onlyAccessesArgMemory()) {
       auto getAccessFromModRef = [](ModRefInfo MRI) {
         if (isRefSet(MRI) && isModSet(MRI))
@@ -475,6 +485,7 @@ void AliasSetTracker::add(Instruction *I) {
       }
       return;
     }
+  }
 
   return addUnknown(I);
 }

@@ -51,7 +51,7 @@ public:
   };
 
   lldb::addr_t Malloc(size_t size, uint8_t alignment, uint32_t permissions,
-                      AllocationPolicy policy, bool zero_memory, Status &error);
+                      AllocationPolicy policy, bool zero_memory, Status &error, bool keep = false);
   void Leak(lldb::addr_t process_address, Status &error);
   void Free(lldb::addr_t process_address, Status &error);
 
@@ -101,11 +101,12 @@ private:
                            /// process. In the host, the memory is always
                            /// read/write.
     uint8_t m_alignment;   ///< The alignment of the requested allocation.
+    bool m_keep;
 
   public:
     Allocation(lldb::addr_t process_alloc, lldb::addr_t process_start,
                size_t size, uint32_t permissions, uint8_t alignment,
-               AllocationPolicy m_policy);
+               AllocationPolicy m_policy, bool keep = false);
 
     Allocation(const Allocation &) = delete;
     const Allocation &operator=(const Allocation &) = delete;

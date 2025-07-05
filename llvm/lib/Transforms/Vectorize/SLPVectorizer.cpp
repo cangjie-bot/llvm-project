@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass implements the Bottom Up SLP vectorizer. It detects consecutive
@@ -176,6 +178,23 @@ static cl::opt<int> RootLookAheadMaxDepth(
 static cl::opt<bool>
     ViewSLPTree("view-slp-tree", cl::Hidden,
                 cl::desc("Display the SLP trees with Graphviz"));
+
+static cl::opt<bool>
+    EnableSLPForBarrier("enable-slp-for-barrier", cl::init(true),
+                        cl::desc("enable cj gc write slp vectorization"));
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+
+bool isEnableSLPForGCWrite(CallInst *CI) {
+  Type *AT = CI->getOperand(0)->getType();
+  return EnableSLPForBarrier && (AT->getTypeID() == Type::HalfTyID ||
+                                 AT->getTypeID() == Type::FloatTyID ||
+                                 AT->getTypeID() == Type::DoubleTyID ||
+                                 (AT->getTypeID() == Type::IntegerTyID &&
+                                  AT->getIntegerBitWidth() != 1));
+}
+} // namespace llvm
 
 // Limit the number of alias checks. The limit is chosen so that
 // it has no negative effect on the llvm benchmarks.
@@ -657,6 +676,10 @@ static MemoryLocation getLocation(Instruction *I) {
     return MemoryLocation::get(SI);
   if (LoadInst *LI = dyn_cast<LoadInst>(I))
     return MemoryLocation::get(LI);
+  if (CallInst *CI = dyn_cast<CallInst>(I)) {
+    if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref)
+      return MemoryLocation::get(CI);
+  }
   return MemoryLocation();
 }
 
@@ -3831,8 +3854,14 @@ void BoUpSLP::reorderTopToBottom() {
           continue;
       }
       // Stores actually store the mask, not the order, need to invert.
-      if (OpTE->State == TreeEntry::Vectorize && !OpTE->isAltShuffle() &&
-          OpTE->getOpcode() == Instruction::Store && !Order.empty()) {
+      auto *CI = dyn_cast_or_null<CallInst>(OpTE->getMainOp());
+      bool Tag1 = OpTE->State == TreeEntry::Vectorize &&
+                  !OpTE->isAltShuffle() &&
+                  OpTE->getOpcode() == Instruction::Store && !Order.empty();
+      bool Tag2 = CI && CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref &&
+                  OpTE->State == TreeEntry::Vectorize &&
+                  !OpTE->isAltShuffle() && !Order.empty();
+      if (Tag1 || Tag2) {
         SmallVector<int> Mask;
         inversePermutation(Order, Mask);
         unsigned E = Order.size();
@@ -3898,6 +3927,11 @@ void BoUpSLP::reorderTopToBottom() {
         reorderOrder(TE->ReorderIndices, Mask);
         if (isa<InsertElementInst, StoreInst>(TE->getMainOp()))
           TE->reorderOperands(Mask);
+      } else if (auto *CI = dyn_cast_or_null<CallInst>(TE->getMainOp());
+                 TE->State == TreeEntry::Vectorize && CI &&
+                 CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref) {
+        reorderOrder(TE->ReorderIndices, Mask);
+        TE->reorderOperands(Mask);
       } else {
         // Reorder the node and its operands.
         TE->reorderOperands(Mask);
@@ -4069,8 +4103,14 @@ void BoUpSLP::reorderBottomToTop(bool IgnoreReorder) {
               return P.second == OpTE;
             });
         // Stores actually store the mask, not the order, need to invert.
-        if (OpTE->State == TreeEntry::Vectorize && !OpTE->isAltShuffle() &&
-            OpTE->getOpcode() == Instruction::Store && !Order.empty()) {
+        auto *CI = dyn_cast_or_null<CallInst>(OpTE->getMainOp());
+        bool Tag1 = OpTE->State == TreeEntry::Vectorize &&
+                    !OpTE->isAltShuffle() &&
+                    OpTE->getOpcode() == Instruction::Store && !Order.empty();
+        bool Tag2 = CI && CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref &&
+                    OpTE->State == TreeEntry::Vectorize &&
+                    !OpTE->isAltShuffle() && !Order.empty();
+        if (Tag1 || Tag2) {
           SmallVector<int> Mask;
           inversePermutation(Order, Mask);
           unsigned E = Order.size();
@@ -4638,6 +4678,24 @@ void BoUpSLP::buildTree_rec(ArrayRef<Value *> VL, unsigned Depth,
       return;
     }
 
+  if (CallInst *CI = dyn_cast<CallInst>(S.OpValue)) {
+    if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref &&
+        CI->getOperand(0)->getType()->isVectorTy()) {
+      LLVM_DEBUG(dbgs() << "SLP: Gathering due to gcwrite vector type.\n");
+      newTreeEntry(VL, None /*not vectorized*/, S, UserTreeIdx);
+      return;
+    }
+    if (F->hasCangjieGC()) {
+      if (CI->getIntrinsicID() == Intrinsic::pow ||
+          CI->getIntrinsicID() == Intrinsic::powi) {
+        LLVM_DEBUG(
+            dbgs() << "SLP: Gathering due to non-support pow in cangjie.\n");
+        newTreeEntry(VL, None /*not vectorized*/, S, UserTreeIdx);
+        return;
+      }
+    }
+  }
+
   // If all of the operands are identical or constant we have a simple solution.
   // If we deal with insert/extract instructions, they all must have constant
   // indices, otherwise we should gather them, not try to vectorize.
@@ -4849,6 +4907,66 @@ void BoUpSLP::buildTree_rec(ArrayRef<Value *> VL, unsigned Depth,
     return;
   }
   LLVM_DEBUG(dbgs() << "SLP: We are able to schedule this bundle.\n");
+
+  auto VectorizeCJGCWrite = [this, &VL0, &VL, &BS, &S, &Bundle, &Depth,
+                             &UserTreeIdx, &ReuseShuffleIndicies] {
+    Type *ScalarTy = cast<CallInst>(VL0)->getOperand(0)->getType();
+    if (DL->getTypeSizeInBits(ScalarTy) !=
+        DL->getTypeAllocSizeInBits(ScalarTy)) {
+      BS.cancelScheduling(VL, VL0);
+      newTreeEntry(VL, None /*not vectorized*/, S, UserTreeIdx,
+                   ReuseShuffleIndicies);
+      LLVM_DEBUG(dbgs() << "SLP: Gathering stores of non-packed type.\n");
+      return;
+    }
+    SmallVector<Value *, 4> PointerOps(VL.size());
+    ValueList Operands(VL.size());
+    auto *POIter = PointerOps.begin();
+    auto *OIter = Operands.begin();
+    for (Value *V : VL) {
+      auto *CI = cast<CallInst>(V);
+      *POIter = CI->getOperand(2);
+      *OIter = CI->getOperand(0);
+      ++POIter, ++OIter;
+    }
+    OrdersType CurrentOrder;
+    if (llvm::sortPtrAccesses(PointerOps, ScalarTy, *DL, *SE, CurrentOrder)) {
+      Value *Ptr0;
+      Value *PtrN;
+      if (CurrentOrder.empty()) {
+        Ptr0 = PointerOps.front();
+        PtrN = PointerOps.back();
+      } else {
+        Ptr0 = PointerOps[CurrentOrder.front()];
+        PtrN = PointerOps[CurrentOrder.back()];
+      }
+      Optional<int> Dist =
+          getPointersDiff(ScalarTy, Ptr0, ScalarTy, PtrN, *DL, *SE);
+      if (static_cast<unsigned>(*Dist) == VL.size() - 1) {
+        if (CurrentOrder.empty()) {
+          // Original stores are consecutive and does not require reordering.
+          TreeEntry *TE = newTreeEntry(VL, Bundle /*vectorized*/, S,
+                                       UserTreeIdx, ReuseShuffleIndicies);
+          TE->setOperandsInOrder();
+          buildTree_rec(Operands, Depth + 1, {TE, 0});
+          LLVM_DEBUG(dbgs() << "SLP: added a vector of gcwrites.\n");
+        } else {
+          fixupOrderingIndices(CurrentOrder);
+          TreeEntry *TE =
+              newTreeEntry(VL, Bundle /*vectorized*/, S, UserTreeIdx,
+                           ReuseShuffleIndicies, CurrentOrder);
+          TE->setOperandsInOrder();
+          buildTree_rec(Operands, Depth + 1, {TE, 0});
+          LLVM_DEBUG(dbgs() << "SLP: added a vector of jumbled gcwrites.\n");
+        }
+        return;
+      }
+      BS.cancelScheduling(VL, VL0);
+      newTreeEntry(VL, None /*not vectorized*/, S, UserTreeIdx,
+                   ReuseShuffleIndicies);
+      LLVM_DEBUG(dbgs() << "SLP: Non-consecutive gcwrite.\n");
+    }
+  };
 
   unsigned ShuffleOrOp = S.isAltShuffle() ?
                 (unsigned) Instruction::ShuffleVector : S.getOpcode();
@@ -5370,8 +5488,12 @@ void BoUpSLP::buildTree_rec(ArrayRef<Value *> VL, unsigned Depth,
       // Check if the calls are all to the same vectorizable intrinsic or
       // library function.
       CallInst *CI = cast<CallInst>(VL0);
-      Intrinsic::ID ID = getVectorIntrinsicIDForCall(CI, TLI);
+      if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref) {
+        VectorizeCJGCWrite();
+        return;
+      }
 
+      Intrinsic::ID ID = getVectorIntrinsicIDForCall(CI, TLI);
       VFShape Shape = VFShape::get(
           *CI, ElementCount::getFixed(static_cast<unsigned int>(VL.size())),
           false /*HasGlobalPred*/);
@@ -5819,6 +5941,10 @@ InstructionCost BoUpSLP::getEntryCost(const TreeEntry *E,
     ScalarTy = CI->getOperand(0)->getType();
   else if (auto *IE = dyn_cast<InsertElementInst>(VL[0]))
     ScalarTy = IE->getOperand(1)->getType();
+  else if (auto *CI = dyn_cast<CallInst>(VL[0])) {
+    if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref)
+      ScalarTy = CI->getOperand(0)->getType();
+  }
   auto *VecTy = FixedVectorType::get(ScalarTy, VL.size());
   TTI::TargetCostKind CostKind = TTI::TCK_RecipThroughput;
 
@@ -6080,6 +6206,12 @@ InstructionCost BoUpSLP::getEntryCost(const TreeEntry *E,
       // For stores the order is actually a mask.
       NewMask.resize(E->ReorderIndices.size());
       copy(E->ReorderIndices, NewMask.begin());
+    } else if (E->getOpcode() == Instruction::Call) {
+      auto *CI = E->getMainOp() ? dyn_cast<CallInst>(E->getMainOp()) : nullptr;
+      if (CI && CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref) {
+        NewMask.resize(E->ReorderIndices.size());
+        copy(E->ReorderIndices, NewMask.begin());
+      }
     } else {
       inversePermutation(E->ReorderIndices, NewMask);
     }
@@ -6488,6 +6620,33 @@ InstructionCost BoUpSLP::getEntryCost(const TreeEntry *E,
     }
     case Instruction::Call: {
       CallInst *CI = cast<CallInst>(VL0);
+      if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref) {
+        // TODO Cost calculation optimization, to considered gcphase
+        unsigned BitWidth = 0;
+        Type *AT = CI->getOperand(0)->getType();
+        switch (AT->getTypeID()) {
+        case Type::IntegerTyID:
+          BitWidth = AT->getIntegerBitWidth();
+          break;
+        case Type::HalfTyID:
+          BitWidth = 16;
+          break;
+        case Type::FloatTyID:
+          BitWidth = 32;
+          break;
+        case Type::DoubleTyID:
+          BitWidth = 64;
+          break;
+        default:
+          report_fatal_error("slp vectorizer pass not support for this type");
+        }
+        unsigned VecSize = VecTy->getNumElements();
+        InstructionCost VecCost =
+            (BitWidth * VecSize == 128 || (BitWidth == 8 && VecSize == 8))
+                ? 1
+                : InstructionCost::getMin();
+        return CommonCost - VecCost;
+      }
       Intrinsic::ID ID = getVectorIntrinsicIDForCall(CI, TLI);
 
       // Calculate the cost of the scalar and vector calls.
@@ -7874,7 +8033,41 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
     ScalarTy = Store->getValueOperand()->getType();
   else if (auto *IE = dyn_cast<InsertElementInst>(VL0))
     ScalarTy = IE->getOperand(1)->getType();
+  else if (auto *CI = dyn_cast<CallInst>(VL0)) {
+    // There may be other CallInst when vectorizeChainsInBlock
+    if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref)
+      ScalarTy = CI->getOperand(0)->getType();
+  }
   auto *VecTy = FixedVectorType::get(ScalarTy, E->Scalars.size());
+  auto VectorizeGCWrite = [this, &VL0, &E, &ShuffleBuilder]() -> Value * {
+    auto *CI = cast<CallInst>(VL0);
+    unsigned AS = CI->getOperand(2)->getType()->getPointerAddressSpace();
+    setInsertPointAfterBundle(E);
+
+    Value *VecValue = vectorizeTree(E->getOperand(0));
+    ShuffleBuilder.addMask(E->ReorderIndices);
+    VecValue = ShuffleBuilder.finalize(VecValue);
+
+    Value *ScalarPtr = CI->getOperand(2);
+    Value *VecPtr =
+        Builder.CreateBitCast(ScalarPtr, VecValue->getType()->getPointerTo(AS));
+    Function *Func =
+        Intrinsic::getDeclaration(CI->getModule(), Intrinsic::cj_gcwrite_ref);
+    CallInst *GCWrite =
+        Builder.CreateCall(Func, {VecValue, CI->getOperand(1), VecPtr});
+
+    if (TreeEntry *Entry = getTreeEntry(ScalarPtr)) {
+      unsigned FoundLane = Entry->findLaneForValue(ScalarPtr);
+      ExternalUses.push_back(ExternalUser(
+          ScalarPtr, ScalarPtr != VecPtr ? cast<User>(VecPtr) : GCWrite,
+          FoundLane));
+    }
+
+    Value *V = propagateMetadata(GCWrite, E->Scalars);
+    E->VectorizedValue = V;
+    ++NumVectorInstructions;
+    return V;
+  };
   switch (ShuffleOrOp) {
     case Instruction::PHI: {
       assert((E->ReorderIndices.empty() ||
@@ -8260,6 +8453,10 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
     }
     case Instruction::Call: {
       CallInst *CI = cast<CallInst>(VL0);
+      if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref) {
+        Value *V = VectorizeGCWrite();
+        return V;
+      }
       setInsertPointAfterBundle(E);
 
       Intrinsic::ID IID  = Intrinsic::not_intrinsic;
@@ -9627,6 +9824,12 @@ unsigned BoUpSLP::getVectorElementSize(Value *V) {
   if (auto *Store = dyn_cast<StoreInst>(V))
     return DL->getTypeSizeInBits(Store->getValueOperand()->getType());
 
+  if (auto *CI = dyn_cast<CallInst>(V)) {
+    if (CI->getIntrinsicID() == Intrinsic::cj_gcwrite_ref &&
+        isEnableSLPForGCWrite(CI))
+      return DL->getTypeSizeInBits(CI->getOperand(0)->getType());
+  }
+
   if (auto *IEI = dyn_cast<InsertElementInst>(V))
     return getVectorElementSize(IEI->getOperand(1));
 
@@ -9999,6 +10202,7 @@ bool SLPVectorizerPass::runImpl(Function &F, ScalarEvolution *SE_,
 
   Stores.clear();
   GEPs.clear();
+  CJGCWrites.clear();
   bool Changed = false;
 
   // If the target claims to have no vector registers don't attempt
@@ -10032,7 +10236,7 @@ bool SLPVectorizerPass::runImpl(Function &F, ScalarEvolution *SE_,
     collectSeedInstructions(BB);
 
     // Vectorize trees that end at stores.
-    if (!Stores.empty()) {
+    if (!Stores.empty() || !CJGCWrites.empty()) {
       LLVM_DEBUG(dbgs() << "SLP: Found stores for " << Stores.size()
                         << " underlying objects.\n");
       Changed |= vectorizeStoreChains(R);
@@ -10089,12 +10293,21 @@ bool SLPVectorizerPass::vectorizeStoreChain(ArrayRef<Value *> Chain, BoUpSLP &R,
     LLVM_DEBUG(dbgs() << "SLP: Decided to vectorize cost = " << Cost << "\n");
 
     using namespace ore;
-
-    R.getORE()->emit(OptimizationRemark(SV_NAME, "StoresVectorized",
-                                        cast<StoreInst>(Chain[0]))
-                     << "Stores SLP vectorized with cost " << NV("Cost", Cost)
-                     << " and with tree size "
-                     << NV("TreeSize", R.getTreeSize()));
+    if (isa<StoreInst>(Chain[0])) {
+      R.getORE()->emit(OptimizationRemark(SV_NAME, "StoresVectorized",
+                                          cast<StoreInst>(Chain[0]))
+                       << "Stores SLP vectorized with cost " << NV("Cost", Cost)
+                       << " and with tree size "
+                       << NV("TreeSize", R.getTreeSize()));
+    } else if (isa<CallInst>(Chain[0]) &&
+               dyn_cast<CallInst>(Chain[0])->getIntrinsicID() ==
+                   Intrinsic::cj_gcwrite_ref) {
+      R.getORE()->emit(OptimizationRemark(SV_NAME, "GCWriteVectorized",
+                                          cast<CallInst>(Chain[0]))
+                       << "GCWrite SLP vectorized with cost "
+                       << NV("Cost", Cost) << " and with tree size "
+                       << NV("TreeSize", R.getTreeSize()));
+    }
 
     R.vectorizeTree();
     return true;
@@ -10103,8 +10316,25 @@ bool SLPVectorizerPass::vectorizeStoreChain(ArrayRef<Value *> Chain, BoUpSLP &R,
   return false;
 }
 
-bool SLPVectorizerPass::vectorizeStores(ArrayRef<StoreInst *> Stores,
-                                        BoUpSLP &R) {
+Value *getStorePointerOperand(Instruction *I) {
+  if (isa<StoreInst>(I) || isa<CallInst>(I))
+    return getLoadStorePointerOperand(I);
+  return nullptr;
+}
+
+Type *getStorePointerType(Instruction *I) {
+  Value *V = getStorePointerOperand(I);
+  return V ? V->getType() : nullptr;
+}
+
+Type *getStoreValueType(Instruction *I) {
+  if (isa<StoreInst>(I) || isa<CallInst>(I))
+    return getLoadStoreType(I);
+  return nullptr;
+}
+
+template <typename T>
+bool SLPVectorizerPass::vectorizeStoresOrGCWrites(ArrayRef<T *> Stores, BoUpSLP &R) {
   // We may run into multiple chains that merge into a single chain. We mark the
   // stores that we vectorized so that we don't visit the same store twice.
   BoUpSLP::ValueSet VectorizedStores;
@@ -10128,10 +10358,12 @@ bool SLPVectorizerPass::vectorizeStores(ArrayRef<StoreInst *> Stores,
     ++IterCnt;
     CheckedPairs[Idx].set(K);
     CheckedPairs[K].set(Idx);
-    Optional<int> Diff = getPointersDiff(
-        Stores[K]->getValueOperand()->getType(), Stores[K]->getPointerOperand(),
-        Stores[Idx]->getValueOperand()->getType(),
-        Stores[Idx]->getPointerOperand(), *DL, *SE, /*StrictCheck=*/true);
+    Optional<int> Diff =
+        getPointersDiff(getStoreValueType(Stores[K]),
+                        getStorePointerOperand(Stores[K]),
+                        getStoreValueType(Stores[Idx]),
+                        getStorePointerOperand(Stores[Idx]), *DL, *SE,
+                        /*StrictCheck=*/true);
     if (!Diff || *Diff == 0)
       return false;
     int Val = *Diff;
@@ -10203,10 +10435,10 @@ bool SLPVectorizerPass::vectorizeStores(ArrayRef<StoreInst *> Stores,
 
     unsigned MaxVF = std::min(R.getMaximumVF(EltSize, Instruction::Store),
                               MaxElts);
-    auto *Store = cast<StoreInst>(Operands[0]);
-    Type *StoreTy = Store->getValueOperand()->getType();
+    T *Store = cast<T>(Operands[0]);
+    Type *StoreTy = getStoreValueType(Store);
     Type *ValueTy = StoreTy;
-    if (auto *Trunc = dyn_cast<TruncInst>(Store->getValueOperand()))
+    if (auto *Trunc = dyn_cast<TruncInst>(getStoreValueOperand(Store)))
       ValueTy = Trunc->getSrcTy();
     unsigned MinVF = TTI->getStoreMinimumVF(
         R.getMinVF(DL->getTypeSizeInBits(ValueTy)), StoreTy, ValueTy);
@@ -10245,17 +10477,20 @@ void SLPVectorizerPass::collectSeedInstructions(BasicBlock *BB) {
   // Initialize the collections. We will make a single pass over the block.
   Stores.clear();
   GEPs.clear();
+  CJGCWrites.clear();
 
   // Visit the store and getelementptr instructions in BB and organize them in
   // Stores and GEPs according to the underlying objects of their pointer
   // operands.
+  // dbgs() << BB->getName() << "\n";
   for (Instruction &I : *BB) {
     // Ignore store instructions that are volatile or have a pointer operand
     // that doesn't point to a scalar type.
     if (auto *SI = dyn_cast<StoreInst>(&I)) {
       if (!SI->isSimple())
         continue;
-      if (!isValidElementType(SI->getValueOperand()->getType()))
+      if (!isValidElementType(SI->getValueOperand()->getType()) ||
+          (CJPipeline && SI->getValueOperand()->getType()->isPointerTy()))
         continue;
       Stores[getUnderlyingObject(SI->getPointerOperand())].push_back(SI);
     }
@@ -10267,11 +10502,17 @@ void SLPVectorizerPass::collectSeedInstructions(BasicBlock *BB) {
       auto Idx = GEP->idx_begin()->get();
       if (GEP->getNumIndices() > 1 || isa<Constant>(Idx))
         continue;
-      if (!isValidElementType(Idx->getType()))
+      if (!isValidElementType(Idx->getType()) ||
+          (CJPipeline && Idx->getType()->isPointerTy()))
         continue;
       if (GEP->getType()->isVectorTy())
         continue;
       GEPs[GEP->getPointerOperand()].push_back(GEP);
+    } else if (auto *CI = dyn_cast<CallInst>(&I)) {
+      if (CI->getIntrinsicID() != Intrinsic::cj_gcwrite_ref)
+        continue;
+      if (isEnableSLPForGCWrite(CI))
+        CJGCWrites[getUnderlyingObject(CI->getOperand(2))].push_back(CI);
     }
   }
 }
@@ -12371,19 +12612,24 @@ bool SLPVectorizerPass::vectorizeStoreChains(BoUpSLP &R) {
   // Sort by type, base pointers and values operand. Value operands must be
   // compatible (have the same opcode, same parent), otherwise it is
   // definitely not profitable to try to vectorize them.
-  auto &&StoreSorter = [this](StoreInst *V, StoreInst *V2) {
-    if (V->getPointerOperandType()->getTypeID() <
-        V2->getPointerOperandType()->getTypeID())
+  auto &&StoreOrCallSorter = [this](Instruction *V, Instruction *V2) {
+    auto *VT = getStorePointerType(V),
+         *V2T = getStorePointerType(V2);
+    assert((VT != nullptr && V2T != nullptr) && "Pointer type should not be nullptr");
+
+    if (VT->getTypeID() < V2T->getTypeID())
       return true;
-    if (V->getPointerOperandType()->getTypeID() >
-        V2->getPointerOperandType()->getTypeID())
+    if (VT->getTypeID() > V2T->getTypeID())
       return false;
+
+    auto *VV = getStoreValueOperand(V),
+         *V2V = getStoreValueOperand(V2);
+    assert((VV != nullptr && V2V != nullptr) && "Value should not be nullptr");
     // UndefValues are compatible with all other values.
-    if (isa<UndefValue>(V->getValueOperand()) ||
-        isa<UndefValue>(V2->getValueOperand()))
+    if (isa<UndefValue>(VV) || isa<UndefValue>(V2V))
       return false;
-    if (auto *I1 = dyn_cast<Instruction>(V->getValueOperand()))
-      if (auto *I2 = dyn_cast<Instruction>(V2->getValueOperand())) {
+    if (auto *I1 = dyn_cast<Instruction>(VV))
+      if (auto *I2 = dyn_cast<Instruction>(V2V)) {
         DomTreeNodeBase<llvm::BasicBlock> *NodeI1 =
             DT->getNode(I1->getParent());
         DomTreeNodeBase<llvm::BasicBlock> *NodeI2 =
@@ -12400,37 +12646,41 @@ bool SLPVectorizerPass::vectorizeStoreChains(BoUpSLP &R) {
           return false;
         return I1->getOpcode() < I2->getOpcode();
       }
-    if (isa<Constant>(V->getValueOperand()) &&
-        isa<Constant>(V2->getValueOperand()))
+    if (isa<Constant>(VV) && isa<Constant>(V2V))
       return false;
-    return V->getValueOperand()->getValueID() <
-           V2->getValueOperand()->getValueID();
+    return VV->getValueID() < V2V->getValueID();
   };
 
-  auto &&AreCompatibleStores = [](StoreInst *V1, StoreInst *V2) {
+  auto &&AreCompatibleStores = [](Instruction *V1, Instruction *V2) {
     if (V1 == V2)
       return true;
-    if (V1->getPointerOperandType() != V2->getPointerOperandType())
+    auto *V1T = getStorePointerType(V1),
+         *V2T = getStorePointerType(V2);
+    assert((V1T != nullptr && V2T != nullptr) &&
+           "Pointer type should not be nullptr");
+    if (V1T != V2T)
       return false;
     // Undefs are compatible with any other value.
-    if (isa<UndefValue>(V1->getValueOperand()) ||
-        isa<UndefValue>(V2->getValueOperand()))
+    auto *V1V = getStoreValueOperand(V1),
+         *V2V = getStoreValueOperand(V2);
+    assert((V1V != nullptr && V2V != nullptr) && "Value should not be nullptr");
+    if (isa<UndefValue>(V1V) || isa<UndefValue>(V2V))
       return true;
-    if (auto *I1 = dyn_cast<Instruction>(V1->getValueOperand()))
-      if (auto *I2 = dyn_cast<Instruction>(V2->getValueOperand())) {
+    if (auto *I1 = dyn_cast<Instruction>(V1V))
+      if (auto *I2 = dyn_cast<Instruction>(V2V)) {
         if (I1->getParent() != I2->getParent())
           return false;
         InstructionsState S = getSameOpcode({I1, I2});
         return S.getOpcode() > 0;
       }
-    if (isa<Constant>(V1->getValueOperand()) &&
-        isa<Constant>(V2->getValueOperand()))
+    if (isa<Constant>(V1V) && isa<Constant>(V2V))
       return true;
-    return V1->getValueOperand()->getValueID() ==
-           V2->getValueOperand()->getValueID();
+    return V1V->getValueID() == V2V->getValueID();
   };
-  auto Limit = [&R, this](StoreInst *SI) {
-    unsigned EltSize = DL->getTypeSizeInBits(SI->getValueOperand()->getType());
+  auto Limit = [&R, this](Instruction *I) {
+    auto *V = getStoreValueOperand(I);
+    assert(V != nullptr && "Value should not be nullptr");
+    unsigned EltSize = DL->getTypeSizeInBits(V->getType());
     return R.getMinVF(EltSize);
   };
 
@@ -12446,9 +12696,21 @@ bool SLPVectorizerPass::vectorizeStoreChains(BoUpSLP &R) {
       continue;
 
     Changed |= tryToVectorizeSequence<StoreInst>(
-        Pair.second, Limit, StoreSorter, AreCompatibleStores,
+        Pair.second, Limit, StoreOrCallSorter, AreCompatibleStores,
         [this, &R](ArrayRef<StoreInst *> Candidates, bool) {
-          return vectorizeStores(Candidates, R);
+          return vectorizeStoresOrGCWrites<StoreInst>(Candidates, R);
+        },
+        /*LimitForRegisterSize=*/false);
+  }
+  for (auto &Pair : CJGCWrites) {
+    if (Pair.second.size() < 2)
+      continue;
+    if (!isValidElementType(Pair.second.front()->getOperand(0)->getType()))
+      continue;
+    Changed |= tryToVectorizeSequence<CallInst>(
+        Pair.second, Limit, StoreOrCallSorter, AreCompatibleStores,
+        [this, &R](ArrayRef<CallInst *> Candidates, bool) {
+          return vectorizeStoresOrGCWrites<CallInst>(Candidates, R);
         },
         /*LimitForRegisterSize=*/false);
   }

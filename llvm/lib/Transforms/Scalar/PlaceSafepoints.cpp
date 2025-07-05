@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Place garbage collection safepoints at appropriate locations in the IR. This
@@ -47,16 +49,20 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Transforms/Scalar/PlaceSafepoints.h"
+
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Statepoint.h"
@@ -84,10 +90,13 @@ using namespace llvm;
 static cl::opt<bool> AllBackedges("spp-all-backedges", cl::Hidden,
                                   cl::init(false));
 
+static cl::opt<bool> CJAggressiveSafepoint("cj-agg-safepoint", cl::Hidden,
+                                           cl::init(false));
+
 /// How narrow does the trip count of a loop have to be to have to be considered
 /// "counted"?  Counted loops do not get safepoints at backedges.
-static cl::opt<int> CountedLoopTripWidth("spp-counted-loop-trip-width",
-                                         cl::Hidden, cl::init(32));
+cl::opt<int> CountedLoopTripWidth("spp-counted-loop-trip-width", cl::Hidden,
+                                  cl::init(32));
 
 // If true, split the backedge of a loop when placing the safepoint, otherwise
 // split the latch block itself.  Both are useful to support for
@@ -96,6 +105,16 @@ static cl::opt<int> CountedLoopTripWidth("spp-counted-loop-trip-width",
 static cl::opt<bool> SplitBackedge("spp-split-backedge", cl::Hidden,
                                    cl::init(false));
 
+static cl::opt<bool> InvokeGC(
+    "insert-invokegc-before-safepoint",
+    llvm::cl::desc("Insert InvokeGC before safepoint to execute CJ GC"),
+    cl::Hidden, cl::init(false));
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> DisableGCSupport;
+extern cl::opt<bool> EnableBarrierOnly;
+}
 namespace {
 
 /// An analysis pass whose purpose is to identify each of the backedges in
@@ -150,20 +169,85 @@ struct PlaceBackedgeSafepointsImpl : public FunctionPass {
     AU.setPreservesAll();
   }
 };
-}
+} // namespace
 
 static cl::opt<bool> NoEntry("spp-no-entry", cl::Hidden, cl::init(false));
 static cl::opt<bool> NoCall("spp-no-call", cl::Hidden, cl::init(false));
 static cl::opt<bool> NoBackedge("spp-no-backedge", cl::Hidden, cl::init(false));
 
 namespace {
-struct PlaceSafepoints : public FunctionPass {
+const char *MCCYieldStr = "CJ_MCC_HandleSafepoint";
+const char *GCSafeStr = "gc.safepoint_poll";
+const char *InvokeGCStr = "CJ_MCC_InvokeGC";
+} // namespace
+
+static bool createGCSafepointPoll(Module &M) {
+  Function *GCSafePointFunc = M.getFunction(GCSafeStr);
+  if (GCSafePointFunc != nullptr) { // have gc.safepoint_poll in module
+    return false;
+  }
+  FunctionType *FuncType =
+      FunctionType::get(Type::getVoidTy(M.getContext()), false);
+  Function *MCCYieldFun = cast<Function>(
+      M.getOrInsertFunction(MCCYieldStr, FuncType).getCallee());
+  MCCYieldFun->setUnnamedAddr(GlobalVariable::UnnamedAddr::Local);
+  MCCYieldFun->setCallingConv(CallingConv::CangjieGC);
+  MCCYieldFun->addFnAttr("gc-safepoint");
+  Function *DoSafepointFun =
+      cast<Function>(M.getOrInsertFunction(GCSafeStr, FuncType).getCallee());
+  BasicBlock *BB = BasicBlock::Create(M.getContext(), "entry", DoSafepointFun);
+  IRBuilder<> builder(BB);
+  builder.CreateCall(MCCYieldFun)->setCallingConv(CallingConv::CangjieGC);
+  builder.CreateRetVoid();
+
+  GlobalVariable *CJFuncGV = cast<GlobalVariable>(M.getOrInsertGlobal(
+      "CJ_MCC_HandleSafepoint.CJStubGV", MCCYieldFun->getType()));
+  CJFuncGV->setInitializer(MCCYieldFun);
+  CJFuncGV->setLinkage(GlobalVariable::InternalLinkage);
+  CJFuncGV->addAttribute("cj-native");
+  return true;
+}
+
+static void removeGCSafepointPoll(Module &M) {
+  auto *F = M.getFunction("gc.safepoint_poll");
+  assert(F && "gc.safepoint_poll function is missing");
+  // The PlaceSafepoints pass is complete, "gc.safepoint_poll" function
+  // is discarded now.
+  F->eraseFromParent();
+}
+
+bool placeSafepoint(Function &F, const TargetLibraryInfo &TLI);
+
+namespace {
+class PlaceSafepointsLegacyPass : public ModulePass {
+public:
   static char ID; // Pass identification, replacement for typeid
 
-  PlaceSafepoints() : FunctionPass(ID) {
-    initializePlaceSafepointsPass(*PassRegistry::getPassRegistry());
+  PlaceSafepointsLegacyPass() : ModulePass(ID) {
+    initializePlaceSafepointsLegacyPassPass(*PassRegistry::getPassRegistry());
   }
-  bool runOnFunction(Function &F) override;
+  ~PlaceSafepointsLegacyPass() = default;
+
+  bool runOnModule(Module &M) override {
+    bool Changed = false;
+
+    if (DisableGCSupport || EnableBarrierOnly) {
+      return Changed;
+    }
+
+    // create gc.safepoint_poll for PlaceSafepoints pass.
+    bool IsCreated = createGCSafepointPoll(M);
+    for (auto &F : M) {
+      const TargetLibraryInfo &TLI =
+          getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
+      Changed |= placeSafepoint(F, TLI);
+    }
+    if (IsCreated) {
+      removeGCSafepointPoll(M);
+      Changed = true;
+    }
+    return Changed;
+  }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     // We modify the graph wholesale (inlining, block insertion, etc).  We
@@ -172,7 +256,7 @@ struct PlaceSafepoints : public FunctionPass {
     AU.addRequired<TargetLibraryInfoWrapperPass>();
   }
 };
-}
+} // namespace
 
 // Insert a safepoint poll immediately before the given instruction.  Does
 // not handle the parsability of state at the runtime call, that's the
@@ -182,6 +266,14 @@ InsertSafepointPoll(Instruction *InsertBefore,
                     std::vector<CallBase *> &ParsePointsNeeded /*rval*/,
                     const TargetLibraryInfo &TLI);
 
+static bool isCangjieFunc(const Function *F) {
+  if (F != nullptr) {
+    return F->hasCangjieGC();
+  } else {
+    return false;
+  }
+}
+
 static bool needsStatepoint(CallBase *Call, const TargetLibraryInfo &TLI) {
   if (callsGCLeafFunction(Call, TLI))
     return false;
@@ -189,7 +281,12 @@ static bool needsStatepoint(CallBase *Call, const TargetLibraryInfo &TLI) {
     if (CI->isInlineAsm())
       return false;
   }
-
+  if (CJPipeline && !isCangjieFunc(Call->getCalledFunction())) {
+    // Return false, which means that the safepoint will not be inserted.
+    // We assume that the safepoint is inserted only in the Cangjie function,
+    // and other functions(e.g: std and runtime functions) do not.
+    return false;
+  }
   return !(isa<GCStatepointInst>(Call) || isa<GCRelocateInst>(Call) ||
            isa<GCResultInst>(Call));
 }
@@ -224,7 +321,9 @@ static bool containsUnconditionalCallSafepoint(Loop *L, BasicBlock *Header,
         // unconditional poll. In practice, this is only a theoretical concern
         // since we don't have any methods with conditional-only safepoint
         // polls.
-        if (needsStatepoint(Call, TLI))
+        if (needsStatepoint(Call, TLI) &&
+            !Call->getCalledFunction()->isDeclaration() &&
+            !Call->getCalledFunction()->hasFnAttribute("cj_fast_call"))
           return true;
     }
 
@@ -234,6 +333,71 @@ static bool containsUnconditionalCallSafepoint(Loop *L, BasicBlock *Header,
   }
 
   return false;
+}
+
+static bool mustBeCJFiniteCountedLoop(Loop *L, ScalarEvolution *SE,
+                                      BasicBlock *Pred, APInt &LoopCount) {
+  APInt MaxSubLoopCount(64, 1);
+  for (const auto &SubL : L->getSubLoops()) {
+    SmallVector<BasicBlock*, 16> LoopLatches;
+    SubL->getLoopLatches(LoopLatches);
+    for (BasicBlock *SubPred : LoopLatches) {
+      assert(SubL->contains(SubPred));
+      APInt SubLoopCount(64, 1);
+      if (!mustBeCJFiniteCountedLoop(SubL, SE, SubPred, SubLoopCount)) {
+        return false;
+      }
+      if (SubLoopCount.getZExtValue() > MaxSubLoopCount.getZExtValue()) {
+        MaxSubLoopCount = SubLoopCount;
+      }
+    }
+  }
+
+  const SCEV *MaxTrips = SE->getConstantMaxBackedgeTakenCount(L);
+  if (!isa<SCEVCouldNotCompute>(MaxTrips)) {
+    APInt LCount = SE->getUnsignedRange(MaxTrips).getUnsignedMax();
+    APInt SumCount(64, LCount.getZExtValue() * MaxSubLoopCount.getZExtValue());
+    if (SumCount.isIntN(CountedLoopTripWidth)) {
+      LoopCount = SumCount;
+      return true;
+    }
+  }
+
+  if (L->isLoopExiting(Pred)) {
+    const SCEV *MaxExec = SE->getExitCount(L, Pred);
+    if (!isa<SCEVCouldNotCompute>(MaxExec)) {
+      APInt LCount = SE->getUnsignedRange(MaxExec).getUnsignedMax();
+      APInt SumCount(64, LCount.getZExtValue() * MaxSubLoopCount.getZExtValue());
+      if (SumCount.isIntN(CountedLoopTripWidth)) {
+        LoopCount = SumCount;
+        return true;
+      }
+    }
+    if (!CJAggressiveSafepoint)
+      return false;
+    BranchInst *BI = dyn_cast<BranchInst>(Pred->getTerminator());
+    if (!BI) {
+      return false;
+    }
+    MDNode *MD = BI->getMetadata(LLVMContext::MD_prof);
+    if (MD) {
+      BasicBlock *TrueBB = BI->getSuccessor(0);
+      uint32_t TrueInt =
+          mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
+      uint32_t FalseInt =
+          mdconst::extract<ConstantInt>(MD->getOperand(2))->getZExtValue();
+      // 1000: When average of loop times don't reach 1000, we will reduce
+      // safepoint on backedges.
+      if (L->contains(TrueBB)) {
+        if ((TrueInt / FalseInt) < 1000)
+            return true;
+      } else if ((FalseInt / TrueInt) < 1000) {
+        return true;
+      }
+    }
+  }
+
+  return /* not finite */ false;
 }
 
 /// Returns true if this loop is known to terminate in a finite number of
@@ -322,10 +486,19 @@ bool PlaceBackedgeSafepointsImpl::runOnLoop(Loop *L) {
     // not.  Note that this is about unburdening the optimizer in loops, not
     // avoiding the runtime cost of the actual safepoint.
     if (!AllBackedges) {
-      if (mustBeFiniteCountedLoop(L, SE, Pred)) {
-        LLVM_DEBUG(dbgs() << "skipping safepoint placement in finite loop\n");
-        FiniteExecution++;
-        continue;
+      APInt LoopCount(64, 1);
+      if (CJPipeline) {
+        if (mustBeCJFiniteCountedLoop(L, SE, Pred, LoopCount)) {
+          LLVM_DEBUG(dbgs() << "skipping safepoint placement in finite loop\n");
+          FiniteExecution++;
+          continue;
+        }
+      } else {
+        if (mustBeFiniteCountedLoop(L, SE, Pred)) {
+          LLVM_DEBUG(dbgs() << "skipping safepoint placement in finite loop\n");
+          FiniteExecution++;
+          continue;
+        }
       }
       if (CallSafepointsEnabled &&
           containsUnconditionalCallSafepoint(L, Header, Pred, *DT, *TLI)) {
@@ -363,9 +536,14 @@ bool PlaceBackedgeSafepointsImpl::runOnLoop(Loop *L) {
 static bool doesNotRequireEntrySafepointBefore(CallBase *Call) {
   if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(Call)) {
     switch (II->getIntrinsicID()) {
+    case Intrinsic::cj_gc_statepoint:
     case Intrinsic::experimental_gc_statepoint:
     case Intrinsic::experimental_patchpoint_void:
     case Intrinsic::experimental_patchpoint_i64:
+    case Intrinsic::dbg_declare:
+    case Intrinsic::dbg_value:
+    case Intrinsic::dbg_addr:
+    case Intrinsic::dbg_label:
       // The can wrap an actual call which may grow the stack by an unbounded
       // amount or run forever.
       return false;
@@ -380,6 +558,11 @@ static bool doesNotRequireEntrySafepointBefore(CallBase *Call) {
       return true;
     }
   }
+
+  Function *Callee = Call->getCalledFunction();
+  if (Callee && Callee->isCangjieStackCheck())
+    return true;
+
   return false;
 }
 
@@ -451,6 +634,11 @@ static bool shouldRewriteFunction(Function &F) {
     const auto &FunctionGCName = F.getGC();
     const StringRef StatepointExampleName("statepoint-example");
     const StringRef CoreCLRName("coreclr");
+    const StringRef CangjieName("cangjie");
+    if (CangjieName == FunctionGCName) {
+      return !F.hasFnAttribute("gc-leaf-function") &&
+             !F.hasFnAttribute("cj_fast_call");
+    }
     return (StatepointExampleName == FunctionGCName) ||
            (CoreCLRName == FunctionGCName);
   } else
@@ -463,7 +651,24 @@ static bool enableEntrySafepoints(Function &F) { return !NoEntry; }
 static bool enableBackedgeSafepoints(Function &F) { return !NoBackedge; }
 static bool enableCallSafepoints(Function &F) { return !NoCall; }
 
-bool PlaceSafepoints::runOnFunction(Function &F) {
+static void InsertFunctionCheck(Instruction *InsertBefore,
+                                const char *FunctionStr) {
+  Module *M = InsertBefore->getModule();
+  assert(M && "must be part of a module");
+
+  Function *Func = M->getFunction(FunctionStr);
+  if (Func == nullptr) {
+    FunctionType *FuncType =
+        FunctionType::get(Type::getVoidTy(M->getContext()), false);
+    Func = cast<Function>(
+        M->getOrInsertFunction(FunctionStr, FuncType).getCallee());
+  }
+
+  assert(Func && FunctionStr && "function is missing");
+  CallInst::Create(Func->getFunctionType(), Func, "", InsertBefore);
+}
+
+bool placeSafepoint(Function &F, const TargetLibraryInfo &TLI) {
   if (F.isDeclaration() || F.empty()) {
     // This is a declaration, nothing to do.  Must exit early to avoid crash in
     // dom tree calculation
@@ -479,9 +684,6 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
 
   if (!shouldRewriteFunction(F))
     return false;
-
-  const TargetLibraryInfo &TLI =
-      getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
 
   bool Modified = false;
 
@@ -588,6 +790,9 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
   // Now that we've identified all the needed safepoint poll locations, insert
   // safepoint polls themselves.
   for (Instruction *PollLocation : PollsNeeded) {
+    if (InvokeGC) {
+      InsertFunctionCheck(PollLocation, InvokeGCStr);
+    }
     std::vector<CallBase *> RuntimeCalls;
     InsertSafepointPoll(PollLocation, RuntimeCalls, TLI);
     llvm::append_range(ParsePointNeeded, RuntimeCalls);
@@ -596,11 +801,38 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
   return Modified;
 }
 
-char PlaceBackedgeSafepointsImpl::ID = 0;
-char PlaceSafepoints::ID = 0;
+PreservedAnalyses PlaceSafepoints::run(Module &M,
+                                       ModuleAnalysisManager &AM) const {
+  if (DisableGCSupport || EnableBarrierOnly)
+    return PreservedAnalyses::all();
 
-FunctionPass *llvm::createPlaceSafepointsPass() {
-  return new PlaceSafepoints();
+  bool Changed = false;
+
+  // create gc.safepoint_poll for PlaceSafepoints pass.
+  bool IsCreated = createGCSafepointPoll(M);
+  for (auto &F : M) {
+    auto &FAM =
+        AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+    auto &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
+    Changed |= placeSafepoint(F, TLI);
+  }
+  if (IsCreated) {
+    removeGCSafepointPoll(M);
+    Changed = true;
+  }
+
+  if (Changed) {
+    return PreservedAnalyses::none();
+  }
+
+  return PreservedAnalyses::all();
+}
+
+char PlaceBackedgeSafepointsImpl::ID = 0;
+char PlaceSafepointsLegacyPass::ID = 0;
+
+ModulePass *llvm::createPlaceSafepointsLegacyPass() {
+  return new PlaceSafepointsLegacyPass();
 }
 
 INITIALIZE_PASS_BEGIN(PlaceBackedgeSafepointsImpl,
@@ -613,10 +845,11 @@ INITIALIZE_PASS_END(PlaceBackedgeSafepointsImpl,
                     "place-backedge-safepoints-impl",
                     "Place Backedge Safepoints", false, false)
 
-INITIALIZE_PASS_BEGIN(PlaceSafepoints, "place-safepoints", "Place Safepoints",
-                      false, false)
-INITIALIZE_PASS_END(PlaceSafepoints, "place-safepoints", "Place Safepoints",
-                    false, false)
+INITIALIZE_PASS_BEGIN(PlaceSafepointsLegacyPass, "place-safepoints",
+                      "Place Safepoints", false, false)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+INITIALIZE_PASS_END(PlaceSafepointsLegacyPass, "place-safepoints",
+                    "Place Safepoints", false, false)
 
 static void
 InsertSafepointPoll(Instruction *InsertBefore,

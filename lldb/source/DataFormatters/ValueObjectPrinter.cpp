@@ -365,6 +365,13 @@ void ValueObjectPrinter::GetValueSummaryError(std::string &value,
             : m_options.m_varformat_language;
     if (Language *lang_plugin = Language::FindPlugin(lang_type)) {
       summary.assign(lang_plugin->GetNilReferenceSummaryString().str());
+      if (m_options.m_omit_summary_depth == 0) {
+        TypeSummaryImpl *entry = GetSummaryFormatter();
+        if (entry) {
+          m_valobj->GetSummaryAsCString(entry, summary,
+                                        m_options.m_varformat_language);
+        }
+      }
     } else {
       // We treat C as the fallback language rather than as a separate Language
       // plugin.

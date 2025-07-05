@@ -157,6 +157,9 @@ public:
   // FIXME: Move to FrameInfok
   unsigned getSlotSize() const { return SlotSize; }
 
+  const std::vector<MCPhysReg>
+  getArgRegs(const MachineFunction &MF) const override;
+
   bool getRegAllocationHints(Register VirtReg, ArrayRef<MCPhysReg> Order,
                              SmallVectorImpl<MCPhysReg> &Hints,
                              const MachineFunction &MF, const VirtRegMap *VRM,

@@ -22,6 +22,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Transforms/Scalar/InsertCJTBAA.h"
 #include "llvm/Transforms/Utils/Local.h"
 using namespace llvm;
 using namespace PatternMatch;
@@ -667,6 +668,10 @@ static Instruction *unpackLoadToAggregate(InstCombinerImpl &IC, LoadInst &LI) {
           commonAlignment(Align, SL->getElementOffset(i)), Name + ".unpack");
       // Propagate AA metadata. It'll still be valid on the narrowed load.
       L->setAAMetadata(LI.getAAMetadata());
+      if (L->getMetadata(LLVMContext::MD_tbaa_struct)) {
+        L->setMetadata(LLVMContext::MD_tbaa_struct, nullptr);
+        prepareCJTBAA(DL, L, L->getPointerOperand(), L->getType());
+      }
       V = IC.Builder.CreateInsertValue(V, L, i);
     }
 

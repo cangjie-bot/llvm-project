@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines LLVM's set of calling conventions.
@@ -251,6 +253,9 @@ namespace CallingConv {
 
     /// M68k_INTR - Calling convention used for M68k interrupt routines.
     M68k_INTR = 101,
+
+    /// Calling convention for Cangjie gc
+    CangjieGC = 102,
 
     /// The highest possible calling convention ID. Must be some 2^k - 1.
     MaxID = 1023

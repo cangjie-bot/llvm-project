@@ -224,7 +224,13 @@ const TracePC::PCTableEntry *TracePC::PCTableEntryByIdx(uintptr_t Idx) {
 static std::string GetModuleName(uintptr_t PC) {
   char ModulePathRaw[4096] = "";  // What's PATH_MAX in portable C++?
   void *OffsetRaw = nullptr;
-  if (!EF->__sanitizer_get_module_and_offset_for_pc(
+  if (EF->__sanitizer_cangjie_get_module_and_offset_for_pc &&
+      EF->__sanitizer_cangjie_get_module_and_offset_for_pc(
+      reinterpret_cast<void *>(PC), ModulePathRaw,
+      sizeof(ModulePathRaw), &OffsetRaw))
+    return ModulePathRaw;
+  if (EF->__sanitizer_get_module_and_offset_for_pc &&
+      !EF->__sanitizer_get_module_and_offset_for_pc(
       reinterpret_cast<void *>(PC), ModulePathRaw,
       sizeof(ModulePathRaw), &OffsetRaw))
     return "";
@@ -280,11 +286,20 @@ bool TracePC::ObservedFocusFunction() {
 }
 
 void TracePC::PrintCoverage(bool PrintAllCounters) {
-  if (!EF->__sanitizer_symbolize_pc ||
-      !EF->__sanitizer_get_module_and_offset_for_pc) {
-    Printf("INFO: __sanitizer_symbolize_pc or "
-           "__sanitizer_get_module_and_offset_for_pc is not available,"
-           " not printing coverage\n");
+  bool missing_symbolize = !EF->__sanitizer_symbolize_pc || !EF->__sanitizer_get_module_and_offset_for_pc;
+  bool missing_cangjie_symbolize = !EF->__sanitizer_cangjie_symbolize_pc ||
+    !EF->__sanitizer_cangjie_get_module_and_offset_for_pc;
+  if (missing_symbolize)
+        Printf("INFO: __sanitizer_symbolize_pc or "
+             "__sanitizer_get_module_and_offset_for_pc is not available,"
+             " missing C-code coverage\n");
+  if (missing_cangjie_symbolize)
+        Printf("INFO: __sanitizer_cangjie_symbolize_pc or "
+             "__sanitizer_cangjie_get_module_and_offset_for_pc is not available,"
+             " missing cangjie coverage\n");
+  if (missing_symbolize && missing_cangjie_symbolize) {
+        Printf("INFO: All symbolize functions are missing,\n"
+             " not printing coverage\n");
     return;
   }
   Printf(PrintAllCounters ? "FULL COVERAGE:\n" : "COVERAGE:\n");

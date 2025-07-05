@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // The InductiveRangeCheckElimination pass splits a loop's iteration space into
@@ -98,6 +100,12 @@
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+static cl::opt<unsigned> CJIRCEMinLoopIterations("cj-irce-min-loop-iterations",
+                                                 cl::Hidden, cl::init(10));
+} // namespace llvm
 
 static cl::opt<unsigned> LoopSizeCutoff("irce-loop-size-cutoff", cl::Hidden,
                                         cl::init(64));
@@ -1431,6 +1439,9 @@ bool LoopConstrainer::run() {
   bool NeedsPostLoop =
       Increasing ? SR.HighLimit.has_value() : SR.LowLimit.has_value();
 
+  if (CJPipeline && NeedsPreLoop && NeedsPostLoop)
+    return false;
+
   Value *ExitPreLoopAt = nullptr;
   Value *ExitMainLoopAt = nullptr;
   const SCEVConstant *MinusOneS =
@@ -1882,8 +1893,58 @@ InductiveRangeCheckElimination::isProfitableToTransform(const Loop &L,
   return true;
 }
 
+// a + b ult c, a >= 0, a + b nuw => a ult select(b <= c, c - b, 0)
+static bool optimizeNUWCompare(Loop *L, ScalarEvolution &SE) {
+  bool Changed = false;
+  for (auto *BB : L->getBlocks()) {
+    if (!isa<BranchInst>(BB->getTerminator()))
+      continue;
+    auto *BI = cast<BranchInst>(BB->getTerminator());
+    CmpInst::Predicate Pred;
+    Value *LHS;
+    Value *RHS;
+    if (!BI->isConditional() ||
+        !match(BI->getCondition(), m_Cmp(Pred, m_Value(LHS), m_Value(RHS))) ||
+        Pred != CmpInst::Predicate::ICMP_ULT || !isa<BinaryOperator>(LHS) ||
+        !L->isLoopInvariant(RHS))
+      continue;
+    Value *OP0;
+    Value *OP1;
+    if (!match(LHS, m_Add(m_Value(OP0), m_Value(OP1))) ||
+        !cast<BinaryOperator>(LHS)->hasNoUnsignedWrap() ||
+        !L->isLoopInvariant(OP1) || !isa<Instruction>(OP0) ||
+        !L->contains(cast<Instruction>(OP0)))
+      continue;
+    auto LHSRange = SE.getSignedRange(SE.getSCEV(OP0));
+    if (LHSRange.getSignedMin().getSExtValue() < 0)
+      continue;
+
+    IRBuilder<> IRB(L->getLoopPreheader()->getTerminator());
+    auto *ICI0 = IRB.CreateICmp(CmpInst::Predicate::ICMP_SLE, OP1, RHS);
+    auto *SubI = IRB.CreateSub(RHS, OP1);
+    auto *SI =
+        IRB.CreateSelect(ICI0, SubI, ConstantInt::get(IRB.getInt64Ty(), 0));
+    IRB.SetInsertPoint(BB->getTerminator());
+    auto *ICI1 = IRB.CreateCmp(CmpInst::Predicate::ICMP_ULT, OP0, SI);
+    auto *Cond = cast<Instruction>(BI->getCondition());
+    BI->setCondition(ICI1);
+
+    Cond->eraseFromParent();
+    Changed = true;
+  }
+  return Changed;
+}
+
 bool InductiveRangeCheckElimination::run(
     Loop *L, function_ref<void(Loop *, bool)> LPMAddNewLoop) {
+  if (CJPipeline) { // Don't too large
+    const SCEV *MaxTrips = SE.getConstantMaxBackedgeTakenCount(L);
+    if (!isa<SCEVCouldNotCompute>(MaxTrips) &&
+        SE.getUnsignedRange(MaxTrips).getUnsignedMax().getZExtValue() <
+            CJIRCEMinLoopIterations)
+      return false;
+    LoopSizeCutoff = 16;
+  }
   if (L->getBlocks().size() >= LoopSizeCutoff) {
     LLVM_DEBUG(dbgs() << "irce: giving up constraining loop, too large\n");
     return false;
@@ -1964,7 +2025,8 @@ bool InductiveRangeCheckElimination::run(
     return false;
 
   LoopConstrainer LC(*L, LI, LPMAddNewLoop, LS, SE, DT, SafeIterRange.value());
-  bool Changed = LC.run();
+  bool Changed = CJPipeline ? optimizeNUWCompare(L, SE) : false;
+  Changed |= LC.run();
 
   if (Changed) {
     auto PrintConstrainedLoopInfo = [L]() {

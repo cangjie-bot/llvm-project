@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file provides loop vectorization legality analysis. Original code
@@ -16,6 +18,7 @@
 
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
 #include "llvm/Analysis/Loads.h"
+#include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -23,6 +26,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
@@ -72,7 +76,7 @@ static cl::opt<LoopVectorizeHints::ScalableForceKind>
                 LoopVectorizeHints::SK_PreferScalable, "on",
                 "Scalable vectorization is available and favored when the "
                 "cost is inconclusive.")));
-
+extern cl::opt<bool> EnableCJGCWriteLoopVectorization;
 /// Maximum vectorization interleave count.
 static const unsigned MaxInterleaveFactor = 16;
 
@@ -426,15 +430,15 @@ static bool hasOutsideLoopUser(const Loop *TheLoop, Instruction *Inst,
 }
 
 /// Returns true if A and B have same pointer operands or same SCEVs addresses
-static bool storeToSameAddress(ScalarEvolution *SE, StoreInst *A,
-                               StoreInst *B) {
+static bool storeToSameAddress(ScalarEvolution *SE, Instruction *A,
+                               Instruction *B) {
   // Compare store
   if (A == B)
     return true;
 
   // Otherwise Compare pointers
-  Value *APtr = A->getPointerOperand();
-  Value *BPtr = B->getPointerOperand();
+  Value *APtr = getLoadStorePointerOperand(A);
+  Value *BPtr = getLoadStorePointerOperand(B);
   if (APtr == BPtr)
     return true;
 
@@ -737,8 +741,8 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
       //   * Have a vector version available.
       auto *CI = dyn_cast<CallInst>(&I);
 
-      if (CI && !getVectorIntrinsicIDForCall(CI, TLI) &&
-          !isa<DbgInfoIntrinsic>(CI) &&
+      if (CI && !isVectorizableCJGCWrite(&I) &&
+          !getVectorIntrinsicIDForCall(CI, TLI) && !isa<DbgInfoIntrinsic>(CI) &&
           !(CI->getCalledFunction() && TLI &&
             (!VFDatabase::getMappings(*CI).empty() ||
              isTLIScalarize(*TLI, *CI)))) {
@@ -772,7 +776,7 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
 
       // Some intrinsics have scalar arguments and should be same in order for
       // them to be vectorized (i.e. loop invariant).
-      if (CI) {
+      if (CI && !isVectorizableCJGCWrite(CI)) {
         auto *SE = PSE.getSE();
         Intrinsic::ID IntrinID = getVectorIntrinsicIDForCall(CI, TLI);
         for (unsigned i = 0, e = CI->arg_size(); i != e; ++i)
@@ -784,6 +788,10 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
               return false;
             }
           }
+      }
+
+      if (isVectorizableCJGCWrite(&I)) {
+        TheLoop->HasGCWriteInLoop = true;
       }
 
       // Check that the instruction return type is vectorizable.
@@ -923,9 +931,9 @@ bool LoopVectorizationLegality::canVectorizeMemory() {
   // invariant address won't alias with any other objects.
   if (!LAI->getStoresToInvariantAddresses().empty()) {
     // For each invariant address, check its last stored value is unconditional.
-    for (StoreInst *SI : LAI->getStoresToInvariantAddresses()) {
-      if (isInvariantStoreOfReduction(SI) &&
-          blockNeedsPredication(SI->getParent())) {
+    for (Instruction *CurInst : LAI->getStoresToInvariantAddresses()) {
+      if (isInvariantStoreOfReduction(CurInst) &&
+          blockNeedsPredication(CurInst->getParent())) {
         reportVectorizationFailure(
             "We don't allow storing to uniform addresses",
             "write of conditional recurring variant value to a loop "
@@ -943,9 +951,9 @@ bool LoopVectorizationLegality::canVectorizeMemory() {
       // currently rejected earlier in LoopAccessInfo::analyzeLoop. In case this
       // behaviour changes we have to modify this code.
       ScalarEvolution *SE = PSE.getSE();
-      SmallVector<StoreInst *, 4> UnhandledStores;
-      for (StoreInst *SI : LAI->getStoresToInvariantAddresses()) {
-        if (isInvariantStoreOfReduction(SI)) {
+      SmallVector<Instruction *, 4> UnhandledStores;
+      for (Instruction *CurInst : LAI->getStoresToInvariantAddresses()) {
+        if (isInvariantStoreOfReduction(CurInst)) {
           // Earlier stores to this address are effectively deadcode.
           // With opaque pointers it is possible for one pointer to be used with
           // different sizes of stored values:
@@ -956,14 +964,14 @@ bool LoopVectorizationLegality::canVectorizeMemory() {
           // values are same.
           // TODO: Check that bitwidth of unhandled store is smaller then the
           // one that overwrites it and add a test.
-          erase_if(UnhandledStores, [SE, SI](StoreInst *I) {
-            return storeToSameAddress(SE, SI, I) &&
-                   I->getValueOperand()->getType() ==
-                       SI->getValueOperand()->getType();
+          erase_if(UnhandledStores, [SE, CurInst](Instruction *I) {
+            return storeToSameAddress(SE, CurInst, I) &&
+                   getStoreValueOperand(I)->getType() ==
+                       getStoreValueOperand(CurInst)->getType();
           });
           continue;
         }
-        UnhandledStores.push_back(SI);
+        UnhandledStores.push_back(CurInst);
       }
 
       bool IsOK = UnhandledStores.empty();
@@ -1009,7 +1017,7 @@ bool LoopVectorizationLegality::canVectorizeFPMath(
   }));
 }
 
-bool LoopVectorizationLegality::isInvariantStoreOfReduction(StoreInst *SI) {
+bool LoopVectorizationLegality::isInvariantStoreOfReduction(Instruction *SI) {
   return any_of(getReductionVars(), [&](auto &Reduction) -> bool {
     const RecurrenceDescriptor &RdxDesc = Reduction.second;
     return RdxDesc.IntermediateStore == SI;
@@ -1023,7 +1031,8 @@ bool LoopVectorizationLegality::isInvariantAddressOfReduction(Value *V) {
       return false;
 
     ScalarEvolution *SE = PSE.getSE();
-    Value *InvariantAddress = RdxDesc.IntermediateStore->getPointerOperand();
+    Value *InvariantAddress =
+        getLoadStorePointerOperand(RdxDesc.IntermediateStore);
     return V == InvariantAddress ||
            SE->getSCEV(V) == SE->getSCEV(InvariantAddress);
   });

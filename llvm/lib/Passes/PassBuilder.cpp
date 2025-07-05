@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 ///
@@ -26,6 +28,7 @@
 #include "llvm/Analysis/CFLAndersAliasAnalysis.h"
 #include "llvm/Analysis/CFLSteensAliasAnalysis.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
+#include "llvm/Analysis/CJAliasAnalysis.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CallPrinter.h"
 #include "llvm/Analysis/CostModel.h"
@@ -58,6 +61,7 @@
 #include "llvm/Analysis/ModuleDebugInfoPrinter.h"
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
 #include "llvm/Analysis/MustExecute.h"
+#include "llvm/Analysis/ObfConfigAnalysis.h"
 #include "llvm/Analysis/ObjCARCAliasAnalysis.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/PhiValues.h"
@@ -85,6 +89,7 @@
 #include "llvm/Support/Regex.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h"
+#include "llvm/Transforms/CJCFI/PtrAuthBackwardCFI.h"
 #include "llvm/Transforms/Coroutines/CoroCleanup.h"
 #include "llvm/Transforms/Coroutines/CoroEarly.h"
 #include "llvm/Transforms/Coroutines/CoroElide.h"
@@ -95,6 +100,7 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/IPO/BlockExtractor.h"
 #include "llvm/Transforms/IPO/CalledValuePropagation.h"
+#include "llvm/Transforms/IPO/CJPartialEscapeAnalysis.h"
 #include "llvm/Transforms/IPO/ConstantMerge.h"
 #include "llvm/Transforms/IPO/CrossDSOCFI.h"
 #include "llvm/Transforms/IPO/DeadArgumentElimination.h"
@@ -140,12 +146,27 @@
 #include "llvm/Transforms/Instrumentation/PoisonChecking.h"
 #include "llvm/Transforms/Instrumentation/SanitizerCoverage.h"
 #include "llvm/Transforms/Instrumentation/ThreadSanitizer.h"
+#include "llvm/Transforms/Obfuscator/ControlFlowObfuscator.h"
+#include "llvm/Transforms/Obfuscator/DataObfuscator.h"
+#include "llvm/Transforms/Obfuscator/LayoutObfuscator.h"
 #include "llvm/Transforms/ObjCARC.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/AlignmentFromAssumptions.h"
 #include "llvm/Transforms/Scalar/AnnotationRemarks.h"
 #include "llvm/Transforms/Scalar/BDCE.h"
+#include "llvm/Transforms/Scalar/CJBarrierOpt.h"
+#include "llvm/Transforms/Scalar/CJBarrierSplit.h"
+#include "llvm/Transforms/Scalar/CJDevirtualOpt.h"
+#include "llvm/Transforms/Scalar/CJSimpleOpt.h"
+#include "llvm/Transforms/Scalar/CJGenericIntrinsicOpt.h"
+#include "llvm/Transforms/Scalar/CJLoopFloatOpt.h"
+#include "llvm/Transforms/Scalar/CJRSSCE.h"
+#include "llvm/Transforms/Scalar/CJRuntimeLowering.h"
+#include "llvm/Transforms/Scalar/CJRewriteStatepoint.h"
+#include "llvm/Transforms/Scalar/CJSimpleRangeAnalysis.h"
 #include "llvm/Transforms/Scalar/CallSiteSplitting.h"
+#include "llvm/Transforms/Scalar/CJIRVerifier.h"
+#include "llvm/Transforms/Scalar/CJSpecificOpt.h"
 #include "llvm/Transforms/Scalar/ConstantHoisting.h"
 #include "llvm/Transforms/Scalar/ConstraintElimination.h"
 #include "llvm/Transforms/Scalar/CorrelatedValuePropagation.h"
@@ -154,6 +175,7 @@
 #include "llvm/Transforms/Scalar/DeadStoreElimination.h"
 #include "llvm/Transforms/Scalar/DivRemPairs.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
+#include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include "llvm/Transforms/Scalar/FlattenCFG.h"
 #include "llvm/Transforms/Scalar/Float2Int.h"
 #include "llvm/Transforms/Scalar/GVN.h"
@@ -162,6 +184,7 @@
 #include "llvm/Transforms/Scalar/IndVarSimplify.h"
 #include "llvm/Transforms/Scalar/InductiveRangeCheckElimination.h"
 #include "llvm/Transforms/Scalar/InferAddressSpaces.h"
+#include "llvm/Transforms/Scalar/InsertCJTBAA.h"
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
 #include "llvm/Transforms/Scalar/JumpThreading.h"
 #include "llvm/Transforms/Scalar/LICM.h"
@@ -199,6 +222,7 @@
 #include "llvm/Transforms/Scalar/NaryReassociate.h"
 #include "llvm/Transforms/Scalar/NewGVN.h"
 #include "llvm/Transforms/Scalar/PartiallyInlineLibCalls.h"
+#include "llvm/Transforms/Scalar/PlaceSafepoints.h"
 #include "llvm/Transforms/Scalar/Reassociate.h"
 #include "llvm/Transforms/Scalar/Reg2Mem.h"
 #include "llvm/Transforms/Scalar/RewriteStatepointsForGC.h"
@@ -251,14 +275,65 @@
 
 using namespace llvm;
 
+extern cl::opt<int> MaxRecursionInl;
+extern cl::opt<int> CountedLoopTripWidth;
+
 static const Regex DefaultAliasRegex(
     "^(default|thinlto-pre-link|thinlto|lto-pre-link|lto)<(O[0123sz])>$");
+
+cl::opt<bool>
+    CangjieLTOPreOpt("cangjie-lto", cl::init(false), cl::Hidden,
+                     cl::desc("cangjie lto pre-optimization phase, and some "
+                              "optimizations are not enabled at this time.."));
+cl::opt<bool> EnableConfigFlatten("control-flow-flatten",
+                                  cl::desc("Flatten control flow"),
+                                  cl::NotHidden, cl::init(false));
+cl::opt<bool> EnableConfigBcf("control-flow-bogus",
+                              cl::desc("insert bogus control flow"),
+                              cl::NotHidden, cl::init(false));
+cl::opt<bool> EnableConfigObfString("obf-string", cl::desc("Obfuscate string"),
+                                    cl::NotHidden, cl::init(false));
+cl::opt<bool> EnableConfigObfConst("obf-const",
+                                   cl::desc("Obfuscate const variable"),
+                                   cl::NotHidden, cl::init(false));
+cl::opt<bool> EnableObfLayout("obf-layout", cl::desc("Obfuscate layout"),
+                              cl::NotHidden, cl::init(false));
+cl::opt<std::string> ObfInputSymMapFiles("obf-input-symbol-mapping-files",
+                                         cl::desc("Input symbol mapping files"),
+                                         cl::NotHidden, cl::init(""));
+cl::opt<std::string> ObfOutputSymMapFile("obf-output-symbol-mapping-file",
+                                         cl::desc("Output symbol mapping file"),
+                                         cl::NotHidden, cl::init(""));
+cl::opt<std::string>
+    ObfUserSymMapFile("obf-apply-symbol-mapping",
+                      cl::desc("User-defined symbol mapping file"),
+                      cl::NotHidden, cl::init(""));
+cl::opt<std::string> ObfSymPrefix("obf-sym-prefix",
+                                  cl::desc("Prefix of Obfuscated symbols"),
+                                  cl::NotHidden, cl::init(""));
+cl::opt<bool> EnableObfExportSymol("obf-export-symbol",
+                                   cl::desc("Obfuscate exported symbols"),
+                                   cl::NotHidden, cl::init(true));
+cl::opt<bool> EnableObfLineNumber("obf-line-number",
+                                  cl::desc("Obfuscate exported symbols"),
+                                  cl::NotHidden, cl::init(true));
+cl::opt<bool> EnableObfSourcePath("obf-source-path",
+                                  cl::desc("Obfuscate exported symbols"),
+                                  cl::NotHidden, cl::init(true));
+cl::opt<bool>
+    EnableCJPtrAuthBackwardCFI("cj-ptrauth-backward-cfi",
+                               cl::desc("Cangjie PtrAuth-based backward CFI"),
+                               cl::NotHidden, cl::init(false));
 
 namespace llvm {
 cl::opt<bool> PrintPipelinePasses(
     "print-pipeline-passes",
     cl::desc("Print a '-passes' compatible string describing the pipeline "
              "(best-effort only)."));
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> EnableCJBarrierSplit;
+extern cl::opt<bool> RunPartialInlining;
+extern cl::opt<bool> IVCallInstrEnable;
 } // namespace llvm
 
 namespace {
@@ -1136,10 +1211,61 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
                               .Case("O3", OptimizationLevel::O3)
                               .Case("Os", OptimizationLevel::Os)
                               .Case("Oz", OptimizationLevel::Oz);
+
+    if (CJPipeline) {
+      // Customize parameters for cangjie-pipeline.
+      if (L.getSpeedupLevel() > 1 && !MaxRecursionInl.getPosition()) {
+        MaxRecursionInl = 1;
+      }
+      // We put 64-bit safepoint optimization to O3 level for safety.
+      if (L.getSpeedupLevel() > 2) {
+        CountedLoopTripWidth = 64;
+      } else {
+        CountedLoopTripWidth = 16;
+      }
+      if (PGOOpt) {
+        // Enable partial inlining for PGO.
+        RunPartialInlining = true;
+      }
+      // Verify that ir generated by the front end of the cangjie is correct.
+      MPM.addPass(CJIRVerifier());
+      if (L.getSpeedupLevel() > 1)
+        MPM.addPass(createModuleToFunctionPassAdaptor(InsertCJTBAA()));
+      // Fill Klass at the beginning since related structs may be optimized
+      // later.
+      MPM.addPass(CJFillMetadata());
+      MPM.addPass(CJRuntimeLowering());
+      if (EnableCJBarrierSplit)
+        MPM.addPass(CJBarrierSplit());
+
+      if (L.getSpeedupLevel() > 1)
+        MPM.addPass(createModuleToFunctionPassAdaptor(CJSimpleOpt()));
+
+      if (EnableCJPtrAuthBackwardCFI)
+        MPM.addPass(PtrAuthBackwardCFI());
+    }
+    auto addCangjiePasses = [&]() {
+      if (CJPipeline && !CangjieLTOPreOpt) {
+        MPM.addPass(CJSpecificOpt(L.getSpeedupLevel()));
+        MPM.addPass(PlaceSafepoints());
+        if (L.getSpeedupLevel() > 1) {
+          MPM.addPass(CJBarrierOpt());
+        }
+        MPM.addPass(CJRewriteStatepoint(L.getSpeedupLevel()));
+        if (EnableConfigFlatten || EnableConfigBcf)
+          MPM.addPass(ControlFlowObfuscator());
+        if (EnableConfigObfString || EnableConfigObfConst)
+          MPM.addPass(DataObfuscator());
+        if (EnableObfLayout)
+          MPM.addPass(LayoutObfuscator());
+      }
+    };
+
     if (L == OptimizationLevel::O0 && Matches[1] != "thinlto" &&
         Matches[1] != "lto") {
       MPM.addPass(buildO0DefaultPipeline(L, Matches[1] == "thinlto-pre-link" ||
                                                 Matches[1] == "lto-pre-link"));
+      addCangjiePasses();
       return Error::success();
     }
 
@@ -1152,7 +1278,7 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
         L.getSpeedupLevel() > 1 && L != OptimizationLevel::Oz;
 
     if (Matches[1] == "default") {
-      MPM.addPass(buildPerModuleDefaultPipeline(L));
+      MPM.addPass(buildPerModuleDefaultPipeline(L, CangjieLTOPreOpt));
     } else if (Matches[1] == "thinlto-pre-link") {
       MPM.addPass(buildThinLTOPreLinkDefaultPipeline(L));
     } else if (Matches[1] == "thinlto") {
@@ -1163,6 +1289,7 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
       assert(Matches[1] == "lto" && "Not one of the matched options!");
       MPM.addPass(buildLTODefaultPipeline(L, nullptr));
     }
+    addCangjiePasses();
     return Error::success();
   }
 

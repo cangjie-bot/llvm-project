@@ -295,6 +295,8 @@ static constexpr CommandObject::ArgumentTableEntry g_argument_table[] = {
     { lldb::eArgTypeSymbol, "symbol", CommandCompletions::eSymbolCompletion, {}, { nullptr, false }, "Any symbol name (function name, variable, argument, etc.)" },
     { lldb::eArgTypeThreadID, "thread-id", CommandCompletions::eNoCompletion, {}, { nullptr, false }, "Thread ID number." },
     { lldb::eArgTypeThreadIndex, "thread-index", CommandCompletions::eNoCompletion, {}, { nullptr, false }, "Index into the process' list of threads." },
+    { lldb::eArgTypeCJThreadIndex, "cjthread-index", CommandCompletions::eNoCompletion, {},
+        { nullptr, false }, "Index into the process' list of cjthreads." },
     { lldb::eArgTypeThreadName, "thread-name", CommandCompletions::eNoCompletion, {}, { nullptr, false }, "The thread's name." },
     { lldb::eArgTypeTypeName, "type-name", CommandCompletions::eNoCompletion, {}, { nullptr, false }, "A type name." },
     { lldb::eArgTypeUnsignedInteger, "unsigned-integer", CommandCompletions::eNoCompletion, {}, { nullptr, false }, "An unsigned integer." },

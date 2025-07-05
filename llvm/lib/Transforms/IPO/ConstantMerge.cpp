@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the interface to a pass that merges duplicate global
@@ -154,6 +156,10 @@ static bool mergeConstants(Module &M) {
   while (true) {
     // Find the canonical constants others will be merged with.
     for (GlobalVariable &GV : llvm::make_early_inc_range(M.globals())) {
+      // Cangjie native GV needs to be processed at the backend.
+      if (GV.hasAttribute("cj-native")) {
+        continue;
+      }
       // If this GV is dead, remove it.
       GV.removeDeadConstantUsers();
       if (GV.use_empty() && GV.hasLocalLinkage()) {

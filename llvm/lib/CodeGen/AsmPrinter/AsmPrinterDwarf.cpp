@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Dwarf emissions parts of AsmPrinter.
@@ -119,6 +121,16 @@ void AsmPrinter::emitEncodingByte(unsigned Val, const char *Desc) const {
   }
 
   OutStreamer->emitIntValue(Val, 1);
+}
+
+/// When there are no callsites in a function, emit a magic number
+/// 0x55555555 in EH table header.
+void AsmPrinter::EmitNoCallsiteEHHeader() const {
+  if (isVerbose()) {
+    OutStreamer->AddComment(Twine("No callsite function EH table header"));
+  }
+
+  OutStreamer->emitIntValue(0x55555555, 4);
 }
 
 /// GetSizeOfEncodedValue - Return the size of the encoding in bytes.

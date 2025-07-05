@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file includes support code use by SelectionDAGBuilder when lowering a
@@ -58,6 +60,10 @@ public:
     assert(!Locations.count(Val) &&
            "Trying to allocate already allocated location");
     Locations[Val] = Location;
+  }
+
+  void setIsFastISel(bool Flag) {
+    IsFastISel = Flag;
   }
 
   /// Record the fact that we expect to encounter a given gc_relocate
@@ -119,6 +125,10 @@ private:
 
   /// Keep track of pending gcrelocate calls for consistency check
   SmallVector<const GCRelocateInst *, 10> PendingGCRelocateCalls;
+
+  /// In FastISel, PendingGCRelocateCalls's insert and erase will not match.
+  /// We should remove the incorrect assertion for PendingGCRelocateCalls.
+  bool IsFastISel = false;
 };
 
 } // end namespace llvm

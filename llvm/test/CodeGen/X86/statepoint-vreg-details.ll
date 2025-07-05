@@ -86,7 +86,7 @@ define ptr addrspace(1) @test_alloca(ptr addrspace(1) %ptr) gc "statepoint-examp
 ; CHECK-VREG-LABEL: name:            test_alloca
 ; CHECK-VREG:    %0:gr64 = COPY $rdi
 ; CHECK-VREG:    MOV64mr %stack.0.alloca, 1, $noreg, 0, $noreg, %0 :: (store (s64) into %ir.alloca)
-; CHECK-VREG:    %1:gr64 = STATEPOINT 0, 0, 0, @return_i1, 2, 0, 2, 0, 2, 0, 2, 1, %0(tied-def 0), 2, 1, 0, %stack.0.alloca, 0, 2, 1, 0, 0, csr_64, implicit-def $rsp, implicit-def $ssp, implicit-def $al :: (volatile load store (s64) on %stack.0.alloca)
+; CHECK-VREG:    %1:gr64 = STATEPOINT 0, 0, 0, @return_i1, 2, 0, 2, 0, 2, 0, 2, 1, %0(tied-def 0), 2, 1, 0, %stack.0.alloca, 0, 0, 2, 1, 0, 0, csr_64, implicit-def $rsp, implicit-def $ssp, implicit-def $al :: (volatile load store (s64) on %stack.0.alloca)
 ; CHECK-VREG:    %2:gr8 = COPY $al
 ; CHECK-VREG:    %3:gr64 = MOV64rm %stack.0.alloca, 1, $noreg, 0, $noreg :: (dereferenceable load (s64) from %ir.alloca)
 ; CHECK-VREG:    $rdi = COPY %1
@@ -95,7 +95,7 @@ define ptr addrspace(1) @test_alloca(ptr addrspace(1) %ptr) gc "statepoint-examp
 ; CHECK-PREG-LABEL: name:            test_alloca
 ; CHECK-PREG:    renamable $rbx = COPY $rdi
 ; CHECK-PREG:    MOV64mr %stack.0.alloca, 1, $noreg, 0, $noreg, renamable $rbx :: (store (s64) into %ir.alloca)
-; CHECK-PREG:    renamable $rbx = STATEPOINT 0, 0, 0, @return_i1, 2, 0, 2, 0, 2, 0, 2, 1, killed renamable $rbx(tied-def 0), 2, 1, 0, %stack.0.alloca, 0, 2, 1, 0, 0, csr_64, implicit-def $rsp, implicit-def $ssp, implicit-def dead $al :: (volatile load store (s64) on %stack.0.alloca)
+; CHECK-PREG:    renamable $rbx = STATEPOINT 0, 0, 0, @return_i1, 2, 0, 2, 0, 2, 0, 2, 1, killed renamable $rbx(tied-def 0), 2, 1, 0, %stack.0.alloca, 0, 0, 2, 1, 0, 0, csr_64, implicit-def $rsp, implicit-def $ssp, implicit-def dead $al :: (volatile load store (s64) on %stack.0.alloca)
 ; CHECK-PREG:    renamable $r14 = MOV64rm %stack.0.alloca, 1, $noreg, 0, $noreg :: (dereferenceable load (s64) from %ir.alloca)
 ; CHECK-PREG:    $rdi = COPY killed renamable $rbx
 ; CHECK-PREG:    CALL64pcrel32 @consume, csr_64, implicit $rsp, implicit $ssp, implicit $rdi, implicit-def $rsp, implicit-def $ssp
