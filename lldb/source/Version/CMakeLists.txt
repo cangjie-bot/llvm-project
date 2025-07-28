@@ -1,6 +1,10 @@
 if(LLDB_VERSION_STRING)
   set(LLDB_FULL_VERSION_STRING ${LLDB_VERSION_STRING})
 endif()
+if(NOT DEFINED CANGJIE_ROOT)
+  set(CANGJIE_ROOT ${CMAKE_SOURCE_DIR}/../../cangjie)
+endif()
+include_directories(${CANGJIE_ROOT}/include)
 
 # Configure the VCSVersion.inc file.
 set(vcs_version_inc "${CMAKE_CURRENT_BINARY_DIR}/VCSVersion.inc")
