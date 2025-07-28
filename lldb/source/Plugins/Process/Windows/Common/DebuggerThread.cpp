@@ -242,6 +242,12 @@ void DebuggerThread::DebugLoop() {
       default:
         llvm_unreachable("Unhandle debug event code!");
       case EXCEPTION_DEBUG_EVENT: {
+        const DWORD exception_code = dbe.u.Exception.ExceptionRecord.ExceptionCode;
+        // After upgrading the mingw version of the tool used to build cjdb to 12,
+        // an exception is throw during the runtime. Temporarily, ignore this exception.
+        if (exception_code == 0x406D1388) {
+          break;
+        }
         ExceptionResult status =
             HandleExceptionEvent(dbe.u.Exception, dbe.dwThreadId);
 
