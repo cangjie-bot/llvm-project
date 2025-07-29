@@ -33,6 +33,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/NoFolder.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
@@ -57,6 +58,10 @@ STATISTIC(NumArgumentsEliminated, "Number of unread args removed");
 STATISTIC(NumRetValsEliminated, "Number of unused return values removed");
 STATISTIC(NumArgumentsReplacedWithPoison,
           "Number of unread args replaced with poison");
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
 
 namespace {
 
@@ -291,6 +296,11 @@ bool DeadArgumentEliminationPass::removeDeadArgumentsFromCallers(Function &F) {
   AttributeMask UBImplyingAttributes =
       AttributeFuncs::getUBImplyingAttributes();
   for (Argument &Arg : F.args()) {
+    // If it is GC pointer in cangjie, it may be used as base in callee and
+    // cannot be replaced with posion.
+    if (CJPipeline && isGCPointerType(Arg.getType()))
+      continue;
+
     if (!Arg.hasSwiftErrorAttr() && Arg.use_empty() &&
         !Arg.hasPassPointeeByValueCopyAttr()) {
       if (Arg.isUsedByMetadata()) {
@@ -611,6 +621,7 @@ void DeadArgumentEliminationPass::surveyFunction(const Function &F) {
   // Now, check all of our arguments.
   unsigned ArgI = 0;
   UseVector MaybeLiveArgUses;
+  bool HasStructGCAlive = false;
   for (Function::const_arg_iterator AI = F.arg_begin(), E = F.arg_end();
        AI != E; ++AI, ++ArgI) {
     Liveness Result;
@@ -638,7 +649,30 @@ void DeadArgumentEliminationPass::surveyFunction(const Function &F) {
     markValue(createArg(&F, ArgI), Result, MaybeLiveArgUses);
     // Clear the vector again for the next iteration.
     MaybeLiveArgUses.clear();
+    // In cangjie, if a gc struct argument is alive, then its base pointer
+    // should also be alive. The base pointer is the after argument of the
+    // struct pointer.
+    if (CJPipeline) {
+      Type *AT = AI->getType();
+      if (isGCPointerType(AT) &&
+          AT->getNonOpaquePointerElementType()->isStructTy() &&
+          isLive(createArg(&F, ArgI))) {
+        HasStructGCAlive = true;
+        unsigned BasePtrIdx = ArgI + 1;
+        assert(BasePtrIdx < F.arg_size() &&
+               "The struct parameter should have a base pointer.");
+        assert(isInt8AS1Pty(F.getArg(BasePtrIdx)->getType()) &&
+               "The base pointer type should be i8 addrspace(1)*.");
+        markLive(createArg(&F, BasePtrIdx));
+        // skip the base pointer check.
+        ++AI;
+        ++ArgI;
+      }
+    }
   }
+  // If all struct gcptr argument are dead, then remove record_mut attribute.
+  if (CJPipeline && !HasStructGCAlive && F.hasFnAttribute("record_mut"))
+    const_cast<Function &>(F).removeFnAttr("record_mut");
 }
 
 /// Marks the liveness of RA depending on L. If L is MaybeLive, it also takes

@@ -17,6 +17,7 @@
 #include "MCTargetDesc/X86ShuffleDecode.h"
 #include "MCTargetDesc/X86TargetStreamer.h"
 #include "X86AsmPrinter.h"
+#include "X86MachineFunctionInfo.h"
 #include "X86RegisterInfo.h"
 #include "X86ShuffleDecodeConstantPool.h"
 #include "X86Subtarget.h"
@@ -24,6 +25,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
 #include "llvm/CodeGen/MachineOperand.h"
@@ -31,6 +33,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Mangler.h"
+#include "llvm/IR/Statepoint.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
@@ -44,6 +47,7 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolELF.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
@@ -51,7 +55,12 @@
 #include <string>
 
 using namespace llvm;
-
+// we use gcc as compiler for llvm building in windows, thus for fp16 conversion, still need calling-conv adaption.
+static cl::opt<bool> DisableFP16TempConversion("disable-fp16-tempconversion",
+                                               cl::init(false), cl::Hidden);
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 namespace {
 
 /// X86MCInstLower - This class is used to lower an MachineInstr into an MCInst.
@@ -1225,31 +1234,361 @@ static void emitX86Nops(MCStreamer &OS, unsigned NumBytes,
   }
 }
 
+// movq Offset(%r15), %rax
+void X86AsmPrinter::emitGetCJTLSData(int64_t Offset) {
+  MCInst LoadFieldInst;
+  LoadFieldInst.setOpcode(X86::MOV64rm);
+  LoadFieldInst.addOperand(MCOperand::createReg(X86::RAX));
+  LoadFieldInst.addOperand(MCOperand::createReg(X86::R15));
+  LoadFieldInst.addOperand(MCOperand::createImm(1));
+  LoadFieldInst.addOperand(MCOperand::createReg(0));
+  LoadFieldInst.addOperand(MCOperand::createImm(Offset));
+  LoadFieldInst.addOperand(MCOperand::createReg(0));
+  OutStreamer->emitInstruction(LoadFieldInst, getSubtargetInfo());
+}
+
+void X86AsmPrinter::emitStackCmp(const MachineInstr &MI) {
+  // The MSB（Most Significant Bit）is used to mark
+  // whether the stack needs to be recovered.
+  // Default is 0, and that means stack need to be recovered.
+  // 1 means stack do not need to be recovered.
+  if ((MI.peekCJStackSize() >> 31) & 1) {
+    // 0x7fffffff: Make MSB to be 0 to get the real size.
+    unsigned AddSize = MI.peekCJStackSize() & 0x7fffffff;
+    MCInst AddInst;
+    AddInst.setOpcode(X86::ADD64ri32);
+    AddInst.addOperand(MCOperand::createReg(X86::RAX));
+    AddInst.addOperand(MCOperand::createReg(X86::RAX));
+    AddInst.addOperand(MCOperand::createImm(AddSize));
+    AddInst.addOperand(MCOperand::createImm(0));
+    OutStreamer->emitInstruction(AddInst, getSubtargetInfo());
+  }
+  MCInst CmpInst;
+  CmpInst.setOpcode(X86::CMP64rr);
+  CmpInst.addOperand(MCOperand::createReg(X86::RSP));
+  CmpInst.addOperand(MCOperand::createReg(X86::RAX));
+  OutStreamer->emitInstruction(CmpInst, getSubtargetInfo());
+}
+
+//   subq   numbytes, %rsp
+//   movq  40(%r15), %rax    # stack.check
+//   cmpq  %rax, %rsp
+//   jbe   .Lstack.overflow:
+// .Lstack.check.end:
+void X86AsmPrinter::emitCJStackCheck(const MachineInstr &MI) {
+  MCContext &Ctx = MF->getContext();
+  // stack.check start
+  emitGetCJTLSData(getProtectAddrOffsetInCJTLS());
+  emitStackCmp(MI);
+
+  MCSymbol *StackOverflowSym = Ctx.createTempSymbol("stack.overflow");
+  MCInst JmpInst;
+  JmpInst.setOpcode(X86::JCC_1);
+  JmpInst.addOperand(MCOperand::createExpr(MCSymbolRefExpr::create(
+      StackOverflowSym, MCSymbolRefExpr::VK_None, Ctx)));
+  JmpInst.addOperand(MCOperand::createImm(X86::COND_BE));
+  OutStreamer->emitInstruction(JmpInst, getSubtargetInfo());
+  MCSymbol *StackCheckEndSym = Ctx.createTempSymbol("stack.check.end");
+  OutStreamer->emitLabel(StackCheckEndSym);
+  StackCheckMap[&MI] = std::make_pair(StackOverflowSym, StackCheckEndSym);
+}
+
+// .Lsofe.end.xxx:
+//   addq    $AddSize, %rsp
+//   callq   CJ_MCC_ThrowStackOverflowError
+int X86AsmPrinter::emitSOFECall(const MachineInstr &MI) {
+  MCContext &Ctx = MF->getContext();
+  auto SC = StackCheckMap[&MI];
+  MCSymbol *StackOverflowSym = SC.first;
+  OutStreamer->emitLabel(StackOverflowSym);
+
+  // This DebugInstrNum interface is used to store the frame size temporarily
+  unsigned AddSize = MI.peekCJStackSize();
+  const Triple &TT = getSubtargetInfo().getTargetTriple();
+  if (TT.isOSWindows()) {
+    // The MSB（Most Significant Bit）is used to mark
+    // whether the stack needs to be recovered.
+    // Default is 0, and that means stack need to be recovered.
+    // 1 means stack do not need to be recovered.
+    if ((AddSize >> 31) & 1) {
+      X86MachineFunctionInfo *X86FI = MF->getInfo<X86MachineFunctionInfo>();
+      const int64_t CalleeSaveSize = X86FI->getCalleeSavedFrameSize();
+      unsigned TailCallArgReserveSize = -X86FI->getTCReturnAddrDelta();
+      AddSize = CalleeSaveSize + TailCallArgReserveSize;
+    }
+  } else if (TT.isOSLinux()) {
+    AddSize = AddSize - 8; // 8: address align(16)
+  }
+
+  if (AddSize > 0) {
+    MCInst Add;
+    Add.setOpcode(X86::ADD64ri32);
+    Add.addOperand(MCOperand::createReg(X86::RSP));
+    Add.addOperand(MCOperand::createReg(X86::RSP));
+    Add.addOperand(MCOperand::createImm(AddSize));
+    Add.addOperand(MCOperand::createImm(0));
+    OutStreamer->emitInstruction(Add, getSubtargetInfo());
+
+    bool IsWin64Prologue = MF->getTarget().getMCAsmInfo()->usesWindowsCFI();
+    bool NeedsDwarfCFI = !IsWin64Prologue && MF->needsFrameMoves();
+    if (NeedsDwarfCFI) {
+      // Add CFI directive for debugging
+      const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
+      unsigned DwarfFramePtr = TRI->getDwarfRegNum(X86::RSP, true);
+      // 32: left frame size of current function
+      OutStreamer->emitCFIDefCfa(DwarfFramePtr, 32);
+    }
+  }
+
+  MCInst CallInst;
+  CallInst.setOpcode(X86::CALL64pcrel32);
+  MCSymbol *Sym;
+  if (MF->getTarget().getTargetTriple().isOSBinFormatMachO()) {
+    Sym = Ctx.getOrCreateSymbol("_CJ_MCC_ThrowStackOverflowError");
+  } else {
+    Sym = Ctx.getOrCreateSymbol("CJ_MCC_ThrowStackOverflowError");
+  }
+  CallInst.addOperand(MCOperand::createExpr(
+      MCSymbolRefExpr::create(Sym, MCSymbolRefExpr::VK_None, Ctx)));
+  OutStreamer->emitInstruction(CallInst, getSubtargetInfo());
+  // 2: instruction nums.
+  return 2;
+}
+
+// .Lstack.overflow:
+//   addq   numbytes, %rsp
+//   mov    allocabytes, %rax
+//   callq  CJ_MCC_StackGrowStub
+// .LTemp
+//   subq   numbytes, %rsp
+//   jmp    .Lstack.check.end
+int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
+  MCContext &Ctx = MF->getContext();
+  auto SC = StackCheckMap[&MI];
+  MCSymbol *StackOverflowSym = SC.first;
+  MCSymbol *StackCheckEndSym = SC.second;
+  OutStreamer->emitLabel(StackOverflowSym);
+
+  // Before invoking the StackGrow function, you need to restore the SP
+  // to ensure that the SP does not exceed the threshold.
+  X86MachineFunctionInfo *X86FI = MF->getInfo<X86MachineFunctionInfo>();
+  const int64_t CalleeSaveSize = X86FI->getCalleeSavedFrameSize();
+
+  unsigned NumBytes = MI.peekCJStackSize();
+  bool IsWindowsAndNoRecoverd =
+      getSubtargetInfo().getTargetTriple().isOSWindows() &&
+      ((NumBytes >> 31) & 0x1);
+  if (IsWindowsAndNoRecoverd) {
+    // The MSB(Most Significant Bit)is used to mark
+    // whether the stack needs to be recovered.
+    // Default is 0, and that means stack need to be recovered.
+    // 1 means stack do not need to be recovered.
+    NumBytes = NumBytes & 0x7fffffff;
+  } else {
+    assert(NumBytes >= CalleeSaveSize &&
+           "frame size is less than callee saved size");
+    NumBytes = NumBytes - CalleeSaveSize;
+  }
+
+  // FrameSize: Total stack size of the current function.
+  int64_t FrameSize = MF->getFrameInfo().getStackSize() + 8; // 8: ra slot
+  // Current Allocated Stack Size.
+  int64_t AllocaSize = FrameSize - NumBytes;
+  bool NeedAlign = false;
+  if (AllocaSize % 16) {
+    AllocaSize += 8; // 8: sp address align(16)
+    NeedAlign = true;
+  }
+
+  if (!IsWindowsAndNoRecoverd) {
+    NumBytes = FrameSize - AllocaSize; // will unwind stack size
+    if (NumBytes > 0) {
+      MCInst Add;
+      Add.setOpcode(X86::ADD64ri32);
+      Add.addOperand(MCOperand::createReg(X86::RSP));
+      Add.addOperand(MCOperand::createReg(X86::RSP));
+      Add.addOperand(MCOperand::createImm(NumBytes));
+      Add.addOperand(MCOperand::createImm(0));
+      OutStreamer->emitInstruction(Add, getSubtargetInfo());
+    }
+  } else {
+    if (NeedAlign) {
+      MCInst PushInst; // Use push to align sp to 16 bytes.
+      PushInst.setOpcode(X86::PUSH64i32);
+      PushInst.addOperand(MCOperand::createImm(AllocaSize));
+      OutStreamer->emitInstruction(PushInst, getSubtargetInfo());
+    }
+  }
+
+  MCInst StoreAllocaSize;
+  StoreAllocaSize.setOpcode(X86::MOV64ri);
+  StoreAllocaSize.addOperand(MCOperand::createReg(X86::RAX));
+  StoreAllocaSize.addOperand(MCOperand::createImm(AllocaSize));
+  OutStreamer->emitInstruction(StoreAllocaSize, getSubtargetInfo());
+
+  MCInst CallInst;
+  CallInst.setOpcode(X86::CALL64pcrel32);
+  MCSymbol *Sym = Ctx.getOrCreateSymbol("CJ_MCC_StackGrowStub");
+  CallInst.addOperand(MCOperand::createExpr(
+      MCSymbolRefExpr::create(Sym, MCSymbolRefExpr::VK_None, Ctx)));
+  OutStreamer->emitInstruction(CallInst, getSubtargetInfo());
+  SM.recordCJStackMap(MI, true);
+
+  // Restore the SP status after stack expansion.
+  if (!IsWindowsAndNoRecoverd) {
+    if (NumBytes > 0) {
+      MCInst Sub;
+      Sub.setOpcode(X86::SUB64ri32);
+      Sub.addOperand(MCOperand::createReg(X86::RSP));
+      Sub.addOperand(MCOperand::createReg(X86::RSP));
+      Sub.addOperand(MCOperand::createImm(NumBytes));
+      Sub.addOperand(MCOperand::createImm(0));
+      OutStreamer->emitInstruction(Sub, getSubtargetInfo());
+    }
+  } else {
+    if (NeedAlign) {
+      MCInst PopInst; // Use pop to restore sp.
+      PopInst.setOpcode(X86::POP64r);
+      PopInst.addOperand(MCOperand::createReg(X86::RAX));
+      OutStreamer->emitInstruction(PopInst, getSubtargetInfo());
+    }
+  }
+  const MCSymbolRefExpr *StackCheckEndExpr =
+      MCSymbolRefExpr::create(StackCheckEndSym, MCSymbolRefExpr::VK_None, Ctx);
+  MCInst JccInst;
+  JccInst.setOpcode(X86::JMP_1);
+  JccInst.addOperand(MCOperand::createExpr(StackCheckEndExpr));
+  OutStreamer->emitInstruction(JccInst, getSubtargetInfo());
+
+  // 5: instruction nums.
+  return 5;
+}
+
+// load  tls data
+// movq  (%rax), %eax
+void X86AsmPrinter::emitGcStateCheck() {
+  emitGetCJTLSData(getMutatorOffsetInCJTLS());
+  MCInst LoadPollingPageInst;
+  LoadPollingPageInst.setOpcode(X86::MOV32rm);
+  LoadPollingPageInst.addOperand(MCOperand::createReg(X86::EAX));
+  LoadPollingPageInst.addOperand(MCOperand::createReg(X86::RAX));
+  LoadPollingPageInst.addOperand(MCOperand::createImm(1));
+  LoadPollingPageInst.addOperand(MCOperand::createReg(0));
+  LoadPollingPageInst.addOperand(MCOperand::createImm(0)); // GCPhase offset
+  LoadPollingPageInst.addOperand(MCOperand::createReg(0));
+  OutStreamer->emitInstruction(LoadPollingPageInst, getSubtargetInfo());
+}
+
+// load tls data
+//   cmpq   $0, %rax
+//   jne    Label
+void X86AsmPrinter::emitCangjieSafepoint(const MachineInstr &MI) {
+  emitGetCJTLSData(getSafepointCheckAddrOffsetInCJTLS());
+  // create label
+  auto &Ctx = OutStreamer->getContext();
+  MCSymbol *MILabel = Ctx.createTempSymbol();
+  MCSymbol *MILabel1 = Ctx.createTempSymbol();
+  const MCSymbolRefExpr *MILabelExpr =
+      MCSymbolRefExpr::create(MILabel, OutContext);
+  MCInst CmpInst;
+  CmpInst.setOpcode(X86::CMP64ri32);
+  CmpInst.addOperand(MCOperand::createReg(X86::RAX));
+  CmpInst.addOperand(MCOperand::createImm(0));
+  OutStreamer->emitInstruction(CmpInst, getSubtargetInfo());
+  MCInst JccInst;
+  JccInst.setOpcode(X86::JCC_1);
+  JccInst.addOperand(MCOperand::createExpr(MILabelExpr));
+  JccInst.addOperand(MCOperand::createImm(X86::COND_NE));
+  OutStreamer->emitInstruction(JccInst, getSubtargetInfo());
+
+  OutStreamer->emitLabel(MILabel1);
+  SafepointStackMap.push_back(std::make_tuple(&MI, MILabel, MILabel1));
+}
+
+// mov  CJ_MCC_HandleSafepoint.CJStubGV(%rip), %r9
+// call %r9
+// jmp  Label1
+int X86AsmPrinter::emitSafePointDirectCall(unsigned Index) {
+  auto *AddrGV = MF->getFunction().getParent()->
+      getGlobalVariable("CJ_MCC_HandleSafepoint.CJStubGV", true);
+  MachineOperand MOAddr = MachineOperand::CreateGA(AddrGV, 0);
+  X86MCInstLower MCInstLowering(*MF, *this);
+  const MCSymbolRefExpr *Sym =
+      MCSymbolRefExpr::create(MCInstLowering.GetSymbolFromOperand(MOAddr),
+                              OutStreamer->getContext());
+  auto SS = SafepointStackMap[Index];
+  MCSymbol *MILabel = std::get<1>(SS);
+  MCSymbol *MILabel1 = std::get<2>(SS);
+  OutStreamer->emitLabel(MILabel);
+
+  MCInst MovGVToRAX = MCInstBuilder(X86::MOV64rm)
+                          .addReg(X86::RAX)
+                          .addReg(X86::RIP)
+                          .addImm(1)
+                          .addReg(0)
+                          .addExpr(Sym)
+                          .addReg(0);
+  OutStreamer->emitInstruction(MovGVToRAX, getSubtargetInfo());
+  MCInst CallSafepointInst;
+  CallSafepointInst.setOpcode(X86::CALL64r);
+  CallSafepointInst.addOperand(MCOperand::createReg(X86::RAX));
+  OutStreamer->emitInstruction(CallSafepointInst, getSubtargetInfo());
+  SM.recordCJStackMap(*std::get<0>(SS), true);
+
+  const MCSymbolRefExpr *MILabelExpr =
+      MCSymbolRefExpr::create(MILabel1, OutContext);
+  MCInst JccInst;
+  JccInst.setOpcode(X86::JMP_1);
+  JccInst.addOperand(MCOperand::createExpr(MILabelExpr));
+  OutStreamer->emitInstruction(JccInst, getSubtargetInfo());
+  // 3: instruction nums.
+  return 3;
+}
+
 void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
                                     X86MCInstLower &MCIL) {
   assert(Subtarget->is64Bit() && "Statepoint currently only supports X86-64");
 
   NoAutoPaddingScope NoPadScope(*OutStreamer);
-
   StatepointOpers SOpers(&MI);
+  // Lower call target and choose correct opcode
+  const MachineOperand &CallTarget = SOpers.getCallTarget();
+  if (CJPipeline) {
+    uint64_t ID = SOpers.getID();
+    if (ID == CJStatepointID::Safepoint) {
+      emitCangjieSafepoint(MI);
+      return;
+    }
+    if (ID == CJStatepointID::StackCheck) {
+      emitCangjieStackCheck(MI);
+      return;
+    }
+    if (ID == CJStatepointID::NewArrayFast) {
+      emitCJNewArrayFastPath(MI, CallTarget);
+      return;
+    }
+  }
+
   if (unsigned PatchBytes = SOpers.getNumPatchBytes()) {
     emitX86Nops(*OutStreamer, PatchBytes, Subtarget);
   } else {
-    // Lower call target and choose correct opcode
-    const MachineOperand &CallTarget = SOpers.getCallTarget();
     MCOperand CallTargetMCOp;
     unsigned CallOpcode;
     switch (CallTarget.getType()) {
     case MachineOperand::MO_GlobalAddress:
-    case MachineOperand::MO_ExternalSymbol:
+    case MachineOperand::MO_ExternalSymbol: {
       CallTargetMCOp = MCIL.LowerSymbolOperand(
           CallTarget, MCIL.GetSymbolFromOperand(CallTarget));
       CallOpcode = X86::CALL64pcrel32;
+      if (tryEmitCangjieSpecificCallByMOSym(&MI, CallTarget, CallOpcode)) {
+        return;
+      }
       // Currently, we only support relative addressing with statepoints.
       // Otherwise, we'll need a scratch register to hold the target
       // address.  You'll fail asserts during load & relocation if this
       // symbol is to far away. (TODO: support non-relative addressing)
       break;
+    }
     case MachineOperand::MO_Immediate:
       CallTargetMCOp = MCOperand::createImm(CallTarget.getImm());
       CallOpcode = X86::CALL64pcrel32;
@@ -2412,6 +2751,57 @@ static void addConstantComments(const MachineInstr *MI,
   }
 }
 
+void X86AsmPrinter::tryDoAdaptionForFP16InCJ(const MachineInstr *MI,
+                                             bool &IsTruncToFP16,
+                                             bool IsWindows) {
+  if (DisableFP16TempConversion || !CJPipeline) {
+      return;
+  }
+  if (!MI->isCall()) {
+      return;
+  }
+
+  unsigned Opcode = MI->getOpcode();
+  if (Opcode == TargetOpcode::STATEPOINT) {
+    return;
+  }
+
+  if (MI->getNumOperands() == 0) {
+    return;
+  }
+
+  const MachineOperand &MOSym = MI->getOperand(0);
+  if (!MOSym.isSymbol()) {
+    return;
+  }
+
+  StringRef CalleeName = StringRef(MOSym.getSymbolName());
+  if (CalleeName.isTruncToFP16Func()) {
+    IsTruncToFP16 = true;
+    return;
+  }
+  if (CalleeName.isExtendFromFP16Func()) {
+    if (IsWindows) {
+      // move arg0 from xmm0 to ecx to do the fp16
+      // calling-convetion adaption in windows.
+      MCInst MovXMM0ToECX = MCInstBuilder(X86::PEXTRWrr)
+                                .addReg(X86::ECX)
+                                .addReg(X86::XMM0)
+                                .addImm(0);
+      EmitAndCountInstruction(MovXMM0ToECX);
+    } else {
+      // move arg0 from xmm0 to edi to do the fp16
+      // calling-convetion adaption in macos.
+      MCInst MovXMM0ToEDI = MCInstBuilder(X86::PEXTRWrr)
+                                .addReg(X86::EDI)
+                                .addReg(X86::XMM0)
+                                .addImm(0);
+      EmitAndCountInstruction(MovXMM0ToEDI);
+    }
+    return;
+  }
+}
+
 void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
   // FIXME: Enable feature predicate checks once all the test pass.
   // X86_MC::verifyInstructionPredicates(MI->getOpcode(),
@@ -2436,10 +2826,21 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
     if (MI->getAsmPrinterFlags() & X86::AC_EVEX_2_VEX)
       OutStreamer->AddComment("EVEX TO VEX Compression ", false);
   }
-
+  // try to process cangjie specific call
+  if (tryEmitCangjieSpecificCall(MI)) {
+    return;
+  }
   // Add comments for values loaded from constant pool.
   if (OutStreamer->isVerboseAsm())
     addConstantComments(MI, *OutStreamer);
+
+  bool IsTruncToFP16 = false;
+  const Triple TT(getSubtargetInfo().getTargetTriple());
+  if (TT.isOSWindows()) {
+    tryDoAdaptionForFP16InCJ(MI, IsTruncToFP16, true);
+  } else if (TT.isOSBinFormatMachO()) {
+    tryDoAdaptionForFP16InCJ(MI, IsTruncToFP16, false);
+  }
 
   switch (MI->getOpcode()) {
   case TargetOpcode::DBG_VALUE:
@@ -2549,6 +2950,51 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
 
     if (HasActiveDwarfFrame && !hasFP) {
       OutStreamer->emitCFIAdjustCfaOffset(stackGrowth);
+    }
+    return;
+  }
+  case X86::MOV64ri: {
+    const MachineOperand &MOSym = MI->getOperand(1);
+    if (!MOSym.isGlobal())
+      break;
+
+    const auto *Callee = dyn_cast<const Function>(MOSym.getGlobal());
+    if (Callee == nullptr)
+      break;
+
+    if (Callee->isCangjieStackCheck() || Callee->isCangjieSafePoint()) {
+      return;
+    }
+    break;
+  }
+  case X86::PUSHPC64: {
+    // call $nextInst for cangjie
+    MCSymbol *NextIns = OutContext.createTempSymbol("StorePC", true);
+    EmitAndCountInstruction(
+        MCInstBuilder(X86::CALL64pcrel32)
+            .addExpr(MCSymbolRefExpr::create(NextIns, OutContext)));
+    OutStreamer->emitLabel(NextIns);
+    if (MF->getTarget().getTargetTriple().isOSBinFormatMachO()) {
+      Function &Func = MF->getFunction();
+      if (!Func.hasFnAttribute("leaf-function")) {
+        Metadata *MD = Func.getParent()->getModuleFlag("Cangjie_PACKAGE_ID");
+        if (MD == nullptr)
+          report_fatal_error("There is not cangjie package id in module!");
+        StringRef PACKAGEID = dyn_cast<MDString>(MD)->getString();
+        MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
+            ".Lmethod_desc." + PACKAGEID + "._" + MF->getName());
+        EmitAndCountInstruction(
+            MCInstBuilder(X86::LEA64r)
+                .addReg(X86::R10)
+                .addReg(X86::RIP)
+                .addImm(0)
+                .addReg(0)
+                .addExpr(MCSymbolRefExpr::create(DescSymbol, OutContext))
+                .addReg(0));
+        EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::R10));
+      } else {
+        EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::RIP));
+      }
     }
     return;
   }
@@ -2686,8 +3132,596 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
     SMShadowTracker.emitShadowPadding(*OutStreamer, getSubtargetInfo());
     // Then emit the call
     OutStreamer->emitInstruction(TmpInst, getSubtargetInfo());
+
+    // move rslt from xmm0 to eax to do the fp16 calling-convetion adaption
+    if (IsTruncToFP16) {
+      MCInst MovXMM0ToEAX = MCInstBuilder(X86::PINSRWrr)
+                                .addReg(X86::XMM0)
+                                .addReg(X86::XMM0)
+                                .addReg(X86::EAX)
+                                .addImm(0);
+      EmitAndCountInstruction(MovXMM0ToEAX);
+    }
     return;
   }
 
   EmitAndCountInstruction(TmpInst);
+}
+
+void X86AsmPrinter::reloadSPForEpilogue(MachineFunction &MF) {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  uint64_t StackSize = MFI.getStackSize();
+  bool Is64Bit = MF.getSubtarget<X86Subtarget>().is64Bit();
+  unsigned SubOpc = Is64Bit ? X86::SUB64ri32 : X86::SUB32ri;
+  unsigned MovOpc = Is64Bit ? X86::MOV64rr : X86::MOV32rr;
+  unsigned SPReg = Is64Bit ? X86::RSP : X86::ESP;
+  unsigned BPReg = Is64Bit ? X86::RBP : X86::EBP;
+  unsigned SlotSize = Is64Bit ? 8 : 4;
+
+  EmitAndCountInstruction(MCInstBuilder(MovOpc).addReg(SPReg).addReg(BPReg));
+
+  bool IsWin64Prologue = MF.getTarget().getMCAsmInfo()->usesWindowsCFI();
+  // assume MF HasFP == true
+  if (IsWin64Prologue) {
+    uint64_t FrameSize = StackSize - SlotSize;
+    X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
+    uint64_t NumBytes = FrameSize - X86FI->getCalleeSavedFrameSize();
+
+    // Win64 ABI has a less restrictive limitation of 240; 128 works equally
+    // well and might require smaller successive adjustments.
+    const uint64_t Win64MaxSEHOffset = 128;
+    uint64_t SEHFrameOffset = std::min(NumBytes, Win64MaxSEHOffset);
+    // Win64 ABI requires 16-byte alignment for the UWOP_SET_FPREG opcode.
+    SEHFrameOffset &= -16;
+
+    EmitAndCountInstruction(MCInstBuilder(SubOpc)
+                                .addReg(SPReg)
+                                .addReg(SPReg)
+                                .addImm(SEHFrameOffset)
+                                .addReg(0));
+  } else {
+    EmitAndCountInstruction(MCInstBuilder(SubOpc)
+                                .addReg(SPReg)
+                                .addReg(SPReg)
+                                .addImm(StackSize - SlotSize)
+                                .addReg(0));
+  }
+}
+
+// if linux
+//   movq  (%r15)     %rdx    get AllocBuffer
+//   movq  (%rdx)     %rdx    get region ptr
+//   movq  (%rdx)     %rax    rax = allocPtr
+//   movq  8(%rdx)    %rcx    rcx = limit
+//   leaq  (%rax, %rsi) %r8    r8 = allocPtr + size
+//   cmpq  %rcx       %r8     allocPtr + size > limit ?
+//   jg    LNewObjSlowPath
+//   movq  %rdi       (%rax)  allocPtr->KlassInfo = Klass
+//   movq  %r8        (%rdx)  region->allocPtr = allocPtr + size
+// <<<<  hasFinalizer
+//   movq  %rax       %rdi    arg0 = allocPtr
+//   callq MCC_OnFinalizerCreated
+// >>>>>
+//   jmp   LNewObjFin
+// LNewObjSlowPath
+//   callq   MCC_NewObjectStub@PLT
+// LNewObjFin
+// -----------------------------------------------
+// else if win64
+//   movq  (%r15)     %r9     get AllocBuffer
+//   movq  (%r9)      %r9     get region ptr
+//   movq  (%r9)      %rax    rax = allocPtr
+//   movq  8(%r9)     %r10    r10 = limit
+//   leaq  (%rax, %rdx) %r8   r8 = allocPtr + size
+//   cmpq  %r10       %r8     allocPtr + size > limit ?
+//   jg    LNewObjSlowPath
+//   movq  %rcx       (%rax)  allocPtr->KlassInfo = Klass
+//   movq  %r8        (%r9)   region->allocPtr = allocPtr + size
+// <<<<  hasFinalizer
+//   movq  %rax       %rcx    arg0 = allocPtr
+//   callq MCC_OnFinalizerCreated
+// >>>>>
+//   jmp   LNewObjFin
+// LNewObjSlowPath
+//   callq   MCC_NewObjectStub
+// LNewObjFin
+// endif
+void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
+  unsigned AllocBufferReg;
+  unsigned RegionInfoReg;
+  unsigned AllocPtrReg;
+  unsigned LimitReg;
+  unsigned TmpReg;
+  unsigned ArgReg0;
+  unsigned ArgReg1;
+
+  if (!getSubtargetInfo().getTargetTriple().isOSWindows()) {
+    AllocBufferReg = X86::RDX;
+    RegionInfoReg = X86::RDX;
+    AllocPtrReg = X86::RAX;
+    LimitReg = X86::RCX;
+    TmpReg = X86::R8;
+    ArgReg0 = X86::RDI;
+    ArgReg1 = X86::RSI;
+  } else {
+    AllocBufferReg = X86::R9;
+    RegionInfoReg = X86::R9;
+    AllocPtrReg = X86::RAX;
+    LimitReg = X86::R10;
+    TmpReg = X86::R8;
+    ArgReg0 = X86::RCX;
+    ArgReg1 = X86::RDX;
+  }
+  MCInst AllocBuffer = MCInstBuilder(X86::MOV64rm)
+                           .addReg(AllocBufferReg)
+                           .addReg(X86::R15)
+                           .addImm(1)
+                           .addReg(0)
+                           .addImm(getAllocBufferOffsetInCJTLS())
+                           .addReg(0);
+  EmitAndCountInstruction(AllocBuffer);
+
+  // 0: regionPtr in AllocBuffer
+  MCInst GetRegionPtr = MCInstBuilder(X86::MOV64rm)
+                            .addReg(RegionInfoReg)
+                            .addReg(AllocBufferReg)
+                            .addImm(1)
+                            .addReg(0)
+                            .addImm(0)
+                            .addReg(0);
+  MCInst GetAllocPtr = MCInstBuilder(X86::MOV64rm)
+                           .addReg(AllocPtrReg)
+                           .addReg(RegionInfoReg)
+                           .addImm(1)
+                           .addReg(0)
+                           .addImm(0)
+                           .addReg(0);
+  MCInst GetLimit = MCInstBuilder(X86::MOV64rm)
+                        .addReg(LimitReg)
+                        .addReg(RegionInfoReg)
+                        .addImm(1)
+                        .addReg(0)
+                        .addImm(8)
+                        .addReg(0);
+  MCInst CalNewAllocPtr = MCInstBuilder(X86::LEA64r)
+                              .addReg(TmpReg)
+                              .addReg(AllocPtrReg)
+                              .addImm(1)
+                              .addReg(ArgReg1)
+                              .addImm(0)
+                              .addReg(0);
+
+  MCInst CmpNewAllocPtrWithLimit =
+      MCInstBuilder(X86::CMP64rr).addReg(TmpReg).addReg(LimitReg);
+
+  MCInst SetKlass = MCInstBuilder(X86::MOV64mr)
+                        .addReg(AllocPtrReg)
+                        .addImm(1)
+                        .addReg(0)
+                        .addImm(0)
+                        .addReg(0)
+                        .addReg(ArgReg0);
+  MCInst StoreNewAllocPtr = MCInstBuilder(X86::MOV64mr)
+                                .addReg(RegionInfoReg)
+                                .addImm(1)
+                                .addReg(0)
+                                .addImm(0)
+                                .addReg(0)
+                                .addReg(TmpReg);
+
+  EmitAndCountInstruction(GetRegionPtr);
+  EmitAndCountInstruction(GetAllocPtr);
+  EmitAndCountInstruction(GetLimit);
+  EmitAndCountInstruction(CalNewAllocPtr);
+  EmitAndCountInstruction(CmpNewAllocPtrWithLimit);
+  EmitAndCountInstruction(Param.CallNewObjSlowPath);
+  EmitAndCountInstruction(SetKlass);
+  EmitAndCountInstruction(StoreNewAllocPtr);
+  if (Param.FastFuncName.equals("CJ_MCC_NewFinalizerFast")) {
+    MCInst CopyAllocPtrToArg0 =
+        MCInstBuilder(X86::MOV64rr).addReg(ArgReg0).addReg(AllocPtrReg);
+    MachineOperand FinalizerFunc(Param.MOSym);
+    auto *FinalizerGV = Param.MI->getMF()->getFunction().getParent()->
+        getFunction("CJ_MCC_OnFinalizerCreated");
+    FinalizerFunc.ChangeToGA(FinalizerGV, 0);
+    MCInst CallOnFinalizer =
+        MCInstBuilder(X86::JMP_1)
+            .addOperand(
+                Param.MCInstLowering.LowerMachineOperand(Param.MI, FinalizerFunc)
+                    .getValue());
+    EmitAndCountInstruction(CopyAllocPtrToArg0);
+    EmitAndCountInstruction(CallOnFinalizer);
+  }
+}
+
+void X86AsmPrinter::emitMccNewObjectFastPath(const MachineInstr *MI,
+                                             const MachineOperand &MOSym,
+                                             unsigned int Opcode) {
+  StringRef FastFuncName =
+      (MOSym.getGlobal()->getName().find("Object") != StringRef::npos)
+          ? "CJ_MCC_NewObjectFast"
+          : "CJ_MCC_NewFinalizerFast";
+
+  X86MCInstLower MCInstLowering(*MF, *this);
+  MCInst CallNewObjSlowPath = MCInstBuilder(X86::JCC_1)
+      .addOperand(MCInstLowering.LowerMachineOperand(MI, MOSym).getValue())
+      .addImm(X86::COND_G);
+  ParamForEmitNewObj Param(MI, MOSym, Opcode, MCInstLowering,
+                           CallNewObjSlowPath, FastFuncName);
+
+  emitMccNewObjectForCopyGC(Param);
+  SM.recordCJStackMap(*MI);
+}
+
+void X86AsmPrinter::emitCJThrowException(const MachineInstr *MI,
+                                         const MachineOperand &MOSym,
+                                         unsigned int Opcode) {
+  X86MCInstLower MCInstLowering(*MF, *this);
+  MCInst CallThrowException = MCInstBuilder(Opcode).addOperand(
+      MCInstLowering.LowerMachineOperand(MI, MOSym).getValue());
+  EmitAndCountInstruction(CallThrowException);
+  StackMaps::CallsiteInfo CSInfo;
+  SM.updateOrInsertFnInfo(CurrentFnSym, CSInfo);
+}
+
+// linux:
+//   movq  (%r15)     %r9     get AllocBuffer
+//   movq  (%r9)      %r9     get region ptr
+//   movq  (%r9)      %rax    rax = allocPtr
+//   movq  8(%r9)     %r10    r10 = limit
+//   leaq  (%rax, %rdx) %r8   r8 = allocPtr + size
+//   cmpq  %r10       %r8     allocPtr + size > limit ?
+//   jg    LNewArraySlowPath
+//   movq  %rdi       (%rax)  allocPtr->KlassInfo = Klass
+//   movq  %rsi       8(%rax) allocPtr->Length = ArrayLen
+//   movq  %r8        (%r9)   region->allocPtr = allocPtr + size
+//   jmp   LNewArrayFin
+// LNewArraySlowPath
+//   callq CJ_MCC_NewArray@PLT
+// LNewArrayFin
+// -----------------------------------------------
+// win64:
+//   movq  (%r15)     %r9     get AllocBuffer
+//   movq  (%r9)      %r9     get region ptr
+//   movq  (%r9)      %rax    rax = allocPtr
+//   movq  8(%r9)     %r10    r10 = limit
+//   leaq  (%rax, %r8) %r11   r11 = allocPtr + size
+//   cmpq  %r10       %r11    allocPtr + size > limit ?
+//   jg    LNewArraySlowPath
+//   movq  %rcx       (%rax)  allocPtr->KlassInfo = Klass
+//   movq  %rdx       8(%rax) allocPtr->Length = ArrayLen
+//   movq  %r11       (%r9)   region->allocPtr = allocPtr + size
+//   jmp   LNewArrayFin
+// LNewArraySlowPath
+//   callq CJ_MCC_NewArray@PLT
+// LNewArrayFin
+void X86AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
+                                           const MachineOperand &MOSym) {
+  if (MI.getOpcode() != TargetOpcode::STATEPOINT) {
+    report_fatal_error("New Array Must be in Statepoint");
+  }
+
+  MCSymbol *LFast = OutContext.createTempSymbol("NewArrayFastPath", true);
+  MCSymbol *LSlow = OutContext.createTempSymbol("NewArraySlowPath", true);
+  const MCSymbolRefExpr *SlowExpr = MCSymbolRefExpr::create(LSlow, OutContext);
+  unsigned AllocBufferReg = X86::R9;
+  unsigned RegionInfoReg = X86::R9;
+  unsigned AllocPtrReg = X86::RAX;
+  unsigned LimitReg = X86::R10;
+  unsigned TmpReg;
+  unsigned ArgReg0;
+  unsigned ArgReg1;
+  unsigned ArgReg2;
+
+  OutStreamer->emitLabel(LFast);
+  if (!getSubtargetInfo().getTargetTriple().isOSWindows()) {
+    TmpReg = X86::R8;
+    ArgReg0 = X86::RDI;
+    ArgReg1 = X86::RSI;
+    ArgReg2 = X86::RDX;
+  } else {
+    TmpReg = X86::R11;
+    ArgReg0 = X86::RCX;
+    ArgReg1 = X86::RDX;
+    ArgReg2 = X86::R8;
+  }
+  MCInst AllocBuffer = MCInstBuilder(X86::MOV64rm)
+                           .addReg(AllocBufferReg)
+                           .addReg(X86::R15)
+                           .addImm(1)
+                           .addReg(0)
+                           .addImm(getAllocBufferOffsetInCJTLS())
+                           .addReg(0);
+  EmitAndCountInstruction(AllocBuffer);
+
+  // 0: regionPtr in AllocBuffer
+  MCInst GetRegionPtr = MCInstBuilder(X86::MOV64rm)
+                            .addReg(RegionInfoReg)
+                            .addReg(AllocBufferReg)
+                            .addImm(1)
+                            .addReg(0)
+                            .addImm(0)
+                            .addReg(0);
+  MCInst GetAllocPtr = MCInstBuilder(X86::MOV64rm)
+                           .addReg(AllocPtrReg)
+                           .addReg(RegionInfoReg)
+                           .addImm(1)
+                           .addReg(0)
+                           .addImm(0)
+                           .addReg(0);
+  MCInst GetLimit = MCInstBuilder(X86::MOV64rm)
+                        .addReg(LimitReg)
+                        .addReg(RegionInfoReg)
+                        .addImm(1)
+                        .addReg(0)
+                        .addImm(8)
+                        .addReg(0);
+  MCInst CalNewAllocPtr = MCInstBuilder(X86::LEA64r)
+                              .addReg(TmpReg)
+                              .addReg(AllocPtrReg)
+                              .addImm(1)
+                              .addReg(ArgReg2)
+                              .addImm(0)
+                              .addReg(0);
+
+  MCInst CmpNewAllocPtrWithLimit =
+      MCInstBuilder(X86::CMP64rr).addReg(TmpReg).addReg(LimitReg);
+
+  MCInst JmpGToLSLow =
+      MCInstBuilder(X86::JCC_1).addExpr(SlowExpr).addImm(X86::COND_G);
+
+  MCInst SetKlass = MCInstBuilder(X86::MOV64mr)
+                        .addReg(AllocPtrReg)
+                        .addImm(1)
+                        .addReg(0)
+                        .addImm(0)
+                        .addReg(0)
+                        .addReg(ArgReg0);
+  MCInst StoreArrayLength = MCInstBuilder(X86::MOV64mr)
+                                .addReg(AllocPtrReg)
+                                .addImm(0)
+                                .addReg(0)
+                                .addImm(8)
+                                .addReg(0)
+                                .addReg(ArgReg1);
+  MCInst StoreNewAllocPtr = MCInstBuilder(X86::MOV64mr)
+                                .addReg(RegionInfoReg)
+                                .addImm(1)
+                                .addReg(0)
+                                .addImm(0)
+                                .addReg(0)
+                                .addReg(TmpReg);
+  MCSymbol *LFinish = OutContext.createTempSymbol("NewArrayFin", true);
+  const MCSymbolRefExpr *FinExpr = MCSymbolRefExpr::create(LFinish, OutContext);
+  MCInst JmpToLFin = MCInstBuilder(X86::JMP_1).addExpr(FinExpr);
+
+  X86MCInstLower MCInstLowering(*MF, *this);
+  MCInst CallNewArraySlowPath = MCInstBuilder(X86::CALL64pcrel32).addOperand(
+      MCInstLowering.LowerMachineOperand(&MI, MOSym).getValue());
+  EmitAndCountInstruction(GetRegionPtr);
+  EmitAndCountInstruction(GetAllocPtr);
+  EmitAndCountInstruction(GetLimit);
+  EmitAndCountInstruction(CalNewAllocPtr);
+  EmitAndCountInstruction(CmpNewAllocPtrWithLimit);
+  EmitAndCountInstruction(JmpGToLSLow);
+  EmitAndCountInstruction(SetKlass);
+  EmitAndCountInstruction(StoreArrayLength);
+  EmitAndCountInstruction(StoreNewAllocPtr);
+  EmitAndCountInstruction(JmpToLFin);
+  OutStreamer->emitLabel(LSlow);
+  EmitAndCountInstruction(CallNewArraySlowPath);
+  OutStreamer->emitLabel(LFinish);
+  SM.recordCJStackMap(MI);
+}
+
+// movq (rsp) r11
+// subq $16 rsp
+// movq r11 (rsp)
+// movq xxx.CJStubGV(%rip), %r11
+// movq r11 16(rsp)
+// movq $OnStackParamSize 8(rsp)
+void X86AsmPrinter::extendStackAndInsertFFIInfoForJmp(MCInst &MovGVToR11,
+                                                      unsigned CallFrameSize) {
+  EmitAndCountInstruction(MCInstBuilder(X86::MOV64rm)
+                              .addReg(X86::R11)
+                              .addReg(X86::RSP)
+                              .addImm(1)
+                              .addReg(0)
+                              .addImm(0)
+                              .addReg(0));
+  EmitAndCountInstruction(MCInstBuilder(X86::SUB64ri8)
+                              .addReg(X86::RSP)
+                              .addReg(X86::RSP)
+                              .addImm(16)
+                              .addReg(0));
+  EmitAndCountInstruction(MCInstBuilder(X86::MOV64mr)
+                              .addReg(X86::RSP)
+                              .addImm(1)
+                              .addReg(0)
+                              .addImm(0)
+                              .addReg(0)
+                              .addReg(X86::R11));
+  EmitAndCountInstruction(MovGVToR11);
+  EmitAndCountInstruction(MCInstBuilder(X86::MOV64mr)
+                              .addReg(X86::RSP)
+                              .addImm(1)
+                              .addReg(0)
+                              .addImm(16)
+                              .addReg(0)
+                              .addReg(X86::R11));
+  EmitAndCountInstruction(MCInstBuilder(X86::MOV64mi32)
+                              .addReg(X86::RSP)
+                              .addImm(1)
+                              .addReg(0)
+                              .addImm(8)
+                              .addReg(0)
+                              .addImm(CallFrameSize));
+  return;
+}
+
+void X86AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
+                                                const Function *F,
+                                                const MachineOperand &MOSym,
+                                                unsigned Opcode) {
+  const auto *OriCalled = dyn_cast<Function>(MOSym.getGlobal());
+  X86MCInstLower MCInstLowering(*MF, *this);
+  MachineOperand MOOriAddr(MOSym), MONewAddr(MOSym);
+  auto *AddrGV = F->getParent()->getGlobalVariable(
+      OriCalled->getName().str() + ".CJStubGV", true);
+  MOOriAddr.ChangeToGA(AddrGV, 0);
+  const MCSymbolRefExpr *Sym =
+      MCSymbolRefExpr::create(MCInstLowering.GetSymbolFromOperand(MOOriAddr),
+                              OutStreamer->getContext());
+  // push called-addr and CallFrameSize to stack. This operation extends
+  // the sp of the caller by 16 bytes and will be fixed in MCC_XXXStub
+  MDNode *Metadata = OriCalled->getMetadata("CallFrameSizeForCJFFI");
+  assert(Metadata != nullptr &&
+         "FFI Func must have CallFrameSizeForCJFFI meta!");
+  unsigned CallFrameSize =
+      dyn_cast<ConstantInt>(
+          dyn_cast<ConstantAsMetadata>(Metadata->getOperand(0).get())
+              ->getValue())
+          ->getSExtValue();
+  MCInst MovGVToR11 = MCInstBuilder(X86::MOV64rm)
+                          .addReg(X86::R11)
+                          .addReg(X86::RIP)
+                          .addImm(1)
+                          .addReg(0)
+                          .addExpr(Sym)
+                          .addReg(0);
+  // MCC_XXXStub expect the end of caller stack is like:
+  // |  callee-addr                        |
+  // |  param-stack-size (16 bytes align)  |
+  // |  return addr                        |
+  if (Opcode == X86::TAILJMPd64) {
+    Opcode = X86::JMP_1;
+    // return addr has been push on stack already for jmp inst scenario
+    // so we need to insert callee-addr and size before return addr
+
+    // movq (rsp) r11
+    // subq $16 rsp
+    // movq r11 (rsp)
+    // movq xxx.CJStubGV(%rip), %r11
+    // movq r11 16(rsp)
+    // movq $OnStackParamSize 8(rsp)
+    extendStackAndInsertFFIInfoForJmp(MovGVToR11, CallFrameSize);
+  } else {
+    assert(
+        Opcode == X86::CALL64pcrel32 &&
+        "Opcode should be CALL64pcrel32 or TAILJMPd64 for Cangjie Call Stub");
+    // movq xxx.CJStubGV(%rip), %r11
+    // pushq r11
+    // pushq $OnStackParamSize
+    EmitAndCountInstruction(MovGVToR11);
+    EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::R11));
+    EmitAndCountInstruction(
+        MCInstBuilder(X86::PUSH64i32).addImm(CallFrameSize));
+  }
+
+  MCInst TemInst;
+  MONewAddr.ChangeToGA(F, 0);
+  auto SymNewAddr = MCInstLowering.LowerMachineOperand(MI, MONewAddr);
+
+  TemInst.setOpcode(Opcode);
+  TemInst.addOperand(SymNewAddr.getValue());
+  // Count then size of the call towards the shadow
+  SMShadowTracker.count(TemInst, getSubtargetInfo(), CodeEmitter.get());
+  // Then flush the shadow so that we fill with nops before the call, not
+  // after it.
+  SMShadowTracker.emitShadowPadding(*OutStreamer, getSubtargetInfo());
+  // Then emit the call
+  OutStreamer->emitInstruction(TemInst, getSubtargetInfo());
+  SM.recordCJStackMap(*MI);
+  return;
+}
+
+void X86AsmPrinter::emitGetCJThreadId() {
+  auto &Ctx = OutStreamer->getContext();
+  MCSymbol *MILabel = Ctx.createTempSymbol("cjthread_id_end", true);
+  const MCSymbolRefExpr *MILabelExpr = MCSymbolRefExpr::create(MILabel, OutContext);
+  // movq 16(%r15), %rax
+  emitGetCJTLSData(getCJThreadOffsetInCJTLS());
+  int64_t cjthreadIdOffset = 336;
+  int64_t cjthreadIdOffsetWin = 536;
+  if (getSubtargetInfo().getTargetTriple().isOSWindows()) {
+    cjthreadIdOffset = cjthreadIdOffsetWin;
+  }
+  // test %rax, %rax
+  MCInst TestInst;
+  TestInst.setOpcode(X86::TEST64rr);
+  TestInst.addOperand(MCOperand::createReg(X86::RAX));
+  TestInst.addOperand(MCOperand::createReg(X86::RAX));
+  OutStreamer->emitInstruction(TestInst, getSubtargetInfo());
+  // je .L_cjthread_id_end
+  MCInst JmpInst;
+  JmpInst.setOpcode(X86::JCC_1);
+  JmpInst.addOperand(MCOperand::createExpr(MILabelExpr));
+  JmpInst.addOperand(MCOperand::createImm(X86::COND_E));
+  OutStreamer->emitInstruction(JmpInst, getSubtargetInfo());
+  // movq 336(%rax), %rax
+  MCInst LoadCJThreadInst;
+  LoadCJThreadInst.setOpcode(X86::MOV64rm);
+  LoadCJThreadInst.addOperand(MCOperand::createReg(X86::RAX));
+  LoadCJThreadInst.addOperand(MCOperand::createReg(X86::RAX));
+  LoadCJThreadInst.addOperand(MCOperand::createImm(1));
+  LoadCJThreadInst.addOperand(MCOperand::createReg(0));
+  LoadCJThreadInst.addOperand(MCOperand::createImm(cjthreadIdOffset));
+  LoadCJThreadInst.addOperand(MCOperand::createReg(0));
+  OutStreamer->emitInstruction(LoadCJThreadInst, getSubtargetInfo());
+  // .L_cjthread_id_end
+  OutStreamer->emitLabel(MILabel);
+  return;
+}
+
+void X86AsmPrinter::emitMetadataAddress() {
+  const Triple &TT = getSubtargetInfo().getTargetTriple();
+  MCSymbol *MetadataStart = OutContext.getOrCreateSymbol("__CJMetadataStart");
+  MCSymbol *FuncSym;
+  if (TT.isOSWindows()) {
+    // leaq  __CJMetadataStart(%rip), %rcx
+    EmitAndCountInstruction(
+        MCInstBuilder(X86::LEA64r)
+            .addReg(X86::RCX)
+            .addReg(X86::RIP)
+            .addImm(1)
+            .addReg(0)
+            .addExpr(MCSymbolRefExpr::create(MetadataStart, OutContext))
+            .addReg(0));
+    FuncSym = OutContext.getOrCreateSymbol("CJ_MRT_PreInitializePackage");
+  } else if (TT.isOSLinux()) {
+    // leaq  __CJMetadataStart(%rip), %rdi
+    EmitAndCountInstruction(
+        MCInstBuilder(X86::LEA64r)
+            .addReg(X86::RDI)
+            .addReg(X86::RIP)
+            .addImm(1)
+            .addReg(0)
+            .addExpr(MCSymbolRefExpr::create(MetadataStart, OutContext))
+            .addReg(0));
+    FuncSym = OutContext.getOrCreateSymbol("CJ_MRT_PreInitializePackage");
+  } else if (TT.isOSBinFormatMachO()) {
+    // movq  __CJMetadataStart@GOTPCREL(%rip), %rax
+    EmitAndCountInstruction(
+        MCInstBuilder(X86::MOV64rm)
+            .addReg(X86::RAX)
+            .addReg(X86::RIP)
+            .addImm(1)
+            .addReg(0)
+            .addExpr(MCSymbolRefExpr::create(
+                MetadataStart, MCSymbolRefExpr::VK_GOTPCREL, OutContext))
+            .addReg(0));
+    // movq (%rax), %rdi
+    EmitAndCountInstruction(MCInstBuilder(X86::MOV64rm)
+                                .addReg(X86::RDI)
+                                .addReg(X86::RAX)
+                                .addImm(1)
+                                .addReg(0)
+                                .addImm(0)
+                                .addReg(0));
+    FuncSym = OutContext.getOrCreateSymbol("_CJ_MRT_PreInitializePackage");
+  }
+  // callq CJ_MRT_PreInitializePackage
+  EmitAndCountInstruction(
+      MCInstBuilder(X86::CALL64pcrel32)
+          .addExpr(MCSymbolRefExpr::create(FuncSym, OutContext)));
 }

@@ -48,7 +48,10 @@ using namespace llvm;
 
 X86AsmPrinter::X86AsmPrinter(TargetMachine &TM,
                              std::unique_ptr<MCStreamer> Streamer)
-    : AsmPrinter(TM, std::move(Streamer)), SM(*this), FM(*this) {}
+    : AsmPrinter(TM, std::move(Streamer)), SM(*this), FM(*this),
+      CMI(*this, SM) {
+  SM.setX86_64();
+}
 
 //===----------------------------------------------------------------------===//
 // Primitive Helper Functions.
@@ -83,6 +86,8 @@ bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   // Emit the XRay table for this function.
   emitXRayTable();
+
+  CMI.recordCurrentFunc();
 
   EmitFPOData = false;
 
@@ -799,6 +804,7 @@ void X86AsmPrinter::emitEndOfAsmFile(Module &M) {
     // global table for symbol lookup.
     emitNonLazyStubs(MMI, *OutStreamer);
 
+    emitCJMetadataInfo(CMI, M);
     // Emit stack and fault map information.
     emitStackMaps(SM);
     FM.serializeToFaultMapSection();
@@ -830,8 +836,10 @@ void X86AsmPrinter::emitEndOfAsmFile(Module &M) {
       OutStreamer->emitSymbolAttribute(S, MCSA_Global);
       return;
     }
+    emitCJMetadataInfo(CMI, M);
     emitStackMaps(SM);
   } else if (TT.isOSBinFormatELF()) {
+    emitCJMetadataInfo(CMI, M);
     emitStackMaps(SM);
     FM.serializeToFaultMapSection();
   }

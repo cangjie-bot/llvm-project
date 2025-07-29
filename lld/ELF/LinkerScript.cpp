@@ -982,17 +982,12 @@ void LinkerScript::assignOffsets(OutputSection *sec) {
   }
 
   ctx->outSec = sec;
-  if (sec->addrExpr && script->hasSectionsCommand) {
-    // The alignment is ignored.
-    sec->addr = dot;
-  } else {
-    // sec->alignment is the max of ALIGN and the maximum of input
-    // section alignments.
-    const uint64_t pos = dot;
-    dot = alignToPowerOf2(dot, sec->alignment);
-    sec->addr = dot;
-    expandMemoryRegions(dot - pos);
-  }
+  // sec->alignment is the max of ALIGN and the maximum of input
+  // section alignments.
+  const uint64_t pos = dot;
+  dot = alignToPowerOf2(dot, sec->alignment);
+  sec->addr = dot;
+  expandMemoryRegions(dot - pos);
 
   // ctx->lmaOffset is LMA minus VMA. If LMA is explicitly specified via AT() or
   // AT>, recompute ctx->lmaOffset; otherwise, if both previous/current LMA

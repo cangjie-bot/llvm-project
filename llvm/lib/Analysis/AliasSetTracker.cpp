@@ -438,7 +438,15 @@ void AliasSetTracker::add(Instruction *I) {
     return add(MTI);
 
   // Handle all calls with known mod/ref sets genericall
-  if (auto *Call = dyn_cast<CallBase>(I))
+  if (auto *Call = dyn_cast<CallBase>(I)) {
+    if (Call->getIntrinsicID() == Intrinsic::cj_gcwrite_ref) {
+      auto &AS = addPointer(MemoryLocation::get(Call), AliasSet::ModAccess);
+      if (AS.isMustAlias() && !AS.getBasePtr())
+        AS.setBasePtr(Call->getOperand(1));
+      else if (!AS.isMustAlias())
+        AS.clearBasePtr();
+      return;
+    }
     if (Call->onlyAccessesArgMemory()) {
       auto getAccessFromModRef = [](ModRefInfo MRI) {
         if (isRefSet(MRI) && isModSet(MRI))
@@ -475,6 +483,7 @@ void AliasSetTracker::add(Instruction *I) {
       }
       return;
     }
+  }
 
   return addUnknown(I);
 }

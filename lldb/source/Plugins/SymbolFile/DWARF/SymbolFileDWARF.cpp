@@ -3112,7 +3112,7 @@ size_t SymbolFileDWARF::ParseVariablesForContext(const SymbolContext &sc) {
 
         m_index->GetGlobalVariables(*dwarf_cu, [&](DWARFDIE die) {
           VariableSP var_sp(ParseVariableDIECached(sc, die));
-          if (var_sp) {
+          if (var_sp && !var_sp->GetType()->GetFullCompilerType().GetTypeName().GetStringRef().contains("$G")) {
             variables->AddVariableIfUnique(var_sp);
             ++vars_added;
           }
@@ -3542,7 +3542,7 @@ void SymbolFileDWARF::ParseAndAppendGlobalVariable(
 
   // Check to see if we have already parsed this variable or constant?
   VariableSP var_sp = GetDIEToVariable()[die.GetDIE()];
-  if (var_sp) {
+  if (var_sp && !var_sp->GetType()->GetFullCompilerType().GetTypeName().GetStringRef().contains("$G")) {
     cc_variable_list.AddVariableIfUnique(var_sp);
     return;
   }
@@ -3577,7 +3577,7 @@ void SymbolFileDWARF::ParseAndAppendGlobalVariable(
   }
 
   var_sp = ParseVariableDIECached(sc, die);
-  if (!var_sp)
+  if (!var_sp || var_sp->GetType()->GetFullCompilerType().GetTypeName().GetStringRef().contains("$G"))
     return;
 
   cc_variable_list.AddVariableIfUnique(var_sp);

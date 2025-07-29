@@ -22,6 +22,7 @@
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/Value.h"
@@ -33,6 +34,10 @@
 #include <utility>
 
 using namespace llvm;
+
+namespace llvm {
+extern cl::opt<bool> LICMDisableBarrier;
+} // namespace llvm
 
 #define DEBUG_TYPE "ssaupdater"
 
@@ -325,8 +330,14 @@ LoadAndStorePromoter(ArrayRef<const Instruction *> Insts,
   const Value *SomeVal;
   if (const LoadInst *LI = dyn_cast<LoadInst>(Insts[0]))
     SomeVal = LI;
-  else
-    SomeVal = cast<StoreInst>(Insts[0])->getOperand(0);
+  else if (const StoreInst *SI = dyn_cast<StoreInst>(Insts[0]))
+    SomeVal = SI->getOperand(0);
+  else {
+    const IntrinsicInst *II = dyn_cast<IntrinsicInst>(Insts[0]);
+    assert(II && II->getIntrinsicID() == Intrinsic::cj_gcwrite_ref &&
+           "current LICM only support gcwrite");
+    SomeVal = II->getOperand(0);
+  }
 
   if (BaseName.empty())
     BaseName = SomeVal->getName();
@@ -362,6 +373,11 @@ void LoadAndStorePromoter::run(const SmallVectorImpl<Instruction *> &Insts) {
       if (StoreInst *SI = dyn_cast<StoreInst>(User)) {
         updateDebugInfo(SI);
         SSA.AddAvailableValue(BB, SI->getOperand(0));
+      } else if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(User);
+                 II && !LICMDisableBarrier) {
+        assert(II->getIntrinsicID() == Intrinsic::cj_gcwrite_ref);
+        updateDebugInfo(II);
+        SSA.AddAvailableValue(BB, II->getOperand(0));
       } else
         // Otherwise it is a load, queue it to rewrite as a live-in load.
         LiveInLoads.push_back(cast<LoadInst>(User));
@@ -372,7 +388,7 @@ void LoadAndStorePromoter::run(const SmallVectorImpl<Instruction *> &Insts) {
     // Otherwise, check to see if this block is all loads.
     bool HasStore = false;
     for (Instruction *I : BlockUses) {
-      if (isa<StoreInst>(I)) {
+      if (isa<StoreInst>(I) || (isa<IntrinsicInst>(I) && !LICMDisableBarrier)) {
         HasStore = true;
         break;
       }
@@ -418,6 +434,15 @@ void LoadAndStorePromoter::run(const SmallVectorImpl<Instruction *> &Insts) {
 
         // Remember that this is the active value in the block.
         StoredValue = SI->getOperand(0);
+      }
+
+      if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(&I)) {
+        if (LICMDisableBarrier ||
+            II->getIntrinsicID() != Intrinsic::cj_gcwrite_ref ||
+            !isInstInList(II, Insts))
+          continue;
+        updateDebugInfo(II);
+        StoredValue = II->getOperand(0);
       }
     }
 

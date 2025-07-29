@@ -2614,6 +2614,19 @@ When lowered, any relocated value will be recorded in the corresponding
 :ref:`stackmap entry <statepoint-stackmap-format>`.  See the intrinsic description
 for further details.
 
+.. _ob_struct_live:
+
+Struct Live Operand Bundles
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A "struct-live" operand bundle is only valid on a :ref:`gc.statepoint <gc_statepoint>`
+intrinsic. The operand bundle must contain struct pointers of gcptr that needs copy
+object which potentially needs to be upadted by the runtime.
+
+When lowered, any relocated value will be recorded in the corresponding
+:ref:`stackmap entry <statepoint-stackmap-format>`.  See the intrinsic description
+for further details.
+
 ObjC ARC Attached Call Operand Bundles
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

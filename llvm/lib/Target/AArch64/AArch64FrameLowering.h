@@ -35,6 +35,11 @@ public:
   eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator I) const override;
 
+  const std::vector<MCPhysReg>
+  getArgRegs(const MachineFunction &MF) const override;
+
+  MCPhysReg getX8Register() const override;
+
   /// emitProlog/emitEpilog - These methods insert prolog and epilog code into
   /// the function.
   void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;

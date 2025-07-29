@@ -154,6 +154,10 @@ static bool mergeConstants(Module &M) {
   while (true) {
     // Find the canonical constants others will be merged with.
     for (GlobalVariable &GV : llvm::make_early_inc_range(M.globals())) {
+      // Cangjie native GV needs to be processed at the backend.
+      if (GV.hasAttribute("cj-native")) {
+        continue;
+      }
       // If this GV is dead, remove it.
       GV.removeDeadConstantUsers();
       if (GV.use_empty() && GV.hasLocalLinkage()) {

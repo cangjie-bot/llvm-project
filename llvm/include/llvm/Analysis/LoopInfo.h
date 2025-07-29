@@ -545,6 +545,8 @@ extern template class LoopBase<BasicBlock, Loop>;
 /// in the CFG are necessarily loops.
 class LLVM_EXTERNAL_VISIBILITY Loop : public LoopBase<BasicBlock, Loop> {
 public:
+  bool IsInVectorizedProcess = false;
+  bool HasGCWriteInLoop = false;
   /// A range representing the start and end location of a loop.
   class LocRange {
     DebugLoc Start;

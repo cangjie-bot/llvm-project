@@ -78,6 +78,10 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
+
 // Controls the number of uses of the value searched for possible
 // dominating comparisons.
 static cl::opt<unsigned> DomConditionsMaxUses("dom-conditions-max-uses",
@@ -4697,6 +4701,20 @@ bool llvm::isSafeToSpeculativelyExecute(const Instruction *Inst,
                                                 DT, TLI);
 }
 
+static bool isCJRefReadSafeToSpeculativelyExecute(
+    const IntrinsicInst *II, const Instruction *CtxI, const DominatorTree *DT,
+    const TargetLibraryInfo *TLI) {
+  if (!II)
+    return false;
+  const DataLayout &DL = II->getModule()->getDataLayout();
+  Value *Ptr = II->getCJRefGCReadPtr();
+  if (!Ptr)
+    return false;
+  return isDereferenceableAndAlignedPointer(
+      Ptr, Ptr->getType()->getNonOpaquePointerElementType(), Align(8), DL, CtxI,
+      DT, TLI);
+}
+
 bool llvm::isSafeToSpeculativelyExecuteWithOpcode(
     unsigned Opcode, const Instruction *Inst, const Instruction *CtxI,
     const DominatorTree *DT, const TargetLibraryInfo *TLI) {
@@ -4757,14 +4775,18 @@ bool llvm::isSafeToSpeculativelyExecuteWithOpcode(
     if (mustSuppressSpeculation(*LI))
       return false;
     const DataLayout &DL = LI->getModule()->getDataLayout();
-    return isDereferenceableAndAlignedPointer(
-        LI->getPointerOperand(), LI->getType(), LI->getAlign(), DL, CtxI, DT,
-        TLI);
+    return isDereferenceableAndAlignedPointer(LI->getPointerOperand(),
+                                              LI->getType(), LI->getAlign(), DL,
+                                              CtxI, DT, TLI);
   }
   case Instruction::Call: {
     auto *CI = dyn_cast<const CallInst>(Inst);
     if (!CI)
       return false;
+    if (CJPipeline && isCJRefReadSafeToSpeculativelyExecute(
+                          dyn_cast<IntrinsicInst>(CI), CtxI, DT, TLI))
+      return true;
+
     const Function *Callee = CI->getCalledFunction();
 
     // The called function could have undefined behavior or side-effects, even

@@ -49,6 +49,10 @@
 
 using namespace llvm;
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
+
 #define DEBUG_TYPE "memory-builtins"
 
 enum AllocType : uint8_t {
@@ -360,6 +364,9 @@ bool llvm::isRemovableAlloc(const CallBase *CB, const TargetLibraryInfo *TLI) {
 
   // Historically we've treated the C family allocation routines and operator
   // new as removable
+  if (CJPipeline && CB->getCalledFunction() &&
+      CB->getCalledFunction()->hasFnAttribute("cj-heapmalloc"))
+    return true;
   return isAllocLikeFn(CB, TLI);
 }
 

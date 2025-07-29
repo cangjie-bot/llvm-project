@@ -838,6 +838,13 @@ enum NodeType {
   FP_TO_SINT_SAT,
   FP_TO_UINT_SAT,
 
+  /// Return data of float state register
+  /// if last bit of result is 1, it means float conversion has an exception
+  GET_FP_STATE,
+
+  /// Set float state to zero
+  RESET_FP_STATE,
+
   /// X = FP_ROUND(Y, TRUNC) - Rounding 'Y' from a larger floating point type
   /// down to the precision of the destination VT.  TRUNC is a flag, which is
   /// always an integer that is zero or one.  If TRUNC is 0, this is a

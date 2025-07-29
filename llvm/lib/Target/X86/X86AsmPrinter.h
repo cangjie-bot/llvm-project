@@ -10,6 +10,7 @@
 #define LLVM_LIB_TARGET_X86_X86ASMPRINTER_H
 
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/CJMetadata.h"
 #include "llvm/CodeGen/FaultMaps.h"
 #include "llvm/CodeGen/StackMaps.h"
 
@@ -28,6 +29,7 @@ class LLVM_LIBRARY_VISIBILITY X86AsmPrinter : public AsmPrinter {
   const X86Subtarget *Subtarget = nullptr;
   StackMaps SM;
   FaultMaps FM;
+  CJMetadataInfo CMI;
   std::unique_ptr<MCCodeEmitter> CodeEmitter;
   bool EmitFPOData = false;
   bool ShouldEmitWeakSwiftAsyncExtendedFramePointerFlags = false;
@@ -129,7 +131,28 @@ public:
 
   void emitEndOfAsmFile(Module &M) override;
 
+  void emitStackCmp(const MachineInstr &MI);
+
+  void emitCJStackCheck(const MachineInstr &MI) override;
+
+  int emitSOFECall(const MachineInstr &MI) override;
+
+  int emitStackGrow(const MachineInstr &MI) override;
+
+  void emitCangjieSafepoint(const MachineInstr &MI) override;
+
+  int emitSafePointDirectCall(unsigned Index) override;
+
+  void emitMetadataAddress() override;
+
+  void emitGcStateCheck() override;
+
   void emitInstruction(const MachineInstr *MI) override;
+
+  void tryDoAdaptionForFP16InCJ(const MachineInstr *MI, bool &IsTruncToFP16,
+                                bool IsWindows);
+
+  void reloadSPForEpilogue(MachineFunction &MF) override;
 
   void emitBasicBlockEnd(const MachineBasicBlock &MBB) override;
 
@@ -152,6 +175,42 @@ public:
   bool shouldEmitWeakSwiftAsyncExtendedFramePointerFlags() const override {
     return ShouldEmitWeakSwiftAsyncExtendedFramePointerFlags;
   }
+  void emitGetCJTLSData(int64_t Offset);
+
+private:
+  void emitCangjieCallStubInstImpl(const MachineInstr *MI, const Function *F,
+                                   const MachineOperand &MOSym,
+                                   unsigned Opcode) override;
+  void extendStackAndInsertFFIInfoForJmp(MCInst &MovGVToR11,
+                                         unsigned CallFrameSize);
+
+  struct ParamForEmitNewObj {
+    ParamForEmitNewObj(const MachineInstr *MIInit,
+                       const MachineOperand &MOSymInit, unsigned int OpcodeInit,
+                       X86MCInstLower &MCILoweing, MCInst &CallSlow,
+                       StringRef FastFuncName)
+        : MI(MIInit), MOSym(MOSymInit), Opcode(OpcodeInit),
+          MCInstLowering(MCILoweing), CallNewObjSlowPath(CallSlow),
+          FastFuncName(FastFuncName) {}
+    ~ParamForEmitNewObj() = default;
+    const MachineInstr *MI;
+    const MachineOperand &MOSym;
+    unsigned int Opcode;
+    X86MCInstLower &MCInstLowering;
+    MCInst &CallNewObjSlowPath;
+    StringRef FastFuncName;
+  };
+
+  void emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param);
+  void emitMccNewObjectFastPath(const MachineInstr *MI,
+                                const MachineOperand &MOSym,
+                                unsigned Opcode) override;
+  void emitCJNewArrayFastPath(const MachineInstr &MI,
+                              const MachineOperand &MOSym) override;
+  void emitCJThrowException(const MachineInstr *MI,
+                            const MachineOperand &MOSym,
+                            unsigned Opcode) override;
+  void emitGetCJThreadId() override;
 };
 
 } // end namespace llvm

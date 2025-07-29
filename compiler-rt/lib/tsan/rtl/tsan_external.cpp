@@ -12,7 +12,7 @@
 #include "tsan_rtl.h"
 #include "sanitizer_common/sanitizer_ptrauth.h"
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 #  include "tsan_interceptors.h"
 #endif
 
@@ -58,7 +58,7 @@ uptr TagFromShadowStackFrame(uptr pc) {
   return (TagData *)pc_ptr - GetTagData(0);
 }
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 
 void ExternalAccess(void *addr, uptr caller_pc, void *tag, AccessType typ) {
   CHECK_LT(tag, atomic_load(&used_tags, memory_order_relaxed));

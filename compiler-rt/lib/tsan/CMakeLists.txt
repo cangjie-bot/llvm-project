@@ -22,6 +22,7 @@ if (TSAN_USE_OLD_RUNTIME)
 else()
   add_subdirectory(rtl)
 endif()
+add_subdirectory(cangjie)
 
 # Build libcxx instrumented with TSan.
 if(COMPILER_RT_LIBCXX_PATH AND

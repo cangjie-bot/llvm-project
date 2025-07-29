@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86FrameLowering.h"
+#include "CangjieDemangle.h"
 #include "MCTargetDesc/X86MCTargetDesc.h"
 #include "X86InstrBuilder.h"
 #include "X86InstrInfo.h"
@@ -41,6 +42,11 @@
 STATISTIC(NumFrameLoopProbe, "Number of loop stack probes used in prologue");
 STATISTIC(NumFrameExtraProbe,
           "Number of extra stack probes generated in prologue");
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> CangjieJIT;
+}
 
 using namespace llvm;
 
@@ -101,7 +107,8 @@ bool X86FrameLowering::hasFP(const MachineFunction &MF) const {
           MF.getInfo<X86MachineFunctionInfo>()->hasPreallocatedCall() ||
           MF.callsUnwindInit() || MF.hasEHFunclets() || MF.callsEHReturn() ||
           MFI.hasStackMap() || MFI.hasPatchPoint() ||
-          (isWin64Prologue(MF) && MFI.hasCopyImplyingStackAdjustment()));
+          (isWin64Prologue(MF) && MFI.hasCopyImplyingStackAdjustment()) ||
+          CangjieJIT);
 }
 
 static unsigned getSUBriOpcode(bool IsLP64, int64_t Imm) {
@@ -221,12 +228,17 @@ void X86FrameLowering::emitSPUpdate(MachineBasicBlock &MBB,
                                     int64_t NumBytes, bool InEpilogue) const {
   bool isSub = NumBytes < 0;
   uint64_t Offset = isSub ? -NumBytes : NumBytes;
-  MachineInstr::MIFlag Flag =
-      isSub ? MachineInstr::FrameSetup : MachineInstr::FrameDestroy;
+
+  MachineFunction &MF = *MBB.getParent();
+  bool CangjieFunc = MF.getFunction().hasCangjieGC();
+  // Instrucitons generated in Prologue should not be recognized as
+  // FrameDestroy instructions in Cangjie.
+  MachineInstr::MIFlag Flag = (isSub || (CangjieFunc && !InEpilogue))
+                                  ? MachineInstr::FrameSetup
+                                  : MachineInstr::FrameDestroy;
 
   uint64_t Chunk = (1LL << 31) - 1;
 
-  MachineFunction &MF = *MBB.getParent();
   const X86Subtarget &STI = MF.getSubtarget<X86Subtarget>();
   const X86TargetLowering &TLI = *STI.getTargetLowering();
   const bool EmitInlineStackProbe = TLI.hasInlineStackProbe(MF);
@@ -1470,10 +1482,20 @@ bool X86FrameLowering::needsDwarfCFI(const MachineFunction &MF) const {
   - for 32-bit code, substitute %e?? registers for %r??
 */
 
+const std::vector<MCPhysReg>
+X86FrameLowering::getArgRegs(const MachineFunction &MF) const {
+  if (isWin64Prologue(MF)) {
+    return { X86::RCX, X86::RDX, X86::R8, X86::R9 };
+  } else {
+    return { X86::RDI, X86::RSI, X86::RDX, X86::RCX, X86::R8, X86::R9 };
+  }
+}
+
 void X86FrameLowering::emitPrologue(MachineFunction &MF,
                                     MachineBasicBlock &MBB) const {
   assert(&STI == &MF.getSubtarget<X86Subtarget>() &&
          "MF used frame lowering for wrong subtarget");
+
   MachineBasicBlock::iterator MBBI = MBB.begin();
   MachineFrameInfo &MFI = MF.getFrameInfo();
   const Function &Fn = MF.getFunction();
@@ -1502,7 +1524,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
           ? Register(getX86SubSuperRegister(FramePtr, 64)) : FramePtr;
   Register BasePtr = TRI->getBaseRegister();
   bool HasWinCFI = false;
-
+  bool CangjieFunc = Fn.hasCangjieGC();
   // Debug location must be unknown since the first debug location is used
   // to determine the end of the prologue.
   DebugLoc DL;
@@ -1557,6 +1579,15 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     emitSPUpdate(MBB, MBBI, DL, -8, /*InEpilogue=*/false);
   }
 
+  unsigned CJAdjustSize = 0;
+  if (STI.isTargetMachO()) {
+    // 2: Need 2 slotsize in macos: StorePC and .Lmethod_desc.xxx
+    CJAdjustSize = SlotSize * 2;
+  } else if (STI.isTargetLinux()) {
+    // For StorePC in Linux
+    CJAdjustSize = SlotSize;
+  }
+
   // If this is x86-64 and the Red Zone is not disabled, if we are a leaf
   // function, and use up to 128 bytes of stack space, don't have a frame
   // pointer, calls, or dynamic alloca then we do not need to adjust the
@@ -1568,12 +1599,32 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       !EmitStackProbeCall &&                   // No stack probes.
       !MFI.hasCopyImplyingStackAdjustment() && // Don't push and pop.
       !MF.shouldSplitStack()) {                // Regular stack
-    uint64_t MinSize =
-        X86FI->getCalleeSavedFrameSize() - X86FI->getTCReturnAddrDelta();
-    if (HasFP) MinSize += SlotSize;
+    // In the Cangjie function, a slotsize is required to save the 'rip' value.
+    // The MinSize needs add it.
+    uint64_t MinSize = X86FI->getCalleeSavedFrameSize() -
+                       X86FI->getTCReturnAddrDelta();
+    if (CangjieFunc) {
+      MinSize += CJAdjustSize;
+    }
+
+    if (HasFP)
+      MinSize += SlotSize;
     X86FI->setUsesRedZone(MinSize > 0 || StackSize > 0);
     StackSize = std::max(MinSize, StackSize > 128 ? StackSize - 128 : 0);
     MFI.setStackSize(StackSize);
+  }
+
+  // 2147483648: 2*1024*1024*1024, 2GB
+  if (CJPipeline && StackSize >= 2147483648) {
+    auto D = Cangjie::Demangle(MF.getName().str());
+    std::string DemangledName =
+        D.GetPkgName() + std::string(D.GetPkgName().empty() ? "" : "::") +
+        D.GetFullName();
+    report_fatal_error("The stacksize of " + Twine(DemangledName) +
+                           " exceeds cangjie max stacksize(2GB).\nCompilation "
+                           "stopped! Please check the implementation of " +
+                           Twine(DemangledName) + "!",
+                       false);
   }
 
   // Insert stack pointer adjustment for later moving of return addr.  Only
@@ -1620,12 +1671,16 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     MBB.addLiveIn(Establisher);
   }
 
+  // Calculate required stack adjustment.
+  uint64_t FrameSize = StackSize - SlotSize;
   if (HasFP) {
     assert(MF.getRegInfo().isReserved(MachineFramePtr) && "FP reserved");
 
-    // Calculate required stack adjustment.
-    uint64_t FrameSize = StackSize - SlotSize;
-    // If required, include space for extra hidden slot for stashing base pointer.
+    if (!IsWin64Prologue && CangjieFunc) {
+      FrameSize -= CJAdjustSize;
+    }
+    // If required, include space for extra hidden slot for stashing base
+    // pointer.
     if (X86FI->getRestoreBasePointer())
       FrameSize += SlotSize;
 
@@ -1733,6 +1788,11 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
               .addImm(0)
               .setMIFlag(MachineInstr::FrameSetup);
         }
+        if (CangjieFunc) {
+          // Use PUSHPC64 to store method info to stack slot.
+          // see PUSHPC64 in X86InstrCompiler.td.
+          BuildMI(MBB, MBBI, DL, TII.get(X86::PUSHPC64)).addImm(0);
+        }
       }
     }
   } else {
@@ -1808,6 +1868,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
 
   // Adjust stack pointer: ESP -= numbytes.
 
+  bool HasProcessSOFE = false;
+
   // Windows and cygwin/mingw require a prologue helper routine when allocating
   // more than 4K bytes on the stack.  Windows uses __chkstk and cygwin/mingw
   // uses __alloca.  __alloca and the 32-bit version of __chkstk will probe the
@@ -1825,6 +1887,9 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
 
     // Check whether EAX is livein for this block.
     bool isEAXAlive = isEAXLiveIn(MBB);
+
+    MBBI = preCJStackCheck(MF, MBBI, NumBytes, false);
+    HasProcessSOFE = true;
 
     if (isEAXAlive) {
       if (Is64Bit) {
@@ -1874,6 +1939,11 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     emitSPUpdate(MBB, MBBI, DL, -(int64_t)NumBytes, /*InEpilogue=*/false);
   }
 
+  // Prepare for SOFE
+  if (!HasProcessSOFE) {
+    MBBI = preCJStackCheck(MF, MBBI, FrameSize);
+  }
+
   if (NeedsWinCFI && NumBytes) {
     HasWinCFI = true;
     BuildMI(MBB, MBBI, DL, TII.get(X86::SEH_StackAlloc))
@@ -1917,12 +1987,15 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     // this calculation on the incoming establisher, which holds the value of
     // RSP from the parent frame at the end of the prologue.
     SEHFrameOffset = calculateSetFPREG(ParentFrameNumBytes);
-    if (SEHFrameOffset)
+    if (SEHFrameOffset) {
       addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::LEA64r), FramePtr),
                    SPOrEstablisher, false, SEHFrameOffset);
-    else
+    } else {
       BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rr), FramePtr)
           .addReg(SPOrEstablisher);
+    }
+    if (CangjieFunc)
+      MFI.setWin64FramePointerOffset(FrameSize - SEHFrameOffset);
 
     // If this is not a funclet, emit the CFI describing our frame pointer.
     if (NeedsWinCFI && !IsFunclet) {
@@ -2195,6 +2268,16 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
                         !MF.getTarget().getTargetTriple().isOSWindows()) &&
                        MF.needsFrameMoves();
 
+  bool CangjieFunc = MF.getFunction().hasCangjieGC();
+  bool NeedCangjiePCSlot = CangjieFunc && CSSize != 0 && !IsWin64Prologue;
+  unsigned CJSlotSize;
+  if (STI.isTargetMachO()) {
+    // 2: Need 2 slotsize in macos: StorePC and .Lmethod_desc.xxx
+    CJSlotSize = SlotSize * 2;
+  } else {
+    CJSlotSize = SlotSize;
+  }
+
   if (IsFunclet) {
     assert(HasFP && "EH funclets without FP not yet implemented");
     NumBytes = getWinEHFuncletFrameSize(MF);
@@ -2202,7 +2285,9 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     // Calculate required stack adjustment.
     uint64_t FrameSize = StackSize - SlotSize;
     NumBytes = FrameSize - CSSize - TailCallArgReserveSize;
-
+    if (NeedCangjiePCSlot) {
+      NumBytes -= CJSlotSize;
+    }
     // Callee-saved registers were pushed on stack before the stack was
     // realigned.
     if (TRI->hasStackRealignment(MF) && !IsWin64Prologue)
@@ -2215,6 +2300,9 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
   // AfterPop is the position to insert .cfi_restore.
   MachineBasicBlock::iterator AfterPop = MBBI;
   if (HasFP) {
+    if (NeedCangjiePCSlot) {
+      emitSPUpdate(MBB, MBBI, DL, CJSlotSize, true);
+    }
     if (X86FI->hasSwiftAsyncContext()) {
       // Discard the context.
       int Offset = 16 + mergeSPUpdates(MBB, MBBI, true);
@@ -2279,7 +2367,16 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     DL = MBBI->getDebugLoc();
   // If there is an ADD32ri or SUB32ri of ESP immediately before this
   // instruction, merge the two instructions.
-  if (NumBytes || MFI.hasVarSizedObjects())
+  // We do not want this merge for Cangjie functions, cause it will break our
+  // epilogue. Consider the following snippet:
+  //     addq $8, %rsp
+  // .L_epilogue
+  //     addq $8, %rsp
+  //     popq %rbp
+  // We do not want the two addq to be merge into
+  // .L_epilogue
+  //     addq $16, %rsp
+  if ((NumBytes || MFI.hasVarSizedObjects()) && !CangjieFunc)
     NumBytes += mergeSPUpdates(MBB, MBBI, true);
 
   // If dynamic alloca is used, then reset esp to point to the last callee-saved
@@ -2291,9 +2388,9 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     if (TRI->hasStackRealignment(MF))
       MBBI = FirstCSPop;
     unsigned SEHFrameOffset = calculateSetFPREG(SEHStackAllocAmt);
-    uint64_t LEAAmount =
-        IsWin64Prologue ? SEHStackAllocAmt - SEHFrameOffset : -CSSize;
-
+    uint64_t LEAAmount = IsWin64Prologue
+                             ? SEHStackAllocAmt - SEHFrameOffset
+                             : NeedCangjiePCSlot ? -CSSize - CJSlotSize : -CSSize;
     if (X86FI->hasSwiftAsyncContext())
       LEAAmount -= 16;
 
@@ -2304,16 +2401,21 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     // 'mov %FramePtr, %rsp' will not be recognized as an epilogue sequence.
     // However, we may use this sequence if we have a frame pointer because the
     // effects of the prologue can safely be undone.
+    MachineInstrBuilder MIRSP;
     if (LEAAmount != 0) {
       unsigned Opc = getLEArOpcode(Uses64BitFramePtr);
-      addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(Opc), StackPtr),
-                   FramePtr, false, LEAAmount);
+      MIRSP = BuildMI(MBB, MBBI, DL, TII.get(Opc), StackPtr);
+      addRegOffset(MIRSP, FramePtr, false, LEAAmount);
       --MBBI;
     } else {
       unsigned Opc = (Uses64BitFramePtr ? X86::MOV64rr : X86::MOV32rr);
-      BuildMI(MBB, MBBI, DL, TII.get(Opc), StackPtr)
-        .addReg(FramePtr);
+      MIRSP = BuildMI(MBB, MBBI, DL, TII.get(Opc), StackPtr).addReg(FramePtr);
       --MBBI;
+    }
+    if (CangjieFunc) {
+      // If we generate code for cangjie, mark the 'rsp' register recovery
+      // instruction as an epilogue instruction.
+      MIRSP.setMIExtFlag(MachineInstr::EpilogueIns);
     }
   } else if (NumBytes) {
     // Adjust stack pointer back: ESP += numbytes.
@@ -2375,6 +2477,29 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
   // Emit tilerelease for AMX kernel.
   if (X86FI->hasVirtualTileReg())
     BuildMI(MBB, Terminator, DL, TII.get(X86::TILERELEASE));
+}
+
+StackOffset X86FrameLowering::getFrameIndexRefForCJ(const MachineFunction &MF,
+                                                    int FI,
+                                                    Register &FrameReg) const {
+  if (MF.getTarget().getMCAsmInfo()->usesWindowsCFI()) {
+    const MachineFrameInfo &MFI = MF.getFrameInfo();
+
+    bool IsFixed = MFI.isFixedObjectIndex(FI);
+    // We can't calculate offset from frame pointer if the stack is realigned,
+    // so enforce usage of stack/base pointer.  The base pointer is used when we
+    // have dynamic allocas in addition to dynamic realignment.
+    if (TRI->hasBasePointer(MF))
+      FrameReg = IsFixed ? TRI->getFramePtr() : TRI->getBaseRegister();
+    else if (TRI->hasStackRealignment(MF))
+      FrameReg = IsFixed ? TRI->getFramePtr() : TRI->getStackRegister();
+    else
+      FrameReg = TRI->getFrameRegister(MF);
+
+    int Offset = MFI.getObjectOffset(FI) - getOffsetOfLocalArea();
+    return StackOffset::getFixed(Offset + 8); // 8: Skip the saved EBP.
+  }
+  return getFrameIndexReference(MF, FI, FrameReg);
 }
 
 StackOffset X86FrameLowering::getFrameIndexReference(const MachineFunction &MF,
@@ -2605,6 +2730,17 @@ bool X86FrameLowering::assignCalleeSavedSpillSlots(
   }
 
   if (hasFP(MF)) {
+    bool IsWin64 = MF.getTarget().getMCAsmInfo()->usesWindowsCFI();
+    if (MF.getFunction().hasCangjieGC() && !IsWin64) {
+      if (STI.isTargetMachO()) {
+        // 2: Need 2 slotsize in macos: StorePC and .Lmethod_desc.xxx
+        SpillSlotOffset -= SlotSize * 2;
+        MFI.CreateFixedSpillStackObject(SlotSize * 2, SpillSlotOffset);
+      } else {
+        SpillSlotOffset -= SlotSize;
+        MFI.CreateFixedSpillStackObject(SlotSize, SpillSlotOffset);
+      }
+    }
     // emitPrologue always spills frame register the first thing.
     SpillSlotOffset -= SlotSize;
     MFI.CreateFixedSpillStackObject(SlotSize, SpillSlotOffset);

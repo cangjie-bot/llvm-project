@@ -1336,8 +1336,10 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   if (TM.Options.EnableFastISel) {
     LLVM_DEBUG(dbgs() << "Enabling fast-isel\n");
     FastIS = TLI->createFastISel(*FuncInfo, LibInfo);
-    if (FastIS)
+    if (FastIS) {
       FastIS->useInstrRefDebugInfo(UseInstrRefDebugInfo);
+      SDB->StatepointLowering.setIsFastISel(true);
+    }
   }
 
   ReversePostOrderTraversal<const Function*> RPOT(&Fn);
@@ -1492,7 +1494,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
         // We cannot separate out GCrelocates to their own blocks since we need
         // to keep track of gc-relocates for a particular gc-statepoint. This is
         // done by SelectionDAGBuilder::LowerAsSTATEPOINT, called before
-        // visitGCRelocate.
+        // visitRelocate.
         if (isa<CallInst>(Inst) && !isa<GCStatepointInst>(Inst) &&
             !isa<GCRelocateInst>(Inst) && !isa<GCResultInst>(Inst)) {
           OptimizationRemarkMissed R("sdagisel", "FastISelFailure",

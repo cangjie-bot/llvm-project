@@ -42,6 +42,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
@@ -680,7 +681,6 @@ ModRefInfo AAResults::getModRefInfo(const Instruction *I,
   }
 
   const MemoryLocation &Loc = OptLoc.value_or(MemoryLocation());
-
   switch (I->getOpcode()) {
   case Instruction::VAArg:
     return getModRefInfo((const VAArgInst *)I, Loc, AAQIP);

@@ -1187,7 +1187,7 @@ const char *SBFrame::GetFunctionName() const {
 
         if (name == nullptr) {
           if (sc.function)
-            name = sc.function->GetName().GetCString();
+            name = sc.function->GetName(&sc).GetCString();
         }
 
         if (name == nullptr) {
@@ -1230,7 +1230,7 @@ const char *SBFrame::GetDisplayFunctionName() {
 
         if (name == nullptr) {
           if (sc.function)
-            name = sc.function->GetDisplayName().GetCString();
+            name = sc.function->GetDisplayName(&sc).GetCString();
         }
 
         if (name == nullptr) {

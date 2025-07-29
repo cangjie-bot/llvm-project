@@ -739,7 +739,7 @@ Supported Architectures
 =======================
 
 Support for statepoint generation requires some code for each backend.
-Today, only Aarch64 and X86_64 are supported.
+Today, only AArch64 and X86_64 are supported.
 
 .. _OpenWork:
 

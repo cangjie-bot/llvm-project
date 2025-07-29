@@ -37,6 +37,11 @@
 
 using namespace llvm;
 
+static cl::opt<bool>
+    EnableTruncatedProfile("enable-truncated-profile", cl::init(false),
+                           cl::Hidden,
+                           cl::desc("enable merging truncated profile data"));
+
 // Extracts the variant information from the top 8 bits in the version and
 // returns an enum specifying the variants present.
 static InstrProfKind getProfileKindFromVersion(uint64_t Version) {
@@ -519,6 +524,8 @@ Error RawInstrProfReader<IntPtrT>::readValueProfilingData(
     InstrProfRecord &Record) {
   Record.clearValueData();
   CurValueDataSize = 0;
+  if (EnableTruncatedProfile)
+    return success();
   // Need to match the logic in value profile dumper code in compiler-rt:
   uint32_t NumValueKinds = 0;
   for (uint32_t I = 0; I < IPVK_Last + 1; I++)

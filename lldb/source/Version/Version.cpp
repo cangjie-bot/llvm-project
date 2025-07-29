@@ -4,6 +4,12 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+//
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Version/Version.h"
@@ -27,32 +33,17 @@ static const char *GetLLDBRevision() {
 #endif
 }
 
-static const char *GetLLDBRepository() {
-#ifdef LLDB_REPOSITORY
-  return LLDB_REPOSITORY;
-#else
-  return nullptr;
-#endif
-}
-
 const char *lldb_private::GetVersion() {
   static std::string g_version_str;
 
   if (g_version_str.empty()) {
     const char *lldb_version = GetLLDBVersion();
-    const char *lldb_repo = GetLLDBRepository();
     const char *lldb_rev = GetLLDBRevision();
     g_version_str += lldb_version;
-    if (lldb_repo || lldb_rev) {
+    if (lldb_rev) {
       g_version_str += " (";
-      if (lldb_repo)
-        g_version_str += lldb_repo;
-      if (lldb_repo && lldb_rev)
-        g_version_str += " ";
-      if (lldb_rev) {
-        g_version_str += "revision ";
-        g_version_str += lldb_rev;
-      }
+      g_version_str += "revision ";
+      g_version_str += lldb_rev;
       g_version_str += ")";
     }
 
@@ -67,6 +58,7 @@ const char *lldb_private::GetVersion() {
       g_version_str += "\n  llvm revision ";
       g_version_str += llvm_rev;
     }
+    g_version_str += "\n  cangjie 1.0.0 ";
   }
 
   return g_version_str.c_str();

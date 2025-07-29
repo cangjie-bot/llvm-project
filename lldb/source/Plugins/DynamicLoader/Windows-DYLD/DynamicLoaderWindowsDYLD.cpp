@@ -174,7 +174,7 @@ ThreadPlanSP
 DynamicLoaderWindowsDYLD::GetStepThroughTrampolinePlan(Thread &thread,
                                                        bool stop) {
   auto arch = m_process->GetTarget().GetArchitecture();
-  if (arch.GetMachine() != llvm::Triple::x86) {
+  if (arch.GetMachine() != llvm::Triple::x86 && arch.GetMachine() != llvm::Triple::x86_64) {
     return ThreadPlanSP();
   }
 
@@ -204,7 +204,9 @@ DynamicLoaderWindowsDYLD::GetStepThroughTrampolinePlan(Thread &thread,
 
   ExecutionContext exe_ctx(m_process->GetTarget());
   if (first_insn == nullptr || second_insn == nullptr ||
-      strcmp(first_insn->GetMnemonic(&exe_ctx), "jmpl") != 0 ||
+      (strcmp(first_insn->GetMnemonic(&exe_ctx), "jmpl") != 0 &&
+      strcmp(first_insn->GetMnemonic(&exe_ctx), "jmpq") != 0 &&
+      strcmp(first_insn->GetMnemonic(&exe_ctx), "jmp") != 0) ||
       strcmp(second_insn->GetMnemonic(&exe_ctx), "nop") != 0) {
     return ThreadPlanSP();
   }

@@ -485,6 +485,16 @@ static morder convert_morder(morder mo) {
   return (morder)(mo & 0x7fff);
 }
 
+#if SANITIZER_CJ
+#  define ATOMIC_IMPL(func, ...)                                                              \
+  do {                                                                                        \
+    ThreadState *const thr = cur_thread();                                                    \
+    if (UNLIKELY(!thr || thr->ignore_sync || thr->ignore_interceptors))   \
+      return NoTsanAtomic##func(__VA_ARGS__);                                                 \
+    mo = convert_morder(mo);                                                                  \
+    return Atomic##func(thr, GET_CALLER_PC(), __VA_ARGS__);                                   \
+  } while (0)
+#else
 #  define ATOMIC_IMPL(func, ...)                                \
     ThreadState *const thr = cur_thread();                      \
     ProcessPendingSignals(thr);                                 \
@@ -492,6 +502,7 @@ static morder convert_morder(morder mo) {
       return NoTsanAtomic##func(__VA_ARGS__);                   \
     mo = convert_morder(mo);                                    \
     return Atomic##func(thr, GET_CALLER_PC(), __VA_ARGS__);
+#endif
 
 extern "C" {
 SANITIZER_INTERFACE_ATTRIBUTE

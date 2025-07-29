@@ -28,6 +28,7 @@ namespace llvm {
 class Argument final : public Value {
   Function *Parent;
   unsigned ArgNo;
+  uint64_t EscapeArgInfo;
 
   friend class Function;
   void setParent(Function *parent);
@@ -48,6 +49,14 @@ public:
     return ArgNo;
   }
 
+  /// Return arg escapeInfo to other param or escape global.
+  /// highest bit represent escape global and others escape to ArgNo of bit set.
+  uint64_t getEscapeInfo() const {
+    assert(Parent && "can't get number of unparented arg.");
+    return EscapeArgInfo;
+  }
+
+  void setEscapeInfo(uint64_t EscapeInfo) { EscapeArgInfo = EscapeInfo; }
   /// Return true if this argument has the nonnull attribute. Also returns true
   /// if at least one byte is known to be dereferenceable and the pointer is in
   /// addrspace(0).

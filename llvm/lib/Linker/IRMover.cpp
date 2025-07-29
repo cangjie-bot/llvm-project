@@ -30,6 +30,18 @@
 #include <utility>
 using namespace llvm;
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
+
+static StringRef getTypeNamePrefix(StringRef Name) {
+  size_t DotPos = Name.rfind('.');
+  return (DotPos == 0 || DotPos == StringRef::npos || Name.back() == '.' ||
+          !isdigit(static_cast<unsigned char>(Name[DotPos + 1])))
+         ? Name
+         : Name.substr(0, DotPos);
+}
+
 //===----------------------------------------------------------------------===//
 // TypeMap implementation.
 //===----------------------------------------------------------------------===//
@@ -38,6 +50,12 @@ namespace {
 class TypeMapTy : public ValueMapTypeRemapper {
   /// This is a mapping from a source type to a destination type to use.
   DenseMap<Type *, Type *> MappedTypes;
+
+  /// This is a mapping from a source type to a destination type to use.
+  TypeToTypeMapTy MappedStructType;
+
+  /// Buffer to hold StringRefs.
+  BumpPtrAllocator Alloc;
 
   /// When checking to see if two subgraphs are isomorphic, we speculatively
   /// add types to MappedTypes, but keep track of them here in case we need to
@@ -78,6 +96,45 @@ public:
     return cast<FunctionType>(get((Type *)T));
   }
 
+  void addMappedStructType(StringRef OldStr, StringRef NewStr) {
+    StringRef OldStrc = OldStr.copy(Alloc);
+    StringRef NewStrc = NewStr.copy(Alloc);
+    MappedStructType[OldStrc] = NewStrc;
+  }
+
+  void mapMetadata(LLVMContext &C, Value *V) override {
+    SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;
+    if (auto *Global = dyn_cast<GlobalVariable>(V)) {
+      Global->getAllMetadata(MDs);
+    } else if (auto *I = dyn_cast<Instruction>(V)) {
+      I->getAllMetadata(MDs);
+    } else {
+      llvm_unreachable("Unsupported types");
+    }
+
+    for (auto &MD : MDs) {
+      for (unsigned It = 0; It < MD.second->getNumOperands(); It++) {
+        auto *MDS = dyn_cast<MDString>(MD.second->getOperand(It));
+        if (MDS == nullptr) {
+          continue;
+        }
+        StringRef NewType = getMappedStructType(MDS->getString());
+        if (NewType.empty()) {
+          continue;
+        }
+        MD.second->replaceOperandWith(It, MDString::get(C, NewType));
+      }
+    }
+  }
+
+  StringRef getMappedStructType(StringRef OldStr) {
+    auto StrMap = MappedStructType.find(OldStr);
+    if (StrMap != MappedStructType.end()) {
+      return StrMap->second;
+    }
+    return "";
+  }
+
 private:
   Type *remapType(Type *SrcTy) override { return get(SrcTy); }
 
@@ -110,8 +167,18 @@ void TypeMapTy::addTypeMapping(Type *DstTy, Type *SrcTy) {
     // module, which are in fact the same.
     for (Type *Ty : SpeculativeTypes)
       if (auto *STy = dyn_cast<StructType>(Ty))
-        if (STy->hasName())
-          STy->setName("");
+        if (STy->hasName()) {
+          addMappedStructType(STy->getStructName(), remapType(STy)->getStructName());
+          // For many modules, maybe have the same type.
+          // For example, %ArrayLayout.Char.91 is the same as %ArrayLayout.Char.
+          // For %ArrayLayout.Char.91, do not need to set name,
+          // only save %ArrayLayout.Char.
+          if (!CJPipeline ||
+              (CJPipeline && getTypeNamePrefix(STy->getName()).size() !=
+                                 STy->getName().size())) {
+            STy->setName("");
+          }
+        }
   }
   SpeculativeTypes.clear();
   SpeculativeDstOpaqueTypes.clear();
@@ -329,8 +396,17 @@ Type *TypeMapTy::get(Type *Ty, SmallPtrSet<StructType *, 8> &Visited) {
 
     if (StructType *OldT =
             DstStructTypesSet.findNonOpaque(ElementTypes, IsPacked)) {
-      STy->setName("");
-      return *Entry = OldT;
+      addMappedStructType(STy->getName(), OldT->getName());
+      // For many modules, maybe have the same type.
+      // For example, %ArrayLayout.UInt8.90 is the same as %ArrayLayout.UInt8.
+      // For %ArrayLayout.UInt8.90, do not need to set name,
+      // only save %ArrayLayout.UInt8.
+      if (!CJPipeline ||
+          (CJPipeline &&
+           getTypeNamePrefix(STy->getName()).size() != STy->getName().size())) {
+        STy->setName("");
+        return *Entry = OldT;
+      }
     }
 
     if (!AnyChange) {
@@ -545,6 +621,8 @@ public:
   }
   ~IRLinker() { SharedMDs = std::move(*ValueMap.getMDMap()); }
 
+  // update global information
+  void mapGlobal(GlobalVariable &Global);
   Error run();
   Value *materialize(Value *V, bool ForIndirectSymbol);
 };
@@ -757,14 +835,6 @@ GlobalValue *IRLinker::copyGlobalValueProto(const GlobalValue *SGV,
   }
 
   return NewGV;
-}
-
-static StringRef getTypeNamePrefix(StringRef Name) {
-  size_t DotPos = Name.rfind('.');
-  return (DotPos == 0 || DotPos == StringRef::npos || Name.back() == '.' ||
-          !isdigit(static_cast<unsigned char>(Name[DotPos + 1])))
-             ? Name
-             : Name.substr(0, DotPos);
 }
 
 /// Loop over all of the linked values to compute type mappings.  For example,
@@ -1517,6 +1587,54 @@ static std::string adjustInlineAsm(const std::string &InlineAsm,
   return InlineAsm;
 }
 
+static StringRef getOldTypeName(StringRef Name, bool &IsArray) {
+  size_t DotPos = Name.rfind('.');
+  size_t StarPos = Name.rfind('*');
+  if (StarPos == StringRef::npos) {
+    return Name.substr(0, DotPos);
+  }
+  if (StarPos >= DotPos) {
+    report_fatal_error("* is in the type of array,"
+                       "and the type must be the front of structKlass!");
+  }
+  IsArray = true;
+  return Name.substr(StarPos + 1, DotPos - StarPos - 1);
+}
+
+// For example, Global is 2*10*oldrecord.structKlass
+// OldName: oldrecord
+// MappedStructType: newrecord
+// SuffixName: .structKlass
+// NewName: 2*10*newrecord.structKlass
+void IRLinker::mapGlobal(GlobalVariable &Global) {
+  bool IsArray = false;
+  StringRef GVName = Global.getName();
+  StringRef OldName = getOldTypeName(GVName, IsArray);
+  StringRef MappedStructType;
+  if (!TypeMap.getMappedStructType(OldName).empty()) {
+    MappedStructType = TypeMap.getMappedStructType(OldName);
+  }
+  if (MappedStructType.empty()) {
+    return;
+  }
+  size_t DotPos = GVName.rfind('.');
+  StringRef SuffixName = GVName.substr(DotPos);
+  std::string NewName;
+  if (IsArray) {
+    NewName = (GVName.substr(0, GVName.rfind("*") + 1) + MappedStructType +
+               SuffixName)
+                  .str();
+  } else {
+    NewName = (MappedStructType + SuffixName).str();
+  }
+  GlobalVariable *NewGlobal = DstM.getGlobalVariable(NewName);
+  if (NewGlobal != nullptr) {
+    Global.replaceAllUsesWith(NewGlobal);
+  } else {
+    Global.setName(NewName);
+  }
+}
+
 Error IRLinker::run() {
   // Ensure metadata materialized before value mapping.
   if (SrcM->getMaterializer())
@@ -1637,6 +1755,18 @@ Error IRLinker::run() {
       auto *NewGV = dyn_cast<GlobalVariable>(NewValue->stripPointerCasts());
       if (NewGV)
         Globals.splice(Globals.end(), Globals, NewGV->getIterator());
+    }
+  }
+
+  for (auto &Global : Globals) {
+    TypeMap.mapMetadata(DstM.getContext(), &Global);
+    if (!Global.hasInitializer()) {
+      continue;
+    }
+    StringRef GlobalName = Global.getName();
+    if (GlobalName.endswith(".structKlass") ||
+        GlobalName.endswith(".uniqueAddr")) {
+      mapGlobal(Global);
     }
   }
 

@@ -138,6 +138,11 @@ public:
 
   void getOffsetOpcodes(const StackOffset &Offset,
                         SmallVectorImpl<uint64_t> &Ops) const override;
+
+  MCPhysReg getX8Register() const override;
+
+  const std::vector<MCPhysReg>
+  getArgRegs(const MachineFunction &MF) const override;
 };
 
 } // end namespace llvm

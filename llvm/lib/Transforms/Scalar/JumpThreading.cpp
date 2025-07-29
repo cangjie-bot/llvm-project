@@ -2908,6 +2908,10 @@ bool JumpThreadingPass::tryToUnfoldSelectInCurrBB(BasicBlock *BB) {
     Instruction *Term = SplitBlockAndInsertIfThen(Cond, SI, false);
     BasicBlock *SplitBB = SI->getParent();
     BasicBlock *NewBB = Term->getParent();
+    if (BB->getParent()->hasCangjieGC()) {
+      SplitBB->setName(BB->getName() + ".jumpthread");
+      NewBB->setName(BB->getName() + ".jumpthread");
+    }
     PHINode *NewPN = PHINode::Create(SI->getType(), 2, "", SI);
     NewPN->addIncoming(SI->getTrueValue(), Term->getParent());
     NewPN->addIncoming(SI->getFalseValue(), BB);

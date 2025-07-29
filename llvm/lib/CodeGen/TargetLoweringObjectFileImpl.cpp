@@ -593,6 +593,54 @@ static unsigned getEntrySizeForKind(SectionKind Kind) {
   }
 }
 
+static StringRef getCJSectionPrefixForGlobal(SectionKind Kind) {
+  assert((Kind.isCJMetaData() && !Kind.isCJMetadataInfo()) &&
+         "It is not a cangjie section Kind!");
+  if (Kind.isCJTypeInfo())
+    return ".cjmetadata.typeinfo";
+  if (Kind.isCJTypeTemplate())
+    return ".cjmetadata.typetemplate";
+  if (Kind.isCJTypeFields())
+    return ".cjmetadata.type.fields";
+  if (Kind.isCJGCTib())
+    return ".cjmetadata.gctib";
+  if (Kind.isCJMTable())
+    return ".cjmetadata.mtable";
+  if (Kind.isCJReflectPkgInfo())
+    return ".cjmetadata.reflect.pkginfo";
+  if (Kind.isCJReflectGV())
+    return ".cjmetadata.reflect.gv";
+  if (Kind.isCJInnerTypeExtensions())
+    return ".cjmetadata.innerty.eds";
+  if (Kind.isCJReflectGenericTI())
+    return ".cjmetadata.reflect.generic.ti";
+  llvm_unreachable("Unknown section kind");
+}
+
+static StringRef getCJMachOSectionPrefixForGlobal(SectionKind Kind) {
+  assert((Kind.isCJMetaData() && !Kind.isCJMetadataInfo()) &&
+         "It is not a cangjie section Kind!");
+  if (Kind.isCJTypeInfo())
+    return "__cjtypeinfo";
+  if (Kind.isCJTypeTemplate())
+    return "__cjtemplate";
+  if (Kind.isCJTypeFields())
+    return "__cj_fields";
+  if (Kind.isCJGCTib())
+    return "__cjgctib";
+  if (Kind.isCJMTable())
+    return "__cjmtable";
+  if (Kind.isCJReflectPkgInfo())
+    return "__cjref_pkginfo";
+  if (Kind.isCJReflectGV())
+    return "__cjref_gv";
+  if (Kind.isCJInnerTypeExtensions())
+    return "__cjinnerty_eds";
+  if (Kind.isCJReflectGenericTI())
+    return "__cjref_gi";
+  llvm_unreachable("Unknown section kind");
+}
+
 /// Return the section prefix name used by options FunctionsSections and
 /// DataSections.
 static StringRef getSectionPrefixForGlobal(SectionKind Kind) {
@@ -610,6 +658,8 @@ static StringRef getSectionPrefixForGlobal(SectionKind Kind) {
     return ".data";
   if (Kind.isReadOnlyWithRel())
     return ".data.rel.ro";
+  if (Kind.isCJMetaData())
+    return getCJSectionPrefixForGlobal(Kind);
   llvm_unreachable("Unknown section kind");
 }
 
@@ -618,6 +668,12 @@ getELFSectionNameForGlobal(const GlobalObject *GO, SectionKind Kind,
                            Mangler &Mang, const TargetMachine &TM,
                            unsigned EntrySize, bool UniqueSectionName) {
   SmallString<128> Name;
+  bool IsCJInitFunction = false;
+  if (auto *F = dyn_cast<Function>(GO)) {
+    if (F->hasFnAttribute("cjinit")) {
+        IsCJInitFunction = true;
+    }
+  }
   if (Kind.isMergeableCString()) {
     // We also need alignment here.
     // FIXME: this is getting the alignment of the character, not the
@@ -630,6 +686,8 @@ getELFSectionNameForGlobal(const GlobalObject *GO, SectionKind Kind,
   } else if (Kind.isMergeableConst()) {
     Name = ".rodata.cst";
     Name += utostr(EntrySize);
+  } else if (IsCJInitFunction) {
+    Name = ".cjinit_function";
   } else {
     Name = getSectionPrefixForGlobal(Kind);
   }
@@ -763,9 +821,14 @@ static MCSection *selectExplicitSectionGlobal(
       SectionName = Attrs.getAttribute("data-section").getValueAsString();
     }
   }
-  const Function *F = dyn_cast<Function>(GO);
-  if (F && F->hasFnAttribute("implicit-section-name")) {
-    SectionName = F->getFnAttribute("implicit-section-name").getValueAsString();
+
+  if (const auto *F = dyn_cast<Function>(GO)) {
+    if (F->hasFnAttribute("implicit-section-name")) {
+      SectionName =
+          F->getFnAttribute("implicit-section-name").getValueAsString();
+    } else if (F->hasFnAttribute("cjinit")) {
+      SectionName = ".cjinit_function";
+    }
   }
 
   // Infer section flags from the section name if we can.
@@ -1249,8 +1312,12 @@ MCSection *TargetLoweringObjectFileMachO::getExplicitSectionGlobal(
   StringRef SectionName = GO->getSection();
 
   const Function *F = dyn_cast<Function>(GO);
-  if (F && F->hasFnAttribute("implicit-section-name")) {
-    SectionName = F->getFnAttribute("implicit-section-name").getValueAsString();
+  if (F) {
+    if (F->hasFnAttribute("implicit-section-name")) {
+      SectionName = F->getFnAttribute("implicit-section-name").getValueAsString();
+    } else if (F->hasFnAttribute("cjinit")) {
+      SectionName = "__TEXT,__cjinit_func,regular,pure_instructions";
+    }
   }
 
   // Parse the section specifier and create it if valid.
@@ -1300,6 +1367,10 @@ MCSection *TargetLoweringObjectFileMachO::SelectSectionForGlobal(
 
   if (Kind.isText())
     return GO->isWeakForLinker() ? TextCoalSection : TextSection;
+
+  if (Kind.isCJMetaData())
+    return getContext().getMachOSection("__CJ_METADATA",
+        getCJMachOSectionPrefixForGlobal(Kind), 0, SectionKind::getReadOnly());
 
   // If this is weak/linkonce, put this in a coalescable section, either in text
   // or data depending on if it is writable.
@@ -1618,6 +1689,11 @@ MCSection *TargetLoweringObjectFileCOFF::getExplicitSectionGlobal(
   int Selection = 0;
   unsigned Characteristics = getCOFFSectionFlags(Kind, TM);
   StringRef Name = GO->getSection();
+  if (const auto *F = dyn_cast<Function>(GO)) {
+    if (F->hasFnAttribute("cjinit")) {
+      Name = ".cjinit_function";
+    }
+  }
   StringRef COMDATSymName = "";
   if (GO->hasComdat()) {
     Selection = getSelectionForCOFF(GO);
@@ -1649,6 +1725,8 @@ static StringRef getCOFFSectionNameForUniqueGlobal(SectionKind Kind) {
     return ".tls$";
   if (Kind.isReadOnly() || Kind.isReadOnlyWithRel())
     return ".rdata";
+  if (Kind.isCJMetaData())
+    return getCJSectionPrefixForGlobal(Kind);
   return ".data";
 }
 
@@ -1713,6 +1791,14 @@ MCSection *TargetLoweringObjectFileCOFF::SelectSectionForGlobal(
 
   if (Kind.isReadOnly() || Kind.isReadOnlyWithRel())
     return ReadOnlySection;
+
+  if (Kind.isCJMetaData()) {
+    return getContext().getCOFFSection(getCOFFSectionNameForUniqueGlobal(Kind),
+                                       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                           COFF::IMAGE_SCN_MEM_READ |
+                                           COFF::IMAGE_SCN_MEM_WRITE,
+                                       SectionKind::getReadOnly());
+  }
 
   // Note: we claim that common symbols are put in BSSSection, but they are
   // really emitted with the magic .comm directive, which creates a symbol table

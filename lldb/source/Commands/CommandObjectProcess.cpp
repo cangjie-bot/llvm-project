@@ -107,6 +107,37 @@ protected:
   std::string m_new_process_action;
 };
 
+static void SetSigsegvForCangjie(ProcessSP process_sp) {
+  // Set SIGSEGV as default action PASS:true STOP:false NOTIFY:false for gc.
+  // Add "!" to pass_action is necessary according to lldb source code
+  bool stop_action = false;
+  bool pass_action = true;
+  bool notify_action = false;
+  UnixSignalsSP signals_sp = process_sp->GetUnixSignals();
+  int32_t signo = signals_sp->GetSignalNumberFromName("SIGSEGV");
+  if (signo != LLDB_INVALID_SIGNAL_NUMBER) {
+    signals_sp->SetShouldStop(signo, stop_action);
+    signals_sp->SetShouldSuppress(signo, !pass_action);
+    signals_sp->SetShouldNotify(signo, notify_action);
+  }
+}
+
+#if defined(__APPLE__)
+static void SetSigBusvForCangjie(ProcessSP process_sp) {
+  // Set SIGBUS as default action PASS:true STOP:false NOTIFY:false for macos
+  bool stop_action = false;
+  bool pass_action = true;
+  bool notify_action = false;
+  UnixSignalsSP signals_sp = process_sp->GetUnixSignals();
+  int32_t signo = signals_sp->GetSignalNumberFromName("SIGBUS");
+  if (signo != LLDB_INVALID_SIGNAL_NUMBER) {
+    signals_sp->SetShouldStop(signo, stop_action);
+    signals_sp->SetShouldSuppress(signo, !pass_action);
+    signals_sp->SetShouldNotify(signo, notify_action);
+  }
+}
+#endif
+
 // CommandObjectProcessLaunch
 #pragma mark CommandObjectProcessLaunch
 class CommandObjectProcessLaunch : public CommandObjectProcessLaunchOrAttach {
@@ -256,6 +287,10 @@ protected:
 
     if (error.Success()) {
       ProcessSP process_sp(target->GetProcessSP());
+      SetSigsegvForCangjie(process_sp);
+#if defined(__APPLE__)
+      SetSigBusvForCangjie(process_sp);
+#endif
       if (process_sp) {
         // There is a race condition where this thread will return up the call
         // stack to the main command handler and show an (lldb) prompt before
@@ -421,6 +456,10 @@ protected:
     if (error.Success()) {
       process_sp = target->GetProcessSP();
       if (process_sp) {
+        SetSigsegvForCangjie(process_sp);
+#if defined(__APPLE__)
+        SetSigBusvForCangjie(process_sp);
+#endif
         result.AppendMessage(stream.GetString());
         result.SetStatus(eReturnStatusSuccessFinishNoResult);
         result.SetDidChangeProcessState(true);

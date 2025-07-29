@@ -427,6 +427,9 @@ bool MachineCSE::isCSECandidate(MachineInstr *MI) {
   if (MI->getOpcode() == TargetOpcode::LOAD_STACK_GUARD)
     return false;
 
+  if (MI->isCalDerivedPtrInCangjieCopyGC(MRI)) {
+    return false;
+  }
   return true;
 }
 
@@ -797,6 +800,9 @@ bool MachineCSE::isPRECandidate(MachineInstr *MI) {
   for (const auto &def : MI->defs())
     if (!Register::isVirtualRegister(def.getReg()))
       return false;
+  if (MI->isCalDerivedPtrInCangjieCopyGC(MRI)) {
+    return false;
+  }
 
   for (const auto &use : MI->uses())
     if (use.isReg() && !Register::isVirtualRegister(use.getReg()))

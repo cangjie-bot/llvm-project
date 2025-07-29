@@ -270,10 +270,10 @@ ExecutionContextScope *IRMemoryMap::GetBestExecutionContextScope() const {
 IRMemoryMap::Allocation::Allocation(lldb::addr_t process_alloc,
                                     lldb::addr_t process_start, size_t size,
                                     uint32_t permissions, uint8_t alignment,
-                                    AllocationPolicy policy)
+                                    AllocationPolicy policy, bool keep)
     : m_process_alloc(process_alloc), m_process_start(process_start),
       m_size(size), m_policy(policy), m_leak(false), m_permissions(permissions),
-      m_alignment(alignment) {
+      m_alignment(alignment), m_keep(keep) {
   switch (policy) {
   default:
     llvm_unreachable("Invalid AllocationPolicy");
@@ -288,7 +288,7 @@ IRMemoryMap::Allocation::Allocation(lldb::addr_t process_alloc,
 
 lldb::addr_t IRMemoryMap::Malloc(size_t size, uint8_t alignment,
                                  uint32_t permissions, AllocationPolicy policy,
-                                 bool zero_memory, Status &error) {
+                                 bool zero_memory, Status &error, bool keep) {
   lldb_private::Log *log(GetLog(LLDBLog::Expressions));
   error.Clear();
 
@@ -391,7 +391,7 @@ lldb::addr_t IRMemoryMap::Malloc(size_t size, uint8_t alignment,
   m_allocations.emplace(
       std::piecewise_construct, std::forward_as_tuple(aligned_address),
       std::forward_as_tuple(allocation_address, aligned_address,
-                            allocation_size, permissions, alignment, policy));
+                            allocation_size, permissions, alignment, policy, keep));
 
   if (zero_memory) {
     Status write_error;
@@ -455,6 +455,23 @@ void IRMemoryMap::Free(lldb::addr_t process_address, Status &error) {
   }
 
   Allocation &allocation = iter->second;
+  if (allocation.m_keep) {
+    // When a new value is assigned to an object of the string type during expression calculation,
+    // the new value is stored in the .rodata section. To ensure that the object can be accessed normally,
+    // the .rodata section (marked as keep) needs to be retained and not freed.
+    // Note that this is only a workaround until a better solution is found,
+    // which will increase the memory footprint of the debugger as the expr command is used.
+    if (lldb_private::Log *log = GetLog(LLDBLog::Expressions)) {
+      LLDB_LOGF(log,
+                "IRMemoryMap::Free (0x%" PRIx64 ") keeped [0x%" PRIx64
+                "..0x%" PRIx64 ")",
+                (uint64_t)process_address, iter->second.m_process_start,
+                iter->second.m_process_start + iter->second.m_size);
+    }
+    m_allocations.erase(iter);
+
+    return;
+  }
 
   switch (allocation.m_policy) {
   default:

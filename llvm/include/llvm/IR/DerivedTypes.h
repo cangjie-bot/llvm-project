@@ -300,6 +300,8 @@ public:
 
   /// Specify a body for an opaque identified type.
   void setBody(ArrayRef<Type*> Elements, bool isPacked = false);
+  /// For cangjie frontend, allowing re-entry
+  void setBodyForCJ(ArrayRef<Type*> Elements);
 
   template <typename... Tys>
   std::enable_if_t<are_base_of<Type, Tys...>::value, void>
@@ -657,6 +659,8 @@ public:
   static PointerType *getUnqual(LLVMContext &C) {
     return PointerType::get(C, 0);
   }
+
+  Type *getElementType() const { return PointeeTy; }
 
   /// This constructs a pointer type with the same pointee type as input
   /// PointerType (or opaque pointer if the input PointerType is opaque) and the

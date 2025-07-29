@@ -659,12 +659,13 @@ return:                                           ; preds = %if.end, %land.lhs.t
 define i32 @fcmpri(i32 %argc, i8** nocapture readonly %argv) #0 {
 ; CHECK-LABEL: fcmpri:
 ; CHECK:       // %bb.0: // %entry
-; CHECK-NEXT:    str d8, [sp, #-32]! // 8-byte Folded Spill
+; CHECK-NEXT:    str	x30, [sp, #-32]!                // 8-byte Folded Spill
 ; CHECK-NEXT:    .cfi_def_cfa_offset 32
-; CHECK-NEXT:    stp x30, x19, [sp, #16] // 16-byte Folded Spill
-; CHECK-NEXT:    .cfi_offset w19, -8
-; CHECK-NEXT:    .cfi_offset w30, -16
-; CHECK-NEXT:    .cfi_offset b8, -32
+; CHECK-NEXT:    str	d8, [sp, #8]                    // 8-byte Folded Spill
+; CHECK-NEXT:    str	x19, [sp, #16]                  // 8-byte Folded Spill
+; CHECK-NEXT:    .cfi_offset w19, -16
+; CHECK-NEXT:    .cfi_offset b8, -24
+; CHECK-NEXT:    .cfi_offset w30, -32
 ; CHECK-NEXT:    cmp w0, #2
 ; CHECK-NEXT:    b.lt .LBB9_3
 ; CHECK-NEXT:  // %bb.1: // %land.lhs.true
@@ -692,12 +693,13 @@ define i32 @fcmpri(i32 %argc, i8** nocapture readonly %argv) #0 {
 ; CHECK-NEXT:    bl woo
 ; CHECK-NEXT:    mov w0, #4
 ; CHECK-NEXT:  .LBB9_4: // %return
-; CHECK-NEXT:    ldp x30, x19, [sp, #16] // 16-byte Folded Reload
-; CHECK-NEXT:    ldr d8, [sp], #32 // 8-byte Folded Reload
+; CHECK-NEXT:    ldr	x19, [sp, #16]                  // 8-byte Folded Reload
+; CHECK-NEXT:    ldr	d8, [sp, #8]                    // 8-byte Folded Reload
+; CHECK-NEXT:    ldr	x30, [sp], #32                  // 8-byte Folded Reload
 ; CHECK-NEXT:    .cfi_def_cfa_offset 0
 ; CHECK-NEXT:    .cfi_restore w19
-; CHECK-NEXT:    .cfi_restore w30
 ; CHECK-NEXT:    .cfi_restore b8
+; CHECK-NEXT:    .cfi_restore w30
 ; CHECK-NEXT:    ret
 
 ; CHECK-LABEL-DAG: .LBB9_3

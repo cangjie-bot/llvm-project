@@ -129,6 +129,10 @@ static cl::opt<unsigned> SwitchPeelThreshold(
              "switch statement. A value greater than 100 will void this "
              "optimization"));
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
+
 // Limit the width of DAG chains. This is important in general to prevent
 // DAG-based analysis from blowing up. For example, alias analysis and
 // load clustering may not complete in reasonable time. It is difficult to
@@ -1480,6 +1484,27 @@ SDValue SelectionDAGBuilder::getCopyFromRegs(const Value *V, Type *Ty) {
   }
 
   return Result;
+}
+
+/// getValue - Return an SDValue for the given Value.
+SDValue SelectionDAGBuilder::getValue(const Value *V, SDValue Chain) {
+  DenseMap<const Value *, Register>::iterator It = FuncInfo.ValueMap.find(V);
+  SDValue Result;
+
+  if (It != FuncInfo.ValueMap.end()) {
+    Register InReg = It->second;
+
+    RegsForValue RFV(*DAG.getContext(), DAG.getTargetLoweringInfo(),
+                     DAG.getDataLayout(), InReg, V->getType(),
+                     None); // This is not an ABI copy.
+    Result =
+        RFV.getCopyFromRegs(DAG, FuncInfo, getCurSDLoc(), Chain, nullptr, V);
+    resolveDanglingDebugInfo(V, Result);
+    NodeMap[V] = Result;
+    return Result;
+  } else {
+    return getValue(V);
+  }
 }
 
 /// getValue - Return an SDValue for the given Value.
@@ -2897,7 +2922,7 @@ void SelectionDAGBuilder::visitInvoke(const InvokeInst &I) {
   assert(!I.hasOperandBundlesOtherThan(
              {LLVMContext::OB_deopt, LLVMContext::OB_gc_transition,
               LLVMContext::OB_gc_live, LLVMContext::OB_funclet,
-              LLVMContext::OB_cfguardtarget,
+              LLVMContext::OB_struct_live, LLVMContext::OB_cfguardtarget,
               LLVMContext::OB_clang_arc_attachedcall}) &&
          "Cannot lower invokes with arbitrary operand bundles yet!");
 
@@ -2920,6 +2945,7 @@ void SelectionDAGBuilder::visitInvoke(const InvokeInst &I) {
     case Intrinsic::experimental_patchpoint_i64:
       visitPatchpoint(I, EHPadBB);
       break;
+    case Intrinsic::cj_gc_statepoint:
     case Intrinsic::experimental_gc_statepoint:
       LowerStatepoint(cast<GCStatepointInst>(I), EHPadBB);
       break;
@@ -6749,7 +6775,31 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
   }
   case Intrinsic::gcread:
   case Intrinsic::gcwrite:
-    llvm_unreachable("GC failed to lower gcread/gcwrite intrinsics!");
+  case Intrinsic::cj_gcread_ref:
+  case Intrinsic::cj_gcread_struct:
+  case Intrinsic::cj_gcread_static_ref:
+  case Intrinsic::cj_gcread_static_struct:
+  case Intrinsic::cj_gcwrite_ref:
+  case Intrinsic::cj_gcwrite_struct:
+  case Intrinsic::cj_gcwrite_static_ref:
+  case Intrinsic::cj_gcwrite_static_struct:
+  case Intrinsic::cj_array_copy_ref:
+  case Intrinsic::cj_array_copy_struct:
+  case Intrinsic::cj_atomic_store:
+  case Intrinsic::cj_atomic_load:
+  case Intrinsic::cj_atomic_swap:
+  case Intrinsic::cj_atomic_compare_swap:
+    llvm_unreachable("GC failed to lower intrinsics");
+  case Intrinsic::cj_get_fp_state:
+    Res = DAG.getNode(ISD::GET_FP_STATE, sdl, {MVT::i64, MVT::Other},
+                      {getRoot(), getValue(I.getArgOperand(0))});
+    setValue(&I, Res);
+    return;
+  case Intrinsic::cj_reset_fp_state:
+    Res = DAG.getNode(ISD::RESET_FP_STATE, sdl, MVT::Other, getRoot());
+    setValue(&I, Res);
+    DAG.setRoot(Res.getValue(0));
+    return;
   case Intrinsic::flt_rounds:
     Res = DAG.getNode(ISD::FLT_ROUNDS_, sdl, {MVT::i32, MVT::Other}, getRoot());
     setValue(&I, Res);
@@ -6928,13 +6978,16 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
     visitPatchpoint(I);
     return;
   case Intrinsic::experimental_gc_statepoint:
+  case Intrinsic::cj_gc_statepoint:
     LowerStatepoint(cast<GCStatepointInst>(I));
     return;
   case Intrinsic::experimental_gc_result:
+  case Intrinsic::cj_gc_result:
     visitGCResult(cast<GCResultInst>(I));
     return;
   case Intrinsic::experimental_gc_relocate:
-    visitGCRelocate(cast<GCRelocateInst>(I));
+  case Intrinsic::cj_gc_relocate:
+    visitRelocate(cast<GCProjectionInst>(I));
     return;
   case Intrinsic::instrprof_cover:
     llvm_unreachable("instrprof failed to lower a cover");
@@ -7737,6 +7790,44 @@ SelectionDAGBuilder::lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
   return Result;
 }
 
+bool SelectionDAGBuilder::needToDisableTailCall(const CallBase &CB,
+                                                const TargetLowering &TLI,
+                                                bool isMustTailCall) const {
+  // Avoid emitting tail calls in functions with the disable-tail-calls
+  // attribute.
+  const auto *Caller = CB.getParent()->getParent();
+  if ((Caller->getFnAttribute("disable-tail-calls").getValueAsString() ==
+       "true") &&
+      !isMustTailCall) {
+    return true;
+  }
+
+  const auto *CalleeFunc = CB.getCalledFunction();
+  Triple::OSType Os = TLI.getTargetMachine().getTargetTriple().getOS();
+  if (CalleeFunc != nullptr) {
+    if (Os == Triple::OSType::Win32) {
+      if (CalleeFunc->getName().isTruncToFP16Func() ||
+          CalleeFunc->getName().isExtendFromFP16Func() ||
+          CalleeFunc->hasFnAttribute("cj-runtime")) {
+        return true;
+      }
+    } else {
+      if (CalleeFunc->hasFnAttribute("cj-runtime")) {
+        return true;
+      }
+    }
+  }
+
+  // We can't tail call inside a function with a swifterror argument. Lowering
+  // does not support this yet. It would have to move into the swifterror
+  // register before the call.
+  if (TLI.supportSwiftError() &&
+      Caller->getAttributes().hasAttrSomewhere(Attribute::SwiftError)) {
+    return true;
+  }
+  return false;
+}
+
 void SelectionDAGBuilder::LowerCallTo(const CallBase &CB, SDValue Callee,
                                       bool isTailCall,
                                       bool isMustTailCall,
@@ -7751,20 +7842,8 @@ void SelectionDAGBuilder::LowerCallTo(const CallBase &CB, SDValue Callee,
   const Value *SwiftErrorVal = nullptr;
   const TargetLowering &TLI = DAG.getTargetLoweringInfo();
 
-  if (isTailCall) {
-    // Avoid emitting tail calls in functions with the disable-tail-calls
-    // attribute.
-    auto *Caller = CB.getParent()->getParent();
-    if (Caller->getFnAttribute("disable-tail-calls").getValueAsString() ==
-        "true" && !isMustTailCall)
-      isTailCall = false;
-
-    // We can't tail call inside a function with a swifterror argument. Lowering
-    // does not support this yet. It would have to move into the swifterror
-    // register before the call.
-    if (TLI.supportSwiftError() &&
-        Caller->getAttributes().hasAttrSomewhere(Attribute::SwiftError))
-      isTailCall = false;
+  if (isTailCall && needToDisableTailCall(CB, TLI, isMustTailCall)) {
+    isTailCall = false;
   }
 
   for (auto I = CB.arg_begin(), E = CB.arg_end(); I != E; ++I) {
@@ -9267,8 +9346,6 @@ void SelectionDAGBuilder::populateCallLoweringInfo(
        ArgI != ArgE; ++ArgI) {
     const Value *V = Call->getOperand(ArgI);
 
-    assert(!V->getType()->isEmptyTy() && "Empty type passed to intrinsic.");
-
     TargetLowering::ArgListEntry Entry;
     Entry.Node = getValue(V);
     Entry.Ty = V->getType();
@@ -9276,13 +9353,30 @@ void SelectionDAGBuilder::populateCallLoweringInfo(
     Args.push_back(Entry);
   }
 
-  CLI.setDebugLoc(getCurSDLoc())
-      .setChain(getRoot())
-      .setCallee(Call->getCallingConv(), ReturnTy, Callee, std::move(Args))
-      .setDiscardResult(Call->use_empty())
-      .setIsPatchPoint(IsPatchPoint)
-      .setIsPreallocated(
-          Call->countOperandBundlesOfType(LLVMContext::OB_preallocated) != 0);
+  const Triple &TT = Triple(Call->getModule()->getTargetTriple());
+  auto Statepoint = dyn_cast<GCStatepointInst>(Call);
+  bool IsCJMacArmCFFI = TT.isOSBinFormatMachO() && TT.isAArch64() &&
+      Statepoint != nullptr && Statepoint->getActualCalledFunction() != nullptr &&
+      Statepoint->getActualCalledFunction()->hasFnAttribute("cj2c");
+  if (IsCJMacArmCFFI) {
+    CLI.setDebugLoc(getCurSDLoc())
+        .setChain(getRoot())
+        .setCallee(
+            ReturnTy, Statepoint->getActualCalledFunction()->getFunctionType(),
+            Callee, std::move(Args), *Call)
+        .setDiscardResult(Call->use_empty())
+        .setIsPatchPoint(IsPatchPoint)
+        .setIsPreallocated(
+            Call->countOperandBundlesOfType(LLVMContext::OB_preallocated) != 0);
+  } else {
+    CLI.setDebugLoc(getCurSDLoc())
+        .setChain(getRoot())
+        .setCallee(Call->getCallingConv(), ReturnTy, Callee, std::move(Args))
+        .setDiscardResult(Call->use_empty())
+        .setIsPatchPoint(IsPatchPoint)
+        .setIsPreallocated(
+            Call->countOperandBundlesOfType(LLVMContext::OB_preallocated) != 0);
+  }
 }
 
 /// Add a stack map intrinsic call's live variable operands to a stackmap
@@ -10235,6 +10329,11 @@ static void tryToElideArgumentCopy(
                          "greater than stack argument alignment ("
                       << DebugStr(RequiredAlignment) << " vs "
                       << DebugStr(MFI.getObjectAlign(FixedIndex)) << ")\n");
+    return;
+  }
+  if (CJPipeline && AI->getAllocatedType()->isStructTy()) {
+    LLVM_DEBUG(dbgs() << "  argument copy elision failed: alloca type is a "
+                         "struct\n");
     return;
   }
 

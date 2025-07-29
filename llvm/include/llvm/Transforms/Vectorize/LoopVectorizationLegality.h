@@ -302,7 +302,7 @@ public:
 
   /// Returns True if given store is a final invariant store of one of the
   /// reductions found in the loop.
-  bool isInvariantStoreOfReduction(StoreInst *SI);
+  bool isInvariantStoreOfReduction(Instruction *SI);
 
   /// Returns True if given address is invariant and is used to store recurrent
   /// expression

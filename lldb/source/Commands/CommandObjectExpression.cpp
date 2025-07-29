@@ -409,6 +409,10 @@ bool CommandObjectExpression::EvaluateExpression(llvm::StringRef expr,
                         m_fixed_expression.c_str());
   }
 
+  if (success != eExpressionCompleted) {
+    error_stream.PutCString("error: unsupported expression\n");
+  }
+
   if (result_valobj_sp) {
     Format format = m_format_options.GetFormat();
 
@@ -437,12 +441,30 @@ bool CommandObjectExpression::EvaluateExpression(llvm::StringRef expr,
         result.SetStatus(eReturnStatusSuccessFinishResult);
       }
     } else {
+      bool isParentNull = false;
+      const char *error_cstr = result_valobj_sp->GetError().AsCString();
+      if (error_cstr && error_cstr[0]) {
+        if (strstr(error_cstr, "parent is NULL") == error_cstr)
+          isParentNull = true;
+      }
+      ConstString match("^std[.]core::Option<.+>( \\*)?$");
+      RegularExpression regex(match.GetStringRef());
+      bool isRefOption = regex.Execute(result_valobj_sp->GetTypeName().AsCString());
       if (result_valobj_sp->GetError().GetError() ==
           UserExpression::kNoResult) {
         if (format != eFormatVoid && GetDebugger().GetNotifyVoid()) {
           error_stream.PutCString("(void)\n");
         }
 
+        result.SetStatus(eReturnStatusSuccessFinishResult);
+      } else if (isRefOption && isParentNull) {
+        DumpValueObjectOptions options(m_varobj_options.GetAsDumpOptions(
+            m_command_options.m_verbosity, format));
+        options.SetVariableFormatDisplayLanguage(
+            result_valobj_sp->GetPreferredDisplayLanguage());
+
+        output_stream.Printf("(%s) %s = None", result_valobj_sp->GetDisplayTypeName().AsCString(),
+                             result_valobj_sp->GetName().AsCString());
         result.SetStatus(eReturnStatusSuccessFinishResult);
       } else {
         const char *error_cstr = result_valobj_sp->GetError().AsCString();

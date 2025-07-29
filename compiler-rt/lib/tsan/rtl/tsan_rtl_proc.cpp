@@ -22,7 +22,7 @@ Processor *ProcCreate() {
   internal_memset(mem, 0, sizeof(Processor));
   Processor *proc = new(mem) Processor;
   proc->thr = nullptr;
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   AllocatorProcStart(proc);
 #endif
   if (common_flags()->detect_deadlocks)
@@ -32,7 +32,7 @@ Processor *ProcCreate() {
 
 void ProcDestroy(Processor *proc) {
   CHECK_EQ(proc->thr, nullptr);
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   AllocatorProcFinish(proc);
 #endif
   ctx->metamap.OnProcIdle(proc);

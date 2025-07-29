@@ -392,7 +392,7 @@ int my_pthread_attr_getstack(void *attr, void **addr, uptr *size) {
   return pthread_attr_getstack((pthread_attr_t *)attr, addr, (size_t *)size);
 }
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 void AdjustStackSize(void *attr_) {
   pthread_attr_t *attr = (pthread_attr_t *)attr_;
   uptr stackaddr = 0;

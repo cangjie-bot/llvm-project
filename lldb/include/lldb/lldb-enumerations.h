@@ -585,6 +585,7 @@ enum CommandArgumentType {
   eArgTypeSymbol,
   eArgTypeThreadID,
   eArgTypeThreadIndex,
+  eArgTypeCJThreadIndex,
   eArgTypeThreadName,
   eArgTypeTypeName,
   eArgTypeUnsignedInteger,

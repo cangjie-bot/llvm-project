@@ -35,7 +35,9 @@
 
 #include "BlockPointer.h"
 #include "CPlusPlusNameParser.h"
+#include "CjTypes.h"
 #include "CxxStringTypes.h"
+#include "LibCj.h"
 #include "Generic.h"
 #include "LibCxx.h"
 #include "LibCxxAtomic.h"
@@ -226,6 +228,8 @@ void CPlusPlusLanguage::MethodName::Parse() {
       } else {
         m_parse_error = true;
       }
+      // C++ parsing rules do not apply to Cangjie.
+      m_parse_error = true;
     }
     m_parsed = true;
   }
@@ -274,11 +278,11 @@ bool CPlusPlusLanguage::MethodName::ContainsPath(llvm::StringRef path) {
   // If we can't parse the incoming name, then just check that it contains path.
   if (m_parse_error)
     return m_full.GetStringRef().contains(path);
-    
+
   llvm::StringRef identifier;
   llvm::StringRef context;
   std::string path_str = path.str();
-  bool success 
+  bool success
       = CPlusPlusLanguage::ExtractContextAndIdentifier(path_str.c_str(),
                                                        context,
                                                        identifier);
@@ -299,7 +303,7 @@ bool CPlusPlusLanguage::MethodName::ContainsPath(llvm::StringRef path) {
     return false;
   if (haystack.empty() || !isalnum(haystack.back()))
     return true;
-    
+
   return false;
 }
 
@@ -315,7 +319,7 @@ bool CPlusPlusLanguage::IsCPPMangledName(llvm::StringRef name) {
   return true;
 }
 
-bool CPlusPlusLanguage::DemangledNameContainsPath(llvm::StringRef path, 
+bool CPlusPlusLanguage::DemangledNameContainsPath(llvm::StringRef path,
                                                   ConstString demangled) const {
   MethodName demangled_name(demangled);
   return demangled_name.ContainsPath(path);
@@ -1240,6 +1244,110 @@ static void LoadSystemFormatters(lldb::TypeCategoryImplSP cpp_category_sp) {
       "unichar summary provider", ConstString("unichar"), widechar_flags);
 }
 
+static void LoadCjFormatterSummary(lldb::TypeCategoryImplSP cpp_category_sp) {
+  if (!cpp_category_sp) {
+    return;
+  }
+
+  TypeSummaryImpl::Flags cj_flags;
+  cj_flags.SetDontShowValue(true).SetSkipPointers(true).SetDontShowChildren(true);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::BasicSummaryProvider,
+      "Rune summary provider", ConstString("Rune"), cj_flags);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::BasicSummaryProvider,
+      "Int8 summary provider", ConstString("Int8"), cj_flags);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::BasicSummaryProvider,
+      "UInt8 summary provider", ConstString("UInt8"), cj_flags);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::StringSummaryProvider,
+      "String summary provider", ConstString("^std[.]core::String$"), cj_flags, true);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::UnitSummaryProvider,
+      "Unit summary provider", ConstString("Unit"), cj_flags);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::CStringSummaryProvider,
+      "CString summary provider", ConstString("CString"), cj_flags);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::CPointerSummaryProvider,
+      "CPointer summary provider", ConstString("^CPointer<.+>$"), cj_flags, true);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::RangeSummaryProvider,
+      "Range summary provider", ConstString("^std[.]core::Range<.+>$"), cj_flags, true);
+
+  // Applies only to the enum type without parameters.
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::EnumSummaryProvider,
+      "Range summary provider", ConstString("^(.+)?E0\\$(.+)$"), cj_flags, true);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::Enum2SummaryProvider,
+      "Enum2 summary provider", ConstString("(.+)?E2\\$"), cj_flags, true);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::OptionPtrSummaryProvider,
+      "Option ptr summary provider", ConstString("^std[.]core::Option<.+> \\*$"), cj_flags, true);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::OptionSummaryProvider,
+      "Option summary provider", ConstString("^std[.]core::Option<.+>$"), cj_flags, true);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::EnumOptionSummaryProvider,
+      "Option summary provider", ConstString("^std[.]core::E1\\$Option<.+>$"), cj_flags, true);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::EnumOptionPtrSummaryProvider,
+      "Option ptr summary provider", ConstString("^std[.]core::E1\\$Option<.+> \\*$"), cj_flags, true);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::FunctionSummaryProvider,
+      "Function summary provider",
+      ConstString("(.+::|^)\\(.*\\)( ?)->.+$"), cj_flags, true);
+}
+
+static void LoadCjFormatterSynthetic(lldb::TypeCategoryImplSP cpp_category_sp) {
+  if (!cpp_category_sp) {
+    return;
+  }
+
+  SyntheticChildren::Flags cj_synth_flags;
+  cj_synth_flags.SetCascades(true).SetSkipPointers(false).SetSkipReferences(false);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjClassSyntheticFrontEndCreator,
+      "Class synthetic children", ConstString("^.+$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjOptionSyntheticFrontEndCreator,
+      "Option synthetic children", ConstString("^std[.]core::Option<.+>( \\*)?$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjArraySyntheticFrontEndCreator,
+      "Array synthetic children", ConstString("^std[.]core::Array<.+>$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjTupleSyntheticFrontEndCreator,
+      "Tuple synthetic children", ConstString("^Tuple<.+>$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjEnumSyntheticFrontEndCreator,
+      "Enum synthetic children", ConstString("(.+)?(Enum|E1)\\$(.+)"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjE2SyntheticFrontEndCreator,
+      "Enum2 synthetic children", ConstString("(.+)?E2\\$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjE3SyntheticFrontEndCreator,
+      "Enum3 synthetic children", ConstString("(.+)?E3\\$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjComplexAsSimpleSyntheticFrontEndCreator,
+      "String synthetic children", ConstString("^(std[.]core::|C)String$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjComplexAsSimpleSyntheticFrontEndCreator,
+      "CPointer synthetic children", ConstString("^CPointer<.+>$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjArrayListSyntheticFrontEndCreator,
+      "ArrayList synthetic children", ConstString("^std[.]collection::ArrayList<.+>$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjHashMapSyntheticFrontEndCreator,
+      "HashMap synthetic children", ConstString("^std[.]collection::HashMap<.+>$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjHashSetSyntheticFrontEndCreator,
+      "HashSet synthetic children", ConstString("^std[.]collection::HashSet<.+>$"), cj_synth_flags, true);
+
+  AddCXXSynthetic(cpp_category_sp, lldb_private::formatters::CjVArraySyntheticFrontEndCreator,
+      "VArray synthetic children", ConstString("^VArray<.+>$"), cj_synth_flags, true);
+}
+
 std::unique_ptr<Language::TypeScavenger> CPlusPlusLanguage::GetTypeScavenger() {
   class CPlusPlusTypeScavenger : public Language::ImageListTypeScavenger {
   public:
@@ -1268,6 +1376,8 @@ lldb::TypeCategoryImplSP CPlusPlusLanguage::GetFormatters() {
       LoadLibStdcppFormatters(g_category);
       LoadLibCxxFormatters(g_category);
       LoadSystemFormatters(g_category);
+      LoadCjFormatterSummary(g_category);
+      LoadCjFormatterSynthetic(g_category);
     }
   });
   return g_category;

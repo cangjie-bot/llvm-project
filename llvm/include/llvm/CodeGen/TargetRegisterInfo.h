@@ -1120,6 +1120,13 @@ public:
   virtual bool isNonallocatableRegisterCalleeSave(MCRegister Reg) const {
     return false;
   }
+
+  virtual MCPhysReg getX8Register() const { return 0; }
+
+  virtual const std::vector<MCPhysReg>
+  getArgRegs(const MachineFunction &MF) const {
+    return {};
+  }
 };
 
 //===----------------------------------------------------------------------===//

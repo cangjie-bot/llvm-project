@@ -2246,9 +2246,12 @@ void Verifier::verifyInlineAsmCall(const CallBase &Call) {
 
 /// Verify that statepoint intrinsic is well formed.
 void Verifier::verifyStatepoint(const CallBase &Call) {
-  assert(Call.getCalledFunction() &&
-         Call.getCalledFunction()->getIntrinsicID() ==
-             Intrinsic::experimental_gc_statepoint);
+  Function *Callee = Call.getCalledFunction();
+  assert(Callee && "statepoint call is null!");
+  unsigned ID = Callee->getIntrinsicID();
+  Check(ID == Intrinsic::experimental_gc_statepoint ||
+            ID == Intrinsic::cj_gc_statepoint,
+        "Incorrect statepoint call!", Call);
 
   Check(!Call.doesNotAccessMemory() && !Call.onlyReadsMemory() &&
             !Call.onlyAccessesArgMemory(),
@@ -2264,10 +2267,20 @@ void Verifier::verifyStatepoint(const CallBase &Call) {
         "positive",
         Call);
 
-  Type *TargetElemType = Call.getParamElementType(2);
-  Check(TargetElemType,
-        "gc.statepoint callee argument must have elementtype attribute", Call);
-  FunctionType *TargetFuncType = dyn_cast<FunctionType>(TargetElemType);
+  FunctionType *TargetFuncType = nullptr;
+  Function *CalledFunction = dyn_cast_or_null<Function>(Call.getArgOperand(2));
+  if (CalledFunction) {
+    TargetFuncType = CalledFunction->getFunctionType();
+  } else {
+    Type *TargetElemType = Call.getParamElementType(2);
+    if (TargetElemType == nullptr) {
+      TargetElemType =
+          Call.getArgOperand(2)->getType()->getNonOpaquePointerElementType();
+    }
+    Check(TargetElemType,
+          "gc.statepoint callee argument have not elementtype attribute", Call);
+    TargetFuncType = dyn_cast<FunctionType>(TargetElemType);
+  }
   Check(TargetFuncType,
         "gc.statepoint callee elementtype must be function type", Call);
 
@@ -2280,12 +2293,6 @@ void Verifier::verifyStatepoint(const CallBase &Call) {
   if (TargetFuncType->isVarArg()) {
     Check(NumCallArgs >= NumParams,
           "gc.statepoint mismatch in number of vararg call args", Call);
-
-    // TODO: Remove this limitation
-    Check(TargetFuncType->getReturnType()->isVoidTy(),
-          "gc.statepoint doesn't support wrapping non-void "
-          "vararg functions yet",
-          Call);
   } else
     Check(NumCallArgs == NumParams,
           "gc.statepoint mismatch in number of call args", Call);
@@ -2297,7 +2304,6 @@ void Verifier::verifyStatepoint(const CallBase &Call) {
 
   // Verify that the types of the call parameter arguments match
   // the type of the wrapped callee.
-  AttributeList Attrs = Call.getAttributes();
   for (int i = 0; i < NumParams; i++) {
     Type *ParamType = TargetFuncType->getParamType(i);
     Type *ArgType = Call.getArgOperand(5 + i)->getType();
@@ -2305,39 +2311,36 @@ void Verifier::verifyStatepoint(const CallBase &Call) {
           "gc.statepoint call argument does not match wrapped "
           "function type",
           Call);
-
-    if (TargetFuncType->isVarArg()) {
-      AttributeSet ArgAttrs = Attrs.getParamAttrs(5 + i);
-      Check(!ArgAttrs.hasAttribute(Attribute::StructRet),
-            "Attribute 'sret' cannot be used for vararg call arguments!", Call);
-    }
   }
 
-  const int EndCallArgsInx = 4 + NumCallArgs;
+  // Cangjie statepoint does not have deopt and transitions.
+  if (ID != Intrinsic::cj_gc_statepoint) {
+    const int EndCallArgsInx = 4 + NumCallArgs;
 
-  const Value *NumTransitionArgsV = Call.getArgOperand(EndCallArgsInx + 1);
-  Check(isa<ConstantInt>(NumTransitionArgsV),
-        "gc.statepoint number of transition arguments "
-        "must be constant integer",
-        Call);
-  const int NumTransitionArgs =
-      cast<ConstantInt>(NumTransitionArgsV)->getZExtValue();
-  Check(NumTransitionArgs == 0,
-        "gc.statepoint w/inline transition bundle is deprecated", Call);
-  const int EndTransitionArgsInx = EndCallArgsInx + 1 + NumTransitionArgs;
+    const Value *NumTransitionArgsV = Call.getArgOperand(EndCallArgsInx + 1);
+    Check(isa<ConstantInt>(NumTransitionArgsV),
+          "gc.statepoint number of transition arguments "
+          "must be constant integer",
+          Call);
+    const int NumTransitionArgs =
+        cast<ConstantInt>(NumTransitionArgsV)->getZExtValue();
+    Check(NumTransitionArgs == 0,
+          "gc.statepoint w/inline transition bundle is deprecated", Call);
+    const int EndTransitionArgsInx = EndCallArgsInx + 1 + NumTransitionArgs;
 
-  const Value *NumDeoptArgsV = Call.getArgOperand(EndTransitionArgsInx + 1);
-  Check(isa<ConstantInt>(NumDeoptArgsV),
-        "gc.statepoint number of deoptimization arguments "
-        "must be constant integer",
-        Call);
-  const int NumDeoptArgs = cast<ConstantInt>(NumDeoptArgsV)->getZExtValue();
-  Check(NumDeoptArgs == 0,
-        "gc.statepoint w/inline deopt operands is deprecated", Call);
+    const Value *NumDeoptArgsV = Call.getArgOperand(EndTransitionArgsInx + 1);
+    Check(isa<ConstantInt>(NumDeoptArgsV),
+          "gc.statepoint number of deoptimization arguments "
+          "must be constant integer",
+          Call);
+    const int NumDeoptArgs = cast<ConstantInt>(NumDeoptArgsV)->getZExtValue();
+    Check(NumDeoptArgs == 0,
+          "gc.statepoint w/inline deopt operands is deprecated", Call);
 
-  const int ExpectedNumArgs = 7 + NumCallArgs;
-  Check(ExpectedNumArgs == (int)Call.arg_size(),
-        "gc.statepoint too many arguments", Call);
+    const int ExpectedNumArgs = 7 + NumCallArgs;
+    Check(ExpectedNumArgs == (int)Call.arg_size(),
+          "gc.statepoint too many arguments", Call);
+  }
 
   // Check that the only uses of this gc.statepoint are gc.result or
   // gc.relocate calls which are tied to this statepoint and thus part
@@ -3309,8 +3312,10 @@ void Verifier::visitCallBase(CallBase &Call) {
       // Statepoint intrinsic is vararg but the wrapped function may be not.
       // Allow sret here and check the wrapped function in verifyStatepoint.
       if (!Call.getCalledFunction() ||
-          Call.getCalledFunction()->getIntrinsicID() !=
-              Intrinsic::experimental_gc_statepoint)
+          (Call.getCalledFunction()->getIntrinsicID() !=
+               Intrinsic::experimental_gc_statepoint &&
+           Call.getCalledFunction()->getIntrinsicID() !=
+               Intrinsic::cj_gc_statepoint))
         Check(!ArgAttrs.hasAttribute(Attribute::StructRet),
               "Attribute 'sret' cannot be used for vararg call arguments!",
               Call);
@@ -3349,7 +3354,7 @@ void Verifier::visitCallBase(CallBase &Call) {
   bool FoundDeoptBundle = false, FoundFuncletBundle = false,
        FoundGCTransitionBundle = false, FoundCFGuardTargetBundle = false,
        FoundPreallocatedBundle = false, FoundGCLiveBundle = false,
-       FoundPtrauthBundle = false,
+       FoundPtrauthBundle = false, FoundStructLiveBundle = false,
        FoundAttachedCallBundle = false;
   for (unsigned i = 0, e = Call.getNumOperandBundles(); i < e; ++i) {
     OperandBundleUse BU = Call.getOperandBundleAt(i);
@@ -3400,6 +3405,9 @@ void Verifier::visitCallBase(CallBase &Call) {
     } else if (Tag == LLVMContext::OB_gc_live) {
       Check(!FoundGCLiveBundle, "Multiple gc-live operand bundles", Call);
       FoundGCLiveBundle = true;
+    } else if (Tag == LLVMContext::OB_struct_live) {
+      Check(!FoundStructLiveBundle, "Multiple struct-live operand bundles", Call);
+      FoundStructLiveBundle = true;
     } else if (Tag == LLVMContext::OB_clang_arc_attachedcall) {
       Check(!FoundAttachedCallBundle,
             "Multiple \"clang.arc.attachedcall\" operand bundles", Call);
@@ -4669,7 +4677,7 @@ void Verifier::visitInstruction(Instruction &I) {
              (CBI && &CBI->getCalledOperandUse() == &I.getOperandUse(i)) ||
              IsAttachedCallOperand(F, CBI, i)),
             "Cannot take the address of an intrinsic!", &I);
-      Check(!F->isIntrinsic() || isa<CallInst>(I) ||
+      Check(!F->isIntrinsic() || isa<CallInst>(I) || F->isCJIntrinsic() ||
                 F->getIntrinsicID() == Intrinsic::donothing ||
                 F->getIntrinsicID() == Intrinsic::seh_try_begin ||
                 F->getIntrinsicID() == Intrinsic::seh_try_end ||
@@ -5115,6 +5123,25 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
     Check(Call.getParent()->getParent()->hasGC(),
           "Enclosing function does not use GC.", Call);
     break;
+  case Intrinsic::cj_gcwrite_ref:
+  case Intrinsic::cj_gcwrite_struct:
+  case Intrinsic::cj_gcwrite_static_ref:
+  case Intrinsic::cj_gcwrite_static_struct:
+  case Intrinsic::cj_array_copy_ref:
+  case Intrinsic::cj_array_copy_struct:
+  case Intrinsic::cj_atomic_store:
+  case Intrinsic::cj_atomic_load:
+  case Intrinsic::cj_atomic_swap:
+  case Intrinsic::cj_atomic_compare_swap:
+    Check(Call.getParent()->getParent()->hasCangjieGC(),
+          "Enclosing function check GC error.", Call);
+    for (Value *Arg : Call.args()) {
+      if (Arg->getType()->isPointerTy()) {
+        Check(!isa<UndefValue>(Arg),
+              "cangjie intrinsic contains the undef operand!", Call);
+      }
+    }
+    break;
   case Intrinsic::init_trampoline:
     Check(isa<Function>(Call.getArgOperand(1)->stripPointerCasts()),
           "llvm.init_trampoline parameter #2 must resolve to a function.",
@@ -5159,7 +5186,7 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
         std::max(uint64_t(Entry.second), IdxArg->getLimitedValue(~0U) + 1));
     break;
   }
-
+  case Intrinsic::cj_gc_statepoint:
   case Intrinsic::experimental_gc_statepoint:
     if (auto *CI = dyn_cast<CallInst>(&Call))
       Check(!CI->isInlineAsm(),
@@ -5169,6 +5196,7 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
 
     verifyStatepoint(Call);
     break;
+  case Intrinsic::cj_gc_result:
   case Intrinsic::experimental_gc_result: {
     Check(Call.getParent()->getParent()->hasGC(),
           "Enclosing function does not use GC.", Call);
@@ -5176,19 +5204,37 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
     const auto *StatepointCall = dyn_cast<CallBase>(Call.getArgOperand(0));
     const Function *StatepointFn =
         StatepointCall ? StatepointCall->getCalledFunction() : nullptr;
-    Check(StatepointFn && StatepointFn->isDeclaration() &&
-              StatepointFn->getIntrinsicID() ==
-                  Intrinsic::experimental_gc_statepoint,
+    Check(StatepointFn && StatepointFn->isDeclaration(),
+          "gc.result operand #1 must be from a statepoint", Call,
+          Call.getArgOperand(0));
+    unsigned CalledID = StatepointFn->getIntrinsicID();
+    Check((CalledID == Intrinsic::experimental_gc_statepoint ||
+           CalledID == Intrinsic::cj_gc_statepoint),
           "gc.result operand #1 must be from a statepoint", Call,
           Call.getArgOperand(0));
 
     // Check that result type matches wrapped callee.
-    auto *TargetFuncType =
-        cast<FunctionType>(StatepointCall->getParamElementType(2));
+    FunctionType *TargetFuncType = nullptr;
+    Function *CalledFunction =
+        dyn_cast_or_null<Function>(StatepointCall->getArgOperand(2));
+    if (CalledFunction) {
+      TargetFuncType = CalledFunction->getFunctionType();
+    } else {
+      Type *TargetElemType = StatepointCall->getParamElementType(2);
+      if (TargetElemType == nullptr) {
+        TargetElemType = StatepointCall->getArgOperand(2)
+                             ->getType()
+                             ->getNonOpaquePointerElementType();
+      }
+      Check(TargetElemType,
+            "gc.statepoint callee argument have not elementtype attribute", Call);
+      TargetFuncType = dyn_cast<FunctionType>(TargetElemType);
+    }
     Check(Call.getType() == TargetFuncType->getReturnType(),
           "gc.result result type does not match wrapped callee", Call);
     break;
   }
+  case Intrinsic::cj_gc_relocate:
   case Intrinsic::experimental_gc_relocate: {
     Check(Call.arg_size() == 3, "wrong number of arguments", Call);
 

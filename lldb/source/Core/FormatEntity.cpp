@@ -1534,7 +1534,7 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
     } else {
       const char *name = nullptr;
       if (sc->function)
-        name = sc->function->GetName().AsCString(nullptr);
+        name = sc->function->GetName(sc).AsCString(nullptr);
       else if (sc->symbol)
         name = sc->symbol->GetName().AsCString(nullptr);
 
@@ -1581,7 +1581,7 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
     } else {
       ConstString name;
       if (sc->function)
-        name = sc->function->GetNameNoArguments();
+        name = sc->function->GetNameNoArguments(sc);
       else if (sc->symbol)
         name = sc->symbol->GetNameNoArguments();
       if (name) {
@@ -1616,7 +1616,7 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
       if (sc->function) {
         ExecutionContextScope *exe_scope =
             exe_ctx ? exe_ctx->GetBestExecutionContextScope() : nullptr;
-        const char *cstr = sc->function->GetName().AsCString(nullptr);
+        const char *cstr = sc->function->GetName(sc).AsCString(nullptr);
         if (cstr) {
           const InlineFunctionInfo *inline_info = nullptr;
           VariableListSP variable_list_sp;

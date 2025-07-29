@@ -50,6 +50,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/User.h"
@@ -65,6 +66,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Transforms/Scalar/InsertCJTBAA.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SimplifyLibCalls.h"
@@ -92,6 +94,7 @@ namespace llvm {
 /// enable preservation of attributes in assume like:
 /// call void @llvm.assume(i1 true) [ "nonnull"(i32* %PTR) ]
 extern cl::opt<bool> EnableKnowledgeRetention;
+extern cl::opt<bool> CJPipeline;
 } // namespace llvm
 
 /// Return the specified type promoted as it would be to pass though a va_arg
@@ -115,6 +118,41 @@ static bool hasUndefSource(AnyMemTransferInst *MI) {
     Src = cast<Instruction>(Src)->getOperand(0);
   }
   return isa<AllocaInst>(Src) && Src->hasOneUse();
+}
+
+// If the element of src/dst is pointer type, return it.
+// If can find actual type, return it.
+// Others, return nullptr.
+static Type *getMatchedType(Value *V, const DataLayout &DL, uint64_t Size) {
+  APInt Offset(64, 0);
+  auto *Base = V->stripAndAccumulateConstantOffsets(DL, Offset, true);
+  Type *Ty = Base->getType()->getNonOpaquePointerElementType();
+  if (Ty->isPointerTy()) {
+    return Ty;
+  } else if (Ty->isArrayTy()) {
+    Type *ET = Ty->getArrayElementType();
+    if (ET->isPointerTy()) {
+      return ET;
+    }
+  }
+
+  // process follow case:
+  // %1 = phi i8* [],[]
+  // %2 = bitcast %1 to struct*
+  // or
+  // %3 = bitcast %1 to i64*
+  if (Ty->isIntegerTy()) {
+    if (auto *CommonTy = getUniqueActualType(Base)) {
+      Ty = CommonTy;
+    }
+  }
+
+  if (auto ST = dyn_cast<StructType>(Ty)) {
+    auto *InnerTy = getInnerTypeByOffset(DL, ST, Offset.getZExtValue());
+    if (InnerTy)
+      return DL.getTypeSizeInBits(InnerTy) / 8 == Size ? InnerTy : nullptr;
+  }
+  return nullptr;
 }
 
 Instruction *InstCombinerImpl::SimplifyAnyMemTransfer(AnyMemTransferInst *MI) {
@@ -172,15 +210,28 @@ Instruction *InstCombinerImpl::SimplifyAnyMemTransfer(AnyMemTransferInst *MI) {
     if (*CopyDstAlign < Size || *CopySrcAlign < Size)
       return nullptr;
 
-  // Use an integer load+store unless we can find something better.
+  // Use an load+store unless we can find something better.
   unsigned SrcAddrSp =
     cast<PointerType>(MI->getArgOperand(1)->getType())->getAddressSpace();
   unsigned DstAddrSp =
     cast<PointerType>(MI->getArgOperand(0)->getType())->getAddressSpace();
 
-  IntegerType* IntType = IntegerType::get(MI->getContext(), Size<<3);
-  Type *NewSrcPtrTy = PointerType::get(IntType, SrcAddrSp);
-  Type *NewDstPtrTy = PointerType::get(IntType, DstAddrSp);
+  // default type: intX
+  Type *NewType = IntegerType::get(MI->getContext(), Size << 3);
+  if (CJPipeline) {
+    Type *Arg0T = getMatchedType(MI->getArgOperand(0), DL, Size);
+    Type *Arg1T = getMatchedType(MI->getArgOperand(1), DL, Size);
+    if (Arg0T && Arg0T->isPointerTy() && Size == 8) { // 8: ptr size
+      NewType = Arg0T;
+    } else if (Arg1T && Arg1T->isPointerTy() && Size == 8) { // 8: ptr size
+      NewType = Arg1T;
+    } else if (Arg0T == Arg1T && Arg0T != nullptr) {
+      NewType = Arg0T;
+    }
+  }
+
+  Type *NewSrcPtrTy = PointerType::get(NewType, SrcAddrSp);
+  Type *NewDstPtrTy = PointerType::get(NewType, DstAddrSp);
 
   // If the memcpy has metadata describing the members, see if we can get the
   // TBAA tag describing our copy.
@@ -201,11 +252,13 @@ Instruction *InstCombinerImpl::SimplifyAnyMemTransfer(AnyMemTransferInst *MI) {
 
   Value *Src = Builder.CreateBitCast(MI->getArgOperand(1), NewSrcPtrTy);
   Value *Dest = Builder.CreateBitCast(MI->getArgOperand(0), NewDstPtrTy);
-  LoadInst *L = Builder.CreateLoad(IntType, Src);
+  LoadInst *L = Builder.CreateLoad(NewType, Src);
   // Alignment from the mem intrinsic will be better, so use it.
   L->setAlignment(*CopySrcAlign);
   if (CopyMD)
     L->setMetadata(LLVMContext::MD_tbaa, CopyMD);
+  if (CJPipeline && !L->hasMetadata(LLVMContext::MD_tbaa))
+    prepareCJTBAA(DL, L, L->getPointerOperand(), L->getType());
   MDNode *LoopMemParallelMD =
     MI->getMetadata(LLVMContext::MD_mem_parallel_loop_access);
   if (LoopMemParallelMD)
@@ -219,6 +272,9 @@ Instruction *InstCombinerImpl::SimplifyAnyMemTransfer(AnyMemTransferInst *MI) {
   S->setAlignment(*CopyDstAlign);
   if (CopyMD)
     S->setMetadata(LLVMContext::MD_tbaa, CopyMD);
+  if (CJPipeline && !S->hasMetadata(LLVMContext::MD_tbaa))
+    prepareCJTBAA(DL, S, S->getPointerOperand(),
+                  S->getValueOperand()->getType());
   if (LoopMemParallelMD)
     S->setMetadata(LLVMContext::MD_mem_parallel_loop_access, LoopMemParallelMD);
   if (AccessGroupMD)
@@ -3083,6 +3139,7 @@ Instruction *InstCombinerImpl::visitCallBase(CallBase &Call) {
 
   // Handle intrinsics which can be used in both call and invoke context.
   switch (Call.getIntrinsicID()) {
+  case Intrinsic::cj_gc_statepoint:
   case Intrinsic::experimental_gc_statepoint: {
     GCStatepointInst &GCSP = *cast<GCStatepointInst>(&Call);
     SmallPtrSet<Value *, 32> LiveGcValues;

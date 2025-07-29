@@ -171,7 +171,7 @@ struct Config {
   /// Time trace granularity.
   unsigned TimeTraceGranularity = 500;
 
-  bool ShouldDiscardValueNames = true;
+  bool ShouldDiscardValueNames = false;
   DiagnosticHandlerFunction DiagHandler;
 
   /// Add FSAFDO discriminators.

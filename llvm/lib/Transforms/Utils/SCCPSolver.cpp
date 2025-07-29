@@ -70,6 +70,12 @@ class SCCPInstVisitor : public InstVisitor<SCCPInstVisitor> {
   SmallPtrSet<BasicBlock *, 8> BBExecutable; // The BBs that are executable.
   DenseMap<Value *, ValueLatticeElement>
       ValueState; // The state each value is in.
+  DenseMap<Value *, ValueLatticeElement> LoopPhiStates;
+  // Record the PHINode of the complete Lattice that cannot be obtained in a
+  // single loop iteration.
+  DenseSet<Value *> PartialStates;
+  DenseMap<Value *, std::pair<bool, bool>> PhiInfo;
+  DenseSet<Value *> VisitedPhi;
 
   /// StructValueState - This maintains ValueState for values that have
   /// StructType, for example for formal arguments, calls, insertelement, etc.
@@ -130,6 +136,8 @@ private:
   ConstantInt *getConstantInt(const ValueLatticeElement &IV) const {
     return dyn_cast_or_null<ConstantInt>(getConstant(IV));
   }
+
+  void updatePartialStates(LoopInfo *LI, PHINode &PN);
 
   // pushToWorkList - Helper for markConstant/markOverdefined
   void pushToWorkList(ValueLatticeElement &IV, Value *V);
@@ -705,6 +713,22 @@ bool SCCPInstVisitor::isEdgeFeasible(BasicBlock *From, BasicBlock *To) const {
   return KnownFeasibleEdges.count(Edge(From, To));
 }
 
+void SCCPInstVisitor::updatePartialStates(LoopInfo *LI, PHINode &PN) {
+  Loop *L = LI->getLoopFor(PN.getParent());
+  if (!L)
+    return;
+  for (unsigned I = 0, E = PN.getNumIncomingValues(); I != E; ++I) {
+    auto *BB = PN.getIncomingBlock(I);
+    if (L->contains(BB) && !L->isLoopLatch(BB) &&
+        !isEdgeFeasible(BB, PN.getParent())) {
+      PartialStates.insert(&PN);
+      return;
+    }
+  }
+  if (PartialStates.count(&PN))
+    PartialStates.erase(&PN);
+}
+
 // visit Implementations - Something changed in this instruction, either an
 // operand made a transition, or the instruction is newly executable.  Change
 // the value type of I to reflect these changes if appropriate.  This method
@@ -744,9 +768,104 @@ void SCCPInstVisitor::visitPHINode(PHINode &PN) {
   // constant.  If they are constant and don't agree, the PHI is a constant
   // range. If there are no executable operands, the PHI remains unknown.
   ValueLatticeElement PhiState = getValueState(&PN);
+
+  // Check whether PN is in a loop header, if it is, then we can do some loop
+  // peeling optimize.
+  Function *F = PN.getParent()->getParent();
+  bool AnalysisValid = AnalysisResults.count(F) && AnalysisResults[F].DT &&
+                       AnalysisResults[F].LI;
+  bool IsUsersKnown = llvm::all_of(PN.users(), [this](User *U) {
+    auto *UI = dyn_cast<Instruction>(U);
+    if (auto *PHI = dyn_cast<PHINode>(UI)) {
+      for (unsigned I = 0, E = PHI->getNumIncomingValues(); I != E; ++I)
+        if (!isEdgeFeasible(PHI->getIncomingBlock(I), PHI->getParent()))
+          return false;
+      return true;
+    }
+    return UI && !UI->getType()->isStructTy() &&
+           !getValueState(UI).isUnknownOrUndef();
+  });
+  const unsigned int IncomingSZ = 2; // Now, only optimize PN for 2 values.
+
+  // Visit instructions is after visit basic blocks and take DFS. So once
+  // PartialState disappears, it does not occur again, because this state is
+  // top-down update.
+  if (AnalysisValid)
+    updatePartialStates(AnalysisResults[F].LI, PN);
+
+  if (PN.getNumIncomingValues() == IncomingSZ && !PhiInfo.count(&PN) &&
+      AnalysisValid && IsUsersKnown) {
+    bool IsInLoop = false;
+    bool AllConstants = true;
+    bool AllEdgeFisable = true;
+    Loop *L = AnalysisResults[F].LI->getLoopFor(PN.getParent());
+    ValueLatticeElement InitLattice = ValueLatticeElement();
+
+    // Now, only the loop that has one exiting edge can be optimized, and the PN
+    // should be in the loop header.
+    SmallVector<Edge, 8> Edges;
+    if (!L || (L->getExitEdges(Edges), Edges.size() != 1) ||
+        L->getHeader() != PN.getParent())
+      IsInLoop = AllConstants = false;
+    // If there is no incomplete state, Phi Lattice optimization can be
+    // performed safely. This is still conservative, since dependencies between
+    // instructions are not taken into account.
+    else if (!PartialStates.empty()) {
+      AllEdgeFisable = false;
+    } else {
+      unsigned BBInLoop = 0;
+      for (unsigned i = 0, e = PN.getNumIncomingValues(); i != e; ++i) {
+        if (!isEdgeFeasible(PN.getIncomingBlock(i), PN.getParent())) {
+          AllEdgeFisable = false;
+          break;
+        }
+        if (L->contains(PN.getIncomingBlock(i))) {
+          ++BBInLoop;
+          continue;
+        }
+        if (auto *C = dyn_cast<ConstantInt>(PN.getIncomingValue(i))) {
+          ValueLatticeElement VLE;
+          VLE.markConstantRange(
+              ConstantRange(C->getUniqueInteger(), C->getUniqueInteger() + 1));
+          InitLattice.mergeIn(VLE);
+        } else
+          AllConstants = false;
+      }
+      IsInLoop = BBInLoop == 1;
+    }
+
+    // Now, all the information we have up to phi
+    if (AllEdgeFisable)
+      PhiInfo.insert(
+          std::make_pair(&PN, std::make_pair(IsInLoop, AllConstants)));
+
+    // LoopPhiStates is initialized only when all edges except the loop-back
+    // edge are visible.
+    if (IsInLoop && AllConstants && AllEdgeFisable && !LoopPhiStates.count(&PN))
+      LoopPhiStates[&PN] = InitLattice;
+  }
+
+  if (PN.getNumIncomingValues() == IncomingSZ && LoopPhiStates.count(&PN) &&
+      !VisitedPhi.count(&PN)) {
+    ValueState[&PN] = PhiState = ValueLatticeElement();
+    VisitedPhi.insert(&PN);
+  }
+
+  bool IsInLoop = PhiInfo.count(&PN) ? PhiInfo[&PN].first : false;
+  bool AllConstants = PhiInfo.count(&PN) ? PhiInfo[&PN].second : false;
+
   for (unsigned i = 0, e = PN.getNumIncomingValues(); i != e; ++i) {
     if (!isEdgeFeasible(PN.getIncomingBlock(i), PN.getParent()))
       continue;
+
+    if (PN.getNumIncomingValues() == IncomingSZ && IsInLoop && AllConstants) {
+      if (!AnalysisResults[F]
+               .LI->getLoopFor(PN.getParent())
+               ->contains(PN.getIncomingBlock(i))) {
+        ++NumActiveIncoming;
+        continue;
+      }
+    }
 
     ValueLatticeElement IV = getValueState(PN.getIncomingValue(i));
     PhiState.mergeIn(IV);
@@ -816,7 +935,16 @@ void SCCPInstVisitor::visitCastInst(CastInst &I) {
   if (OpSt.isUnknownOrUndef())
     return;
 
-  if (Constant *OpC = getConstant(OpSt)) {
+  auto IsConstant = [this](CastInst &I, ValueLatticeElement &OpSt) {
+    if (isa<PHINode>(I.getOperand(0)) && LoopPhiStates.count(I.getOperand(0))) {
+      ValueLatticeElement V = LoopPhiStates[I.getOperand(0)];
+      V.mergeIn(OpSt);
+      return getConstant(V);
+    }
+    return getConstant(OpSt);
+  };
+
+  if (Constant *OpC = IsConstant(I, OpSt)) {
     // Fold the constant as we build.
     Constant *C = ConstantFoldCastOperand(I.getOpcode(), OpC, I.getType(), DL);
     markConstant(&I, C);
@@ -1421,6 +1549,9 @@ void SCCPInstVisitor::solve() {
       visit(BB);
     }
   }
+
+  for (auto &[PN, VLE] : LoopPhiStates)
+    ValueState[PN].mergeIn(VLE);
 }
 
 /// While solving the dataflow for a function, we don't compute a result for

@@ -17,6 +17,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/CFLAndersAliasAnalysis.h"
 #include "llvm/Analysis/CFLSteensAliasAnalysis.h"
+#include "llvm/Analysis/CJAliasAnalysis.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -44,8 +45,16 @@
 using namespace llvm;
 
 namespace llvm {
+extern cl::opt<bool> CJPipeline;
+cl::opt<bool> CJDisableEscapeAnalysis("cj-disable-ea", cl::Hidden,
+                                      cl::init(false));
 cl::opt<bool> RunPartialInlining("enable-partial-inlining", cl::Hidden,
                                  cl::desc("Run Partial inlinining pass"));
+cl::opt<bool> EnableCJBarrierSplit("enable-cj-barrier-split", cl::Hidden,
+                                   cl::init(true));
+cl::opt<bool> EnableCJGenericIntrinsicOpt(
+    "enable-cj-generic-intrinsic-opt", cl::init(true), cl::Hidden,
+    cl::desc("Enable cangjie generic intrinsics optimization"));
 
 static cl::opt<bool>
 UseGVNAfterVectorization("use-gvn-after-vectorization",
@@ -165,14 +174,15 @@ cl::opt<AttributorRunOption> AttributorRun(
 
 extern cl::opt<bool> EnableKnowledgeRetention;
 } // namespace llvm
-
+extern cl::opt<int> MaxRecursionInl;
+extern cl::opt<int> CountedLoopTripWidth;
 PassManagerBuilder::PassManagerBuilder() {
     OptLevel = 2;
     SizeLevel = 0;
     LibraryInfo = nullptr;
     Inliner = nullptr;
     DisableUnrollLoops = false;
-    SLPVectorize = false;
+    SLPVectorize = true;
     LoopVectorize = true;
     LoopsInterleaved = true;
     RerollLoops = RunLoopRerolling;
@@ -273,12 +283,13 @@ void PassManagerBuilder::addInitialAliasAnalysisPasses(
   // support "obvious" type-punning idioms.
   PM.add(createTypeBasedAAWrapperPass());
   PM.add(createScopedNoAliasAAWrapperPass());
+  if (CJPipeline)
+    PM.add(createCangjieAAWrapperPass());
 }
 
 void PassManagerBuilder::populateFunctionPassManager(
     legacy::FunctionPassManager &FPM) {
   addExtensionsToPM(EP_EarlyAsPossible, FPM);
-
   // Add LibraryInfo if we have some.
   if (LibraryInfo)
     FPM.add(new TargetLibraryInfoWrapperPass(*LibraryInfo));
@@ -307,6 +318,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
   // Start of function pass.
   // Break up aggregate allocas, using SSAUpdater.
   assert(OptLevel >= 1 && "Calling function optimizer with no optimization level!");
+
   MPM.add(createSROAPass());
   MPM.add(createEarlyCSEPass(true /* Enable mem-ssa. */)); // Catch trivial redundancies
   if (EnableKnowledgeRetention)
@@ -332,9 +344,12 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
     MPM.add(createJumpThreadingPass());         // Thread jumps.
     MPM.add(createCorrelatedValuePropagationPass()); // Propagate conditionals
   }
+  if (CJPipeline && OptLevel > 1)
+    MPM.add(createCJSimpleRangeAnalysis());
   MPM.add(
       createCFGSimplificationPass(SimplifyCFGOptions().convertSwitchRangeToICmp(
           true))); // Merge & remove BBs
+
   // Combine silly seq's
   if (OptLevel > 2)
     MPM.add(createAggressiveInstCombinerPass());
@@ -350,7 +365,14 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
       createCFGSimplificationPass(SimplifyCFGOptions().convertSwitchRangeToICmp(
           true)));                            // Merge & remove BBs
   MPM.add(createReassociatePass());           // Reassociate expressions
-
+  // Begin the loop pass pipeline.
+  if (CJPipeline) {
+    // 2: Opt size level, Oz. -1: argument for MaxHeaderSize
+    MPM.add(createLoopRotatePass(SizeLevel == 2 ? 0 : -1));
+    MPM.add(createInstructionCombiningPass());
+    MPM.add(createIndVarSimplifyPass());
+    MPM.add(createLoopDeletionPass());
+  }
   // The matrix extension can introduce large vector operations early, which can
   // benefit from running vector-combine early on.
   if (EnableMatrix)
@@ -384,6 +406,9 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
   MPM.add(createCFGSimplificationPass(
       SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
   MPM.add(createInstructionCombiningPass());
+  if (CJPipeline) {
+    MPM.add(createCJLoopFloatOptLegacyPass());
+  }
   // We resume loop passes creating a second loop pipeline here.
   if (EnableLoopFlatten) {
     MPM.add(createLoopFlattenPass()); // Flatten loops
@@ -575,6 +600,33 @@ void PassManagerBuilder::addVectorPasses(legacy::PassManagerBase &PM,
 
 void PassManagerBuilder::populateModulePassManager(
     legacy::PassManagerBase &MPM) {
+  if (CJPipeline) {
+    // Customize parameters for cangjie-pipeline.
+    if (OptLevel > 1 && !MaxRecursionInl.getPosition()) {
+      MaxRecursionInl = 1;
+    }
+    // We put 64-bit safepoint optimization to O3 level for safety.
+    if (OptLevel > 2) {
+      CountedLoopTripWidth = 64;
+    } else {
+      CountedLoopTripWidth = 16;
+    }
+    SLPVectorize = true;
+
+    // Fill Klass at the beginning since related structs may be optimized later
+    MPM.add(createCJFillMetadataLegacyPass());
+    MPM.add(createCJRuntimeLoweringLegacyPass());
+    if (EnableCJBarrierSplit)
+      MPM.add(createCJBarrierSplitLegacyPass());
+  }
+
+  auto addCangjiePasses = [&]() {
+    if (CJPipeline) {
+      MPM.add(createCangjieSpecificOptLegacyPass(OptLevel));
+      MPM.add(createPlaceSafepointsLegacyPass());
+      MPM.add(createCJRewriteStatepointLegacyPass(OptLevel));
+    }
+  };
   MPM.add(createAnnotation2MetadataLegacyPass());
 
   // Allow forcing function attributes as a debugging and tuning aid.
@@ -601,6 +653,7 @@ void PassManagerBuilder::populateModulePassManager(
     addExtensionsToPM(EP_EnabledOnOptLevel0, MPM);
 
     MPM.add(createAnnotationRemarksLegacyPass());
+    addCangjiePasses();
     return;
   }
 
@@ -653,6 +706,11 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(Inliner);
     Inliner = nullptr;
     RunInliner = true;
+  }
+
+  if (CJPipeline && OptLevel > 1) {
+    if (EnableCJGenericIntrinsicOpt)
+      MPM.add(createCJGenericIntrinsicOptLegacyPass());
   }
 
   // Infer attributes on declarations, call sites, arguments, etc. for an SCC.
@@ -798,6 +856,7 @@ void PassManagerBuilder::populateModulePassManager(
   addExtensionsToPM(EP_OptimizerLast, MPM);
 
   MPM.add(createAnnotationRemarksLegacyPass());
+  addCangjiePasses();
 }
 
 LLVMPassManagerBuilderRef LLVMPassManagerBuilderCreate() {

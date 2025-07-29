@@ -74,6 +74,10 @@ STATISTIC(
     IPNumInstReplaced,
     "Number of instructions replaced with (simpler) instruction by IPSCCP");
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
+
 // Helper to check if \p LV is either a constant or a constant
 // range with a single element. This should cover exactly the same cases as the
 // old ValueLatticeElement::isConstant() and is intended to be used in the
@@ -149,6 +153,14 @@ static bool tryToReplaceWithConstant(SCCPSolver &Solver, Value *V) {
 
   LLVM_DEBUG(dbgs() << "  Constant: " << *Const << " = " << *V << '\n');
 
+  // Cangjie does not support the undef type, this part is skiped to avoid
+  // generate the undef type during optimization.
+  if (CJPipeline) {
+    if (Const->getValueID() == Constant::UndefValueVal) {
+      return false;
+    }
+  }
+
   // Replaces all of the uses of a variable with uses of the constant.
   V->replaceAllUsesWith(Const);
   return true;
@@ -197,7 +209,8 @@ static bool removeNonFeasibleEdges(const SCCPSolver &Solver, BasicBlock *BB,
 // runSCCP() - Run the Sparse Conditional Constant Propagation algorithm,
 // and return true if the function was modified.
 static bool runSCCP(Function &F, const DataLayout &DL,
-                    const TargetLibraryInfo *TLI, DomTreeUpdater &DTU) {
+                    const TargetLibraryInfo *TLI, DomTreeUpdater &DTU,
+                    LoopInfo *LI) {
   LLVM_DEBUG(dbgs() << "SCCP on function '" << F.getName() << "'\n");
   SCCPSolver Solver(
       DL, [TLI](Function &F) -> const TargetLibraryInfo & { return *TLI; },
@@ -205,7 +218,7 @@ static bool runSCCP(Function &F, const DataLayout &DL,
 
   // Mark the first block of the function as being executable.
   Solver.markBlockExecutable(&F.front());
-
+  Solver.addAnalysis(F, {nullptr, &DTU.getDomTree(), nullptr, LI});
   // Mark all arguments to the function as being overdefined.
   for (Argument &AI : F.args())
     Solver.markOverdefined(&AI);
@@ -259,8 +272,11 @@ PreservedAnalyses SCCPPass::run(Function &F, FunctionAnalysisManager &AM) {
   const DataLayout &DL = F.getParent()->getDataLayout();
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
   auto *DT = AM.getCachedResult<DominatorTreeAnalysis>(F);
+  if (!DT)
+    DT = &AM.getResult<DominatorTreeAnalysis>(F);
   DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
-  if (!runSCCP(F, DL, &TLI, DTU))
+  if (!runSCCP(F, DL, &TLI, DTU,
+               CJPipeline ? &AM.getResult<LoopAnalysis>(F) : nullptr))
     return PreservedAnalyses::all();
 
   auto PA = PreservedAnalyses();
@@ -301,7 +317,10 @@ public:
     auto *DTWP = getAnalysisIfAvailable<DominatorTreeWrapperPass>();
     DomTreeUpdater DTU(DTWP ? &DTWP->getDomTree() : nullptr,
                        DomTreeUpdater::UpdateStrategy::Lazy);
-    return runSCCP(F, DL, TLI, DTU);
+    return runSCCP(F, DL, TLI, DTU,
+                   CJPipeline
+                       ? &getAnalysis<LoopInfoWrapperPass>().getLoopInfo()
+                       : nullptr);
   }
 };
 
@@ -707,6 +726,10 @@ bool llvm::runIPSCCP(
   // delete the global and any stores that remain to it.
   for (auto &I : make_early_inc_range(Solver.getTrackedGlobals())) {
     GlobalVariable *GV = I.first;
+    // Cangjie native GV needs to be processed at the backend..
+    if (GV->hasAttribute("cj-native")) {
+      continue;
+    }
     if (isOverdefined(I.second))
       continue;
     LLVM_DEBUG(dbgs() << "Found that GV '" << GV->getName()

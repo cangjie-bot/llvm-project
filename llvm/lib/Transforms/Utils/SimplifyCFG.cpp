@@ -57,6 +57,7 @@
 #include "llvm/IR/NoFolder.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
@@ -89,6 +90,10 @@ using namespace llvm;
 using namespace PatternMatch;
 
 #define DEBUG_TYPE "simplifycfg"
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 
 cl::opt<bool> llvm::RequireAndPreserveDomTree(
     "simplifycfg-require-and-preserve-domtree", cl::Hidden,
@@ -1551,7 +1556,8 @@ bool SimplifyCFGOpt::HoistThenElseCodeToIf(BranchInst *BI,
                              LLVMContext::MD_dereferenceable_or_null,
                              LLVMContext::MD_mem_parallel_loop_access,
                              LLVMContext::MD_access_group,
-                             LLVMContext::MD_preserve_access_index};
+                             LLVMContext::MD_preserve_access_index,
+                             LLVMContext::MD_cj_agg};
       combineMetadata(I1, I2, KnownIDs, true);
 
       // I1 and I2 are being combined into a single instruction.  Its debug
@@ -6213,6 +6219,20 @@ static void reuseTableCompare(
   }
 }
 
+static bool isPtrContainsGCPtr(Type *Ty) {
+  if (!Ty->isPointerTy()) {
+    return false;
+  }
+  Type *ET = Ty->getNonOpaquePointerElementType();
+  if (isGCPointerType(ET)) {
+    return true;
+  }
+  if (isMemoryContainsGCPtrType(Ty)) {
+    return true;
+  }
+  return false;
+}
+
 /// If the switch is only used to initialize one or more phi nodes in a common
 /// successor block with different constant values, replace the switch with
 /// lookup tables.
@@ -6284,6 +6304,13 @@ static bool SwitchToLookupTable(SwitchInst *SI, IRBuilder<> &Builder,
   // Keep track of the result types.
   for (PHINode *PHI : PHIs) {
     ResultTypes[PHI] = ResultLists[PHI][0].second->getType();
+    // When the type is one of i8 addrspace(1)**, i8 addrspace(1)* addrspace(1)*,
+    // %record *, do nothing for cangjie.
+    // Because it can genarate i8 addrspace(1)***,
+    // i8 addrspace(1)* addrspace(1)**, %record **.
+    if (CJPipeline && isPtrContainsGCPtr(PHI->getType())) {
+      return false;
+    }
   }
 
   uint64_t NumResults = ResultLists[PHIs[0]].size();

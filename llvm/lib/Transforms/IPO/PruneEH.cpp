@@ -194,6 +194,15 @@ static bool SimplifyFunction(Function *F, CallGraphUpdater &CGU) {
         MadeChange = true;
       }
 
+    // WorkAround: For N2CStub functions, the reachable block cannot be
+    // deleted. If the callee function contains the unreachable block of
+    // ThrowException, here, the runtime EH needs to unwind based on the return
+    // instruction.
+    // In the future, if EH does not rely on the epilog to return to unwind,
+    // remove the process.
+    if (F->hasFnAttribute("cjstub")) {
+      continue;
+    }
     for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; )
       if (CallInst *CI = dyn_cast<CallInst>(I++))
         if (CI->doesNotReturn() && !CI->isMustTailCall() &&

@@ -30,6 +30,7 @@
 #include "sanitizer_common/sanitizer_asm.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_deadlock_detector_interface.h"
+#include "sanitizer_common/sanitizer_dense_map.h"
 #include "sanitizer_common/sanitizer_libignore.h"
 #include "sanitizer_common/sanitizer_suppressions.h"
 #include "sanitizer_common/sanitizer_thread_registry.h"
@@ -182,7 +183,7 @@ struct ThreadState {
   int ignore_reads_and_writes;
   int suppress_reports;
   // Go does not support ignores.
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   IgnoreSet mop_ignore_set;
   IgnoreSet sync_ignore_set;
 #endif
@@ -211,7 +212,7 @@ struct ThreadState {
 
   // Current wired Processor, or nullptr. Required to handle any events.
   Processor *proc1;
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   Processor *proc() { return proc1; }
 #else
   Processor *proc();
@@ -235,6 +236,18 @@ struct ThreadState {
 } ALIGNED(SANITIZER_CACHE_LINE_SIZE);
 
 #if !SANITIZER_GO
+#if SANITIZER_CJ
+extern "C" {
+ThreadState *CJ_MCC_TsanGetThreadState(void) __attribute__((weak));
+}
+inline ThreadState *cur_thread() {
+  return CJ_MCC_TsanGetThreadState();
+}
+inline ThreadState *cur_thread_init() {
+  return cur_thread();
+}
+void TraceFixAll(uptr from, uptr to, uptr size);
+#else
 #if SANITIZER_APPLE || SANITIZER_ANDROID
 ThreadState *cur_thread();
 void set_cur_thread(ThreadState *thr);
@@ -257,6 +270,7 @@ inline void set_cur_thread(ThreadState *thr) {
 }
 inline void cur_thread_finalize() { }
 #  endif  // SANITIZER_APPLE || SANITIZER_ANDROID
+#endif  // !SANITIZER_CJ
 #endif  // SANITIZER_GO
 
 class ThreadContext final : public ThreadContextBase {
@@ -299,7 +313,7 @@ struct Context {
   Context();
 
   bool initialized;
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   bool after_multithreaded_fork;
 #endif
 
@@ -372,7 +386,7 @@ struct Context {
   uptr trace_part_total_allocated SANITIZER_GUARDED_BY(slot_mtx);
   uptr trace_part_recycle_finished SANITIZER_GUARDED_BY(slot_mtx);
   uptr trace_part_finished_excess SANITIZER_GUARDED_BY(slot_mtx);
-#if SANITIZER_GO
+#if SANITIZER_GO || SANITIZER_CJ
   uptr mapped_shadow_begin;
   uptr mapped_shadow_end;
 #endif
@@ -386,13 +400,13 @@ ALWAYS_INLINE Flags *flags() {
 
 struct ScopedIgnoreInterceptors {
   ScopedIgnoreInterceptors() {
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
     cur_thread()->ignore_interceptors++;
 #endif
   }
 
   ~ScopedIgnoreInterceptors() {
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
     cur_thread()->ignore_interceptors--;
 #endif
   }
@@ -771,7 +785,7 @@ void FuncEntry(ThreadState *thr, uptr pc) {
   if (UNLIKELY(!TryTraceFunc(thr, pc)))
     return TraceRestartFuncEntry(thr, pc);
   DCHECK_GE(thr->shadow_stack_pos, thr->shadow_stack);
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   DCHECK_LT(thr->shadow_stack_pos, thr->shadow_stack_end);
 #else
   if (thr->shadow_stack_pos == thr->shadow_stack_end)
@@ -787,7 +801,7 @@ void FuncExit(ThreadState *thr) {
   if (UNLIKELY(!TryTraceFunc(thr, 0)))
     return TraceRestartFuncExit(thr);
   DCHECK_GT(thr->shadow_stack_pos, thr->shadow_stack);
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   DCHECK_LT(thr->shadow_stack_pos, thr->shadow_stack_end);
 #endif
   thr->shadow_stack_pos--;

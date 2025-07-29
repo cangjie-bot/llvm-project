@@ -106,6 +106,33 @@ bool RegisterContextUnwind::IsUnwindPlanValidForCurrentPC(
   return false;
 }
 
+static bool GetCJThreadPC(addr_t &pc, Process *process) {
+  if (!process) {
+    return false;
+  }
+  if (process->GetCJThreadRegContext().size()) {
+    auto reg_map = process->GetCJThreadRegContext();
+    auto arch = process->GetTarget().GetArchitecture().GetTriple().getArch();
+    // x86_64 cjthread pc reg
+    if (arch == llvm::Triple::x86_64 &&
+        reg_map.find(ConstString("rip")) != reg_map.end()) {
+      pc = reg_map[ConstString("rip")];
+      return true;
+    }
+
+    // aarch64 cjthread pc reg
+    if (arch == llvm::Triple::aarch64 &&
+        reg_map.find(ConstString("pc")) != reg_map.end()) {
+      pc = reg_map[ConstString("pc")];
+      return true;
+    }
+
+    return false;
+  }
+
+  return false;
+}
+
 // Initialize a RegisterContextUnwind which is the first frame of a stack -- the
 // zeroth frame or currently executing frame.
 
@@ -120,7 +147,10 @@ void RegisterContextUnwind::InitializeZerothFrame() {
     return;
   }
 
-  addr_t current_pc = reg_ctx_sp->GetPC();
+  addr_t current_pc = LLDB_INVALID_ADDRESS ;
+  if (!GetCJThreadPC(current_pc, exe_ctx.GetProcessPtr())) {
+    current_pc = reg_ctx_sp->GetPC();
+  }
 
   if (current_pc == LLDB_INVALID_ADDRESS) {
     m_frame_type = eNotAValidFrame;
@@ -485,7 +515,6 @@ void RegisterContextUnwind::InitializeNonZerothFrame() {
 
   AddressRange addr_range;
   m_sym_ctx_valid = m_current_pc.ResolveFunctionScope(m_sym_ctx, &addr_range);
-
   if (m_sym_ctx.symbol) {
     UnwindLogMsg("with pc value of 0x%" PRIx64 ", symbol name is '%s'", pc,
                  GetSymbolOrFunctionName(m_sym_ctx).AsCString(""));
@@ -953,6 +982,13 @@ UnwindPlanSP RegisterContextUnwind::GetFullUnwindPlanForFrame() {
   if (m_behaves_like_zeroth_frame && process) {
     unwind_plan_sp = func_unwinders_sp->GetUnwindPlanAtNonCallSite(
         process->GetTarget(), m_thread);
+#if defined(_WIN32)
+    auto symbol_name = GetSymbolOrFunctionName(m_sym_ctx);
+    if (symbol_name == "CJ_MCC_C2NStub" || symbol_name == "CJ_MCC_N2CStub" ||
+        symbol_name == "CJ_MCC_NewObjectFast" || symbol_name == "CJ_MCC_NewFinalizerFast") {
+      unwind_plan_sp = func_unwinders_sp->GetAssemblyUnwindPlan(process->GetTarget(), m_thread);
+    }
+#endif
     if (unwind_plan_sp && unwind_plan_sp->PlanValidAtAddress(m_current_pc)) {
       if (unwind_plan_sp->GetSourcedFromCompiler() == eLazyBoolNo) {
         // We probably have an UnwindPlan created by inspecting assembly
@@ -1222,7 +1258,7 @@ bool RegisterContextUnwind::IsTrapHandlerSymbol(
     const std::vector<ConstString> trap_handler_names(
         platform_sp->GetTrapHandlerSymbolNames());
     for (ConstString name : trap_handler_names) {
-      if ((m_sym_ctx.function && m_sym_ctx.function->GetName() == name) ||
+      if ((m_sym_ctx.function && m_sym_ctx.function->GetName(&m_sym_ctx) == name) ||
           (m_sym_ctx.symbol && m_sym_ctx.symbol->GetName() == name)) {
         return true;
       }
@@ -1231,7 +1267,7 @@ bool RegisterContextUnwind::IsTrapHandlerSymbol(
   const std::vector<ConstString> user_specified_trap_handler_names(
       m_parent_unwind.GetUserSpecifiedTrapHandlerFunctionNames());
   for (ConstString name : user_specified_trap_handler_names) {
-    if ((m_sym_ctx.function && m_sym_ctx.function->GetName() == name) ||
+    if ((m_sym_ctx.function && m_sym_ctx.function->GetName(&m_sym_ctx) == name) ||
         (m_sym_ctx.symbol && m_sym_ctx.symbol->GetName() == name)) {
       return true;
     }
@@ -2120,6 +2156,10 @@ bool RegisterContextUnwind::ReadGPRValue(lldb::RegisterKind register_kind,
   // if this is frame 0 (currently executing frame), get the requested reg
   // contents from the actual thread registers
   if (IsFrameZero()) {
+    if (m_thread.GetProcess()->GetCJThreadRegContext().size()) {
+      value = m_thread.GetProcess()->GetCJThreadRegContext()[ConstString(reg_info->name)];
+      return true;
+    }
     if (m_thread.GetRegisterContext()->ReadRegister(reg_info, reg_value)) {
       value = reg_value.GetAsUInt64();
       return true;

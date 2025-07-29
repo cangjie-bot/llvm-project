@@ -53,6 +53,12 @@
 
 using namespace llvm;
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> CangjieJIT;
+extern cl::opt<bool> EnableStackGrow;
+}
+
 static cl::opt<bool>
     EnableIPRA("enable-ipra", cl::init(false), cl::Hidden,
                cl::desc("Enable interprocedural register allocation "
@@ -149,7 +155,7 @@ static cl::opt<cl::boolOrDefault>
 EnableFastISelOption("fast-isel", cl::Hidden,
   cl::desc("Enable the \"fast\" instruction selector"));
 
-static cl::opt<cl::boolOrDefault> EnableGlobalISelOption(
+cl::opt<cl::boolOrDefault> EnableGlobalISelOption(
     "global-isel", cl::Hidden,
     cl::desc("Enable the \"global\" instruction selector"));
 
@@ -263,6 +269,11 @@ static cl::opt<bool> DisableExpandReductions(
 static cl::opt<bool> DisableSelectOptimize(
     "disable-select-optimize", cl::init(true), cl::Hidden,
     cl::desc("Disable the select-optimization pass from running"));
+
+/// Enable cangjie thread sanitizer pass.
+static cl::opt<bool> CangjieThreadSanitizer(
+    "tsan", cl::init(false), cl::Hidden,
+    cl::desc("Enable cangjie thread sanitizer pass"));
 
 /// Allow standard passes to be disabled by command line options. This supports
 /// simple binary flags that either suppress the pass or do nothing.
@@ -1113,6 +1124,21 @@ bool TargetPassConfig::addISelPasses() {
 
   addPass(createPreISelIntrinsicLoweringPass());
   PM->add(createTargetTransformInfoWrapperPass(TM->getTargetIRAnalysis()));
+
+  if (CJPipeline) {
+    if (CangjieJIT) {
+      addPass(createCJFillMetadataLegacyPass());
+      addPass(createCJRuntimeLoweringLegacyPass());
+      addPass(createCangjieSpecificOptLegacyPass(0));
+      addPass(createPlaceSafepointsLegacyPass());
+      addPass(createCJRewriteStatepointLegacyPass(0));
+    }
+    addPass(createCJBarrierLoweringPass(getOptLevel()));
+    if (CangjieThreadSanitizer) {
+      addPass(createThreadSanitizerPass());
+    }
+  }
+
   addIRPasses();
   addCodeGenPrepare();
   addPassesToHandleExceptions();
@@ -1190,6 +1216,9 @@ void TargetPassConfig::addMachinePasses() {
 
   // Run post-ra passes.
   addPostRegAlloc();
+
+  if (CJPipeline && EnableStackGrow && !CangjieJIT)
+    addPass(&CJStackPointerInserterID);
 
   addPass(&RemoveRedundantDebugValuesID);
 

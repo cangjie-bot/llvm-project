@@ -57,6 +57,10 @@ static cl::opt<unsigned> MaxDeoptOrUnreachableSuccessorCheckDepth(
              "is followed by a block that either has a terminating "
              "deoptimizing call or is terminated with an unreachable"));
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
+
 void llvm::detachDeadBlocks(
     ArrayRef<BasicBlock *> BBs,
     SmallVectorImpl<DominatorTree::UpdateType> *Updates,
@@ -1094,8 +1098,7 @@ SplitBlockPredecessorsImpl(BasicBlock *BB, ArrayRef<BasicBlock *> Preds,
   // Delegate this work to the SplitLandingPadPredecessors.
   if (BB->isLandingPad()) {
     SmallVector<BasicBlock*, 2> NewBBs;
-    std::string NewName = std::string(Suffix) + ".split-lp";
-
+    std::string NewName = std::string(Suffix) + (CJPipeline ? "" : ".split-lp");
     SplitLandingPadPredecessorsImpl(BB, Preds, Suffix, NewName.c_str(), NewBBs,
                                     DTU, DT, LI, MSSAU, PreserveLCSSA);
     return NewBBs[0];

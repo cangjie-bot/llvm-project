@@ -1,5 +1,8 @@
 include(LLVM-Build)
 
+# demangle from runtime
+set(CANGJIE_DEMANGLE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../utils/demangle)
+
 # `Demangle', `Support' and `TableGen' libraries are added on the top-level
 # CMakeLists.txt
 

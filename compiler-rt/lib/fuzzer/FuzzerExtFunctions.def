@@ -48,3 +48,7 @@ EXT_FUNC(__msan_scoped_disable_interceptor_checks, void, (), false);
 EXT_FUNC(__msan_scoped_enable_interceptor_checks, void, (), false);
 EXT_FUNC(__msan_unpoison, void, (const volatile void *, size_t size), false);
 EXT_FUNC(__msan_unpoison_param, void, (size_t n), false);
+EXT_FUNC(__sanitizer_cangjie_symbolize_pc, int, (void *, const char *fmt, char *out_buf, size_t out_buf_size), true);
+EXT_FUNC(__sanitizer_cangjie_get_module_and_offset_for_pc, int,
+         (void *pc, char *module_path,
+         size_t module_path_len,void **pc_offset), true);

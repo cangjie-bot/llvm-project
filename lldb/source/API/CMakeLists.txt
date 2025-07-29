@@ -86,6 +86,7 @@ add_lldb_library(liblldb SHARED ${option_framework}
   SBWatchpoint.cpp
   SBUnixSignals.cpp
   SystemInitializerFull.cpp
+  SBMixedArkTSDebugger.cpp
   ${lldb_python_wrapper}
   ${lldb_lua_wrapper}
 
@@ -107,6 +108,14 @@ add_lldb_library(liblldb SHARED ${option_framework}
 
   ${option_install_prefix}
 )
+
+# set rpath to link boundscheck indirectly
+if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+  target_link_options(liblldb PUBLIC "-Wl,-rpath,${CMAKE_SOURCE_DIR}/../utils/boundscheck/lib/${CMAKE_SYSTEM_PROCESSOR}")
+else()
+  string(REPLACE "AMD64" "x86_64" ARCH_NAME "${CMAKE_SYSTEM_PROCESSOR}")
+  target_link_directories(lldbPluginExpressionParserCangjie PUBLIC ${CMAKE_SOURCE_DIR}/../utils/boundscheck/lib/${ARCH_NAME})
+endif()
 
 # lib/pythonX.Y/dist-packages/lldb/_lldb.so is a symlink to lib/liblldb.so,
 # which depends on lib/libLLVM*.so (BUILD_SHARED_LIBS) or lib/libLLVM-10git.so
@@ -198,12 +207,22 @@ else()
   # the framework (including the Clang resourece directory).
   if(NOT LLDB_BUILD_FRAMEWORK)
     set(LLDB_CLANG_RESOURCE_DIR_PARENT "$<TARGET_FILE_DIR:liblldb>/clang")
-    file(MAKE_DIRECTORY "${LLDB_CLANG_RESOURCE_DIR_PARENT}")
+    execute_process(
+      COMMAND ${CMAKE_COMMAND} -E create_symlink "${LLDB_EXTERNAL_CLANG_RESOURCE_DIR}"
+        "${LLDB_CLANG_RESOURCE_DIR_PARENT}/${LLDB_CLANG_RESOURCE_DIR_NAME}"
+      ERROR_VARIABLE err_var)
+    set(LINK_OR_COPY_CLANG_RESOURCE_DIR COMMAND ${CMAKE_COMMAND} -E create_symlink
+      "${LLDB_EXTERNAL_CLANG_RESOURCE_DIR}"
+      "${LLDB_CLANG_RESOURCE_DIR_PARENT}/${LLDB_CLANG_RESOURCE_DIR_NAME}")
+    if(WIN32 AND err_var)
+      set(LINK_OR_COPY_CLANG_RESOURCE_DIR COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${LLDB_EXTERNAL_CLANG_RESOURCE_DIR}"
+      "${LLDB_CLANG_RESOURCE_DIR_PARENT}/${LLDB_CLANG_RESOURCE_DIR_NAME}")
+    endif()
     add_custom_command(TARGET liblldb POST_BUILD
       COMMENT "Linking Clang resource dir into LLDB build directory: ${LLDB_CLANG_RESOURCE_DIR_PARENT}"
       COMMAND ${CMAKE_COMMAND} -E make_directory "${LLDB_CLANG_RESOURCE_DIR_PARENT}"
-      COMMAND ${CMAKE_COMMAND} -E create_symlink "${LLDB_EXTERNAL_CLANG_RESOURCE_DIR}"
-              "${LLDB_CLANG_RESOURCE_DIR_PARENT}/${LLDB_CLANG_RESOURCE_DIR_NAME}"
+      ${LINK_OR_COPY_CLANG_RESOURCE_DIR}
     )
   endif()
 endif()

@@ -864,6 +864,9 @@ inline uptr RestoreAddr(uptr addr) {
 void InitializePlatform();
 void InitializePlatformEarly();
 void CheckAndProtect();
+#if SANITIZER_CJ
+void MapCangjieShadow(uptr heap, u64 size);
+#endif
 void InitializeShadowMemoryPlatform();
 void WriteMemoryProfile(char *buf, uptr buf_size, u64 uptime_ns);
 int ExtractResolvFDs(void *state, int *fds, int nfd);

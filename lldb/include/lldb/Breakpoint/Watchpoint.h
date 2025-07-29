@@ -131,6 +131,8 @@ public:
   ///     \b true if the target should stop at this watchpoint and \b false not.
   bool InvokeCallback(StoppointCallbackContext *context);
 
+  bool InvokeInnerCallback(StoppointCallbackContext *context);
+
   // Condition
   /// Set the watchpoint's condition.
   ///

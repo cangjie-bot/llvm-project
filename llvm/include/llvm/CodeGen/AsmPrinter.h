@@ -33,6 +33,7 @@ namespace llvm {
 class AddrLabelMap;
 class BasicBlock;
 class BlockAddress;
+class CJMetadataInfo;
 class Constant;
 class ConstantArray;
 class DataLayout;
@@ -194,6 +195,8 @@ private:
 protected:
   MCSymbol *CurrentFnBegin = nullptr;
 
+  std::map<const MachineInstr *, std::pair<MCSymbol *, MCSymbol *>> StackCheckMap;
+  SmallVector<std::tuple<const MachineInstr *, MCSymbol *, MCSymbol *>> SafepointStackMap;
   /// A vector of all debug/EH info emitters we should use. This vector
   /// maintains ownership of the emitters.
   std::vector<HandlerInfo> Handlers;
@@ -228,6 +231,32 @@ private:
 
 protected:
   explicit AsmPrinter(TargetMachine &TM, std::unique_ptr<MCStreamer> Streamer);
+
+  void emitCangjieStackCheck(const MachineInstr &MI);
+  bool tryEmitCangjieSpecificCall(const MachineInstr *MI);
+  bool tryEmitCangjieSpecificCallByMOSym(const MachineInstr *MI,
+                                         const MachineOperand &MOSym,
+                                         unsigned Opcode);
+
+  virtual void emitMccNewObjectFastPath(const MachineInstr *,
+                                        const MachineOperand &, unsigned) {};
+  virtual void emitCJNewArrayFastPath(const MachineInstr &,
+                                      const MachineOperand &) {};
+  virtual void emitCJThrowException(const MachineInstr *MI,
+                                    const MachineOperand &, unsigned) {};
+  const Function *tryGetCangjieStubCallNativeFunc(const MachineInstr *MI,
+                                                  const Function *Callee) const;
+  virtual void emitCangjieCallStubInstImpl(const MachineInstr *MI,
+                                           const Function *F,
+                                           const MachineOperand &MOSym,
+                                           unsigned Opcode){};
+  virtual void emitGetCJThreadId() {};
+
+  int64_t getAllocBufferOffsetInCJTLS() const;
+  int64_t getMutatorOffsetInCJTLS() const;
+  int64_t getProtectAddrOffsetInCJTLS() const;
+  int64_t getSafepointCheckAddrOffsetInCJTLS() const;
+  int64_t getCJThreadOffsetInCJTLS() const;
 
 public:
   ~AsmPrinter() override;
@@ -479,7 +508,7 @@ public:
   /// label of that alias needs to be emitted before the corresponding element.
   using AliasMapTy = DenseMap<uint64_t, SmallVector<const GlobalAlias *, 1>>;
   void emitGlobalConstant(const DataLayout &DL, const Constant *CV,
-                          AliasMapTy *AliasList = nullptr);
+                          AliasMapTy *AliasList = nullptr, bool IsReflectGV = false);
 
   /// Unnamed constant global variables solely contaning a pointer to
   /// another globals variable act like a global variable "proxy", or GOT
@@ -498,6 +527,9 @@ public:
 
   /// Emit the stack maps.
   void emitStackMaps(StackMaps &SM);
+
+  /// Emit the CJMetadata infos.
+  void emitCJMetadataInfo(CJMetadataInfo &CMI, Module &M);
 
   //===------------------------------------------------------------------===//
   // Overridable Hooks
@@ -535,6 +567,26 @@ public:
 
   /// Targets can override this to emit stuff at the end of a basic block.
   virtual void emitBasicBlockEnd(const MachineBasicBlock &MBB);
+
+  virtual void emitCJStackCheck(const MachineInstr &) {}
+
+  virtual int emitSOFECall(const MachineInstr &) { return 0; }
+
+  virtual int emitStackGrow(const MachineInstr &) { return 0; }
+
+  virtual void emitCangjieSafepoint(const MachineInstr &) {}
+
+  virtual void emitGcStateCheck() {}
+
+  virtual int emitSafePointDirectCall(unsigned Index) { return 0; }
+
+  virtual void emitMetadataAddress() {}
+
+  /// Reload the SP to the correct position when entering epilogue.
+  /// This is because SP might change in function execution under certain
+  /// circumstances and our exception handling reqires that SP should be
+  /// at the same place as it leaves the prologue.
+  virtual void reloadSPForEpilogue(MachineFunction &) {}
 
   /// Targets should implement this to emit instructions.
   virtual void emitInstruction(const MachineInstr *) {
@@ -654,6 +706,9 @@ public:
   /// assembly output is enabled, we output comments describing the encoding.
   /// Desc is a string saying what the encoding is specifying (e.g. "LSDA").
   void emitEncodingByte(unsigned Val, const char *Desc = nullptr) const;
+
+  /// Emit a magic number in EH table header when no callsites in function.
+  void EmitNoCallsiteEHHeader() const;
 
   /// Return the size of the encoding in bytes.
   unsigned GetSizeOfEncodedValue(unsigned Encoding) const;

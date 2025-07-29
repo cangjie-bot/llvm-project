@@ -169,6 +169,7 @@ size_t DwarfEHPrepare::pruneUnreachableResumes(
 bool DwarfEHPrepare::InsertUnwindResumeCalls() {
   SmallVector<ResumeInst *, 16> Resumes;
   SmallVector<LandingPadInst *, 16> CleanupLPads;
+  bool CangjieSrc = F.hasFnAttribute("cangjie");
   if (F.doesNotThrow())
     NumNoUnwind++;
   else
@@ -211,94 +212,109 @@ bool DwarfEHPrepare::InsertUnwindResumeCalls() {
   if (ResumesLeft == 0)
     return true; // We pruned them all.
 
-  // RewindFunction - _Unwind_Resume or the target equivalent.
-  FunctionCallee RewindFunction;
-  CallingConv::ID RewindFunctionCallingConv;
-  FunctionType *FTy;
-  const char *RewindName;
-  bool DoesRewindFunctionNeedExceptionObject;
+  // We do not create PHI node and explict resume calls for Cangjie
+  // FP-based stack unwinding. For other languages, keep the original
+  // logic.
+  if (!CangjieSrc) {
+    // RewindFunction - _Unwind_Resume or the target equivalent.
+    FunctionCallee RewindFunction;
+    CallingConv::ID RewindFunctionCallingConv;
+    FunctionType *FTy;
+    const char *RewindName;
+    bool DoesRewindFunctionNeedExceptionObject;
 
-  if ((Pers == EHPersonality::GNU_CXX || Pers == EHPersonality::GNU_CXX_SjLj) &&
-      TargetTriple.isTargetEHABICompatible()) {
-    RewindName = TLI.getLibcallName(RTLIB::CXA_END_CLEANUP);
-    FTy = FunctionType::get(Type::getVoidTy(Ctx), false);
-    RewindFunctionCallingConv =
-        TLI.getLibcallCallingConv(RTLIB::CXA_END_CLEANUP);
-    DoesRewindFunctionNeedExceptionObject = false;
-  } else {
-    RewindName = TLI.getLibcallName(RTLIB::UNWIND_RESUME);
-    FTy =
-        FunctionType::get(Type::getVoidTy(Ctx), Type::getInt8PtrTy(Ctx), false);
-    RewindFunctionCallingConv = TLI.getLibcallCallingConv(RTLIB::UNWIND_RESUME);
-    DoesRewindFunctionNeedExceptionObject = true;
-  }
-  RewindFunction = F.getParent()->getOrInsertFunction(RewindName, FTy);
+    if ((Pers == EHPersonality::GNU_CXX ||
+         Pers == EHPersonality::GNU_CXX_SjLj) &&
+        TargetTriple.isTargetEHABICompatible()) {
+      RewindName = TLI.getLibcallName(RTLIB::CXA_END_CLEANUP);
+      FTy = FunctionType::get(Type::getVoidTy(Ctx), false);
+      RewindFunctionCallingConv =
+          TLI.getLibcallCallingConv(RTLIB::CXA_END_CLEANUP);
+      DoesRewindFunctionNeedExceptionObject = false;
+    } else {
+      RewindName = TLI.getLibcallName(RTLIB::UNWIND_RESUME);
+      FTy = FunctionType::get(Type::getVoidTy(Ctx), Type::getInt8PtrTy(Ctx),
+                              false);
+      RewindFunctionCallingConv =
+          TLI.getLibcallCallingConv(RTLIB::UNWIND_RESUME);
+      DoesRewindFunctionNeedExceptionObject = true;
+    }
+    RewindFunction = F.getParent()->getOrInsertFunction(RewindName, FTy);
 
-  // Create the basic block where the _Unwind_Resume call will live.
-  if (ResumesLeft == 1) {
-    // Instead of creating a new BB and PHI node, just append the call to
-    // _Unwind_Resume to the end of the single resume block.
-    ResumeInst *RI = Resumes.front();
-    BasicBlock *UnwindBB = RI->getParent();
-    Value *ExnObj = GetExceptionObject(RI);
+    // Create the basic block where the _Unwind_Resume call will live.
+    if (ResumesLeft == 1) {
+      // Instead of creating a new BB and PHI node, just append the call to
+      // _Unwind_Resume to the end of the single resume block.
+      ResumeInst *RI = Resumes.front();
+      BasicBlock *UnwindBB = RI->getParent();
+      Value *ExnObj = GetExceptionObject(RI);
+      llvm::SmallVector<Value *, 1> RewindFunctionArgs;
+      if (DoesRewindFunctionNeedExceptionObject)
+        RewindFunctionArgs.push_back(ExnObj);
+
+      // Call the rewind function.
+      CallInst *CI =
+          CallInst::Create(RewindFunction, RewindFunctionArgs, "", UnwindBB);
+      // The verifier requires that all calls of debug-info-bearing functions
+      // from debug-info-bearing functions have a debug location (for inlining
+      // purposes). Assign a dummy location to satisfy the constraint.
+      Function *RewindFn = dyn_cast<Function>(RewindFunction.getCallee());
+      if (RewindFn && RewindFn->getSubprogram())
+        if (DISubprogram *SP = F.getSubprogram())
+          CI->setDebugLoc(DILocation::get(SP->getContext(), 0, 0, SP));
+      CI->setCallingConv(RewindFunctionCallingConv);
+
+      // We never expect _Unwind_Resume to return.
+      CI->setDoesNotReturn();
+      new UnreachableInst(Ctx, UnwindBB);
+      return true;
+    }
+
+    std::vector<DominatorTree::UpdateType> Updates;
+    Updates.reserve(Resumes.size());
+
     llvm::SmallVector<Value *, 1> RewindFunctionArgs;
-    if (DoesRewindFunctionNeedExceptionObject)
-      RewindFunctionArgs.push_back(ExnObj);
 
-    // Call the rewind function.
+    BasicBlock *UnwindBB = BasicBlock::Create(Ctx, "unwind_resume", &F);
+    PHINode *PN = PHINode::Create(Type::getInt8PtrTy(Ctx), ResumesLeft,
+                                  "exn.obj", UnwindBB);
+
+    // Extract the exception object from the ResumeInst and add it to the PHI
+    // node that feeds the _Unwind_Resume call.
+    for (ResumeInst *RI : Resumes) {
+      BasicBlock *Parent = RI->getParent();
+      BranchInst::Create(UnwindBB, Parent);
+      Updates.push_back({DominatorTree::Insert, Parent, UnwindBB});
+
+      Value *ExnObj = GetExceptionObject(RI);
+      PN->addIncoming(ExnObj, Parent);
+
+      ++NumResumesLowered;
+    }
+
+    if (DoesRewindFunctionNeedExceptionObject)
+      RewindFunctionArgs.push_back(PN);
+
+    // Call the function.
     CallInst *CI =
         CallInst::Create(RewindFunction, RewindFunctionArgs, "", UnwindBB);
-    // The verifier requires that all calls of debug-info-bearing functions
-    // from debug-info-bearing functions have a debug location (for inlining
-    // purposes). Assign a dummy location to satisfy the constraint.
-    Function *RewindFn = dyn_cast<Function>(RewindFunction.getCallee());
-    if (RewindFn && RewindFn->getSubprogram())
-      if (DISubprogram *SP = F.getSubprogram())
-        CI->setDebugLoc(DILocation::get(SP->getContext(), 0, 0, SP));
     CI->setCallingConv(RewindFunctionCallingConv);
 
     // We never expect _Unwind_Resume to return.
     CI->setDoesNotReturn();
     new UnreachableInst(Ctx, UnwindBB);
-    return true;
+
+    if (DTU)
+      DTU->applyUpdates(Updates);
+  } else {
+    for (ResumeInst *RI : Resumes) {
+      BasicBlock *UnwindBB = RI->getParent();
+      RI->eraseFromParent();
+      new UnreachableInst(Ctx, UnwindBB);
+      // Keep the original statistics even for cangjie resume.
+      ++NumResumesLowered;
+    }
   }
-
-  std::vector<DominatorTree::UpdateType> Updates;
-  Updates.reserve(Resumes.size());
-
-  llvm::SmallVector<Value *, 1> RewindFunctionArgs;
-
-  BasicBlock *UnwindBB = BasicBlock::Create(Ctx, "unwind_resume", &F);
-  PHINode *PN = PHINode::Create(Type::getInt8PtrTy(Ctx), ResumesLeft, "exn.obj",
-                                UnwindBB);
-
-  // Extract the exception object from the ResumeInst and add it to the PHI node
-  // that feeds the _Unwind_Resume call.
-  for (ResumeInst *RI : Resumes) {
-    BasicBlock *Parent = RI->getParent();
-    BranchInst::Create(UnwindBB, Parent);
-    Updates.push_back({DominatorTree::Insert, Parent, UnwindBB});
-
-    Value *ExnObj = GetExceptionObject(RI);
-    PN->addIncoming(ExnObj, Parent);
-
-    ++NumResumesLowered;
-  }
-
-  if (DoesRewindFunctionNeedExceptionObject)
-    RewindFunctionArgs.push_back(PN);
-
-  // Call the function.
-  CallInst *CI =
-      CallInst::Create(RewindFunction, RewindFunctionArgs, "", UnwindBB);
-  CI->setCallingConv(RewindFunctionCallingConv);
-
-  // We never expect _Unwind_Resume to return.
-  CI->setDoesNotReturn();
-  new UnreachableInst(Ctx, UnwindBB);
-
-  if (DTU)
-    DTU->applyUpdates(Updates);
 
   return true;
 }

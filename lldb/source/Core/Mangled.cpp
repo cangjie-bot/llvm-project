@@ -4,6 +4,12 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+//
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Core/Mangled.h"
@@ -18,10 +24,13 @@
 #include "lldb/Utility/RegularExpression.h"
 #include "lldb/Utility/Stream.h"
 #include "lldb/lldb-enumerations.h"
+#include "lldb/Symbol/Block.h"
+#include "lldb/Symbol/VariableList.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/Support/Compiler.h"
+#include "CangjieDemangle.h"
 
 #include <mutex>
 #include <string>
@@ -40,6 +49,9 @@ static inline bool cstring_is_mangled(llvm::StringRef s) {
 Mangled::ManglingScheme Mangled::GetManglingScheme(llvm::StringRef const name) {
   if (name.empty())
     return Mangled::eManglingSchemeNone;
+
+  if (name.startswith("_C"))
+    return Mangled::eManglingSchemeCangjie;
 
   if (name.startswith("?"))
     return Mangled::eManglingSchemeMSVC;
@@ -62,7 +74,7 @@ Mangled::ManglingScheme Mangled::GetManglingScheme(llvm::StringRef const name) {
 
 Mangled::Mangled(ConstString s) : m_mangled(), m_demangled() {
   if (s)
-    SetValue(s);
+    SetValue(s, true);
 }
 
 Mangled::Mangled(llvm::StringRef name) {
@@ -211,6 +223,7 @@ bool Mangled::GetRichManglingInfo(RichManglingContext &context,
     // The current mangled_name_filter would allow llvm_unreachable here.
     return false;
 
+  case eManglingSchemeCangjie:
   case eManglingSchemeItanium:
     // We want the rich mangling info here, so we don't care whether or not
     // there is a demangled string in the pool already.
@@ -250,14 +263,121 @@ bool Mangled::GetRichManglingInfo(RichManglingContext &context,
   llvm_unreachable("Fully covered switch above!");
 }
 
+static void CollectionGenericParamesFromFunction(const SymbolContext &const_sc, std::vector<std::string> &vector) {
+  SymbolContext &sc = const_cast<SymbolContext &>(const_sc);
+  if (!sc.function) {
+    return;
+  }
+
+  auto block = sc.GetFunctionBlock();
+  if (!block) {
+    return;
+  }
+  auto var_list = block->GetBlockVariableList(true);
+  if (!var_list) {
+    return;
+  }
+
+  for (unsigned i = 0; i < var_list->GetSize(); ++i) {
+    auto var_sp = var_list->GetVariableAtIndex(i);
+    auto name = var_sp->GetName().GetStringRef();
+    if (!name.consume_front("$G_")) {
+      continue;
+    }
+
+    uint64_t index;
+    // Radix is 10
+    if (name.consumeInteger(10, index)) {
+      continue;
+    }
+
+    Type *type = var_sp->GetType();
+    if (!type)
+      continue;
+
+    vector.push_back(type->GetName().AsCString());
+  }
+}
+
+static std::string GetDemangleInfo(const char *mangled, const SymbolContext *sc) {
+  Log *log = GetLog(LLDBLog::Demangle);
+  std::string name(mangled);
+  std::string suffix(".objKlass");
+  auto pos = name.find(suffix);
+  if (pos != std::string::npos && pos == name.size() - suffix.size()) {
+    name.erase(pos);
+  }
+  std::vector<std::string> parames;
+  if (sc && sc->function) {
+    CollectionGenericParamesFromFunction(*sc, parames);
+  }
+
+  auto demangle_info = Cangjie::Demangle(name, parames);
+  std::string pkgname = demangle_info.GetPkgName();
+  std::string fullname = demangle_info.GetFullName();
+  if (!pkgname.empty()) {
+    fullname = pkgname + std::string("::") + fullname;
+  }
+  LLDB_LOG(log, "Cangjie Demangle: %s->%s", mangled, fullname.c_str());
+  return fullname;
+}
+
+std::string Mangled::GetDemangledTypeName(std::string &type_name) {
+  auto demangle_info = Cangjie::DemangleType(type_name);
+  std::string fullname = demangle_info.GetFullName();
+  return fullname;
+}
+
+ConstString Mangled::GetDemangledBaseName(const SymbolContext *sc) const {
+  std::string demangled;
+  if (m_mangled && m_demangled.IsNull()) {
+    demangled = GetDemangleInfo(m_mangled.AsCString(), sc);
+  }
+  if (!m_demangled.IsNull()) {
+    demangled = std::string(m_demangled.AsCString());
+  }
+
+  if (demangled.find("(") != std::string::npos) {
+    demangled = demangled.substr(0, demangled.find("("));
+  } else {
+    return ConstString();
+  }
+
+  if (demangled.find_last_of("::") != std::string::npos) {
+    demangled = demangled.substr(demangled.find_last_of("::") + 1);
+  }
+
+  while (true) {
+    auto left = demangled.find_first_of("<");
+    auto right = demangled.find_first_of(">");
+    if (left != std::string::npos && right != std::string::npos && left < right) {
+      demangled.erase(left, right - left + 1);
+      continue;
+    }
+    break;
+  }
+  if (!demangled.empty()) {
+    return ConstString(demangled.c_str());
+  }
+
+  return ConstString();
+}
+
 // Generate the demangled name on demand using this accessor. Code in this
 // class will need to use this accessor if it wishes to decode the demangled
 // name. The result is cached and will be kept until a new string value is
 // supplied to this object, or until the end of the object's lifetime.
-ConstString Mangled::GetDemangledName() const {
+ConstString Mangled::GetDemangledName(const SymbolContext *sc) const {
   // Check to make sure we have a valid mangled name and that we haven't
   // already decoded our mangled name.
-  if (m_mangled && m_demangled.IsNull()) {
+  if (m_mangled && (m_demangled.IsNull() || (sc && sc->function))) {
+    std::string cjdemangled = GetDemangleInfo(m_mangled.AsCString(), sc);
+    if (!cjdemangled.empty()) {
+      m_demangled.SetStringWithMangledCounterpart(llvm::StringRef(cjdemangled.c_str()),
+                                                  m_mangled);
+      return m_demangled;
+    }
+
     // Don't bother running anything that isn't mangled
     const char *mangled_name = m_mangled.GetCString();
     ManglingScheme mangling_scheme =
@@ -271,6 +391,7 @@ ConstString Mangled::GetDemangledName() const {
       case eManglingSchemeMSVC:
         demangled_name = GetMSVCDemangledStr(mangled_name);
         break;
+      case eManglingSchemeCangjie:
       case eManglingSchemeItanium: {
         demangled_name = GetItaniumDemangledStr(mangled_name);
         break;
@@ -300,8 +421,8 @@ ConstString Mangled::GetDemangledName() const {
   return m_demangled;
 }
 
-ConstString Mangled::GetDisplayDemangledName() const {
-  return GetDemangledName();
+ConstString Mangled::GetDisplayDemangledName(const SymbolContext *sc) const {
+  return GetDemangledName(sc);
 }
 
 bool Mangled::NameMatches(const RegularExpression &regex) const {
@@ -313,13 +434,20 @@ bool Mangled::NameMatches(const RegularExpression &regex) const {
 }
 
 // Get the demangled name if there is one, else return the mangled name.
-ConstString Mangled::GetName(Mangled::NamePreference preference) const {
+ConstString Mangled::GetName(Mangled::NamePreference preference, const SymbolContext *sc) const {
   if (preference == ePreferMangled && m_mangled)
     return m_mangled;
 
   // Call the accessor to make sure we get a demangled name in case it hasn't
   // been demangled yet...
-  ConstString demangled = GetDemangledName();
+  ConstString demangled = GetDemangledName(sc);
+  if (preference == ePreferDemangledWithoutArguments && demangled) {
+    std::string demangled_without_arg(demangled.AsCString());
+    if (demangled_without_arg.find("(") != std::string::npos) {
+      demangled_without_arg = demangled_without_arg.substr(0, demangled_without_arg.find("("));
+    }
+    return ConstString(demangled_without_arg.c_str());
+  }
 
   if (preference == ePreferDemangledWithoutArguments) {
     if (Language *lang = Language::FindPlugin(GuessLanguage())) {

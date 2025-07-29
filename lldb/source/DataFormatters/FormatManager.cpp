@@ -179,6 +179,14 @@ void FormatManager::GetPossibleMatches(
     bool root_level) {
   compiler_type = compiler_type.GetTypeForFormatters();
   ConstString type_name(compiler_type.GetTypeName());
+
+  // Skip the possible types of VArray.
+  ConstString match(R"((^(unsigned|signed) char ?\[[0-9]+\]$)|(^char32_t ?\[[0-9]+\]$))");
+  RegularExpression regex(match.GetStringRef());
+  if (regex.Execute(type_name.AsCString())) {
+    return;
+  }
+
   if (valobj.GetBitfieldBitSize() > 0) {
     StreamString sstring;
     sstring.Printf("%s:%d", type_name.AsCString(), valobj.GetBitfieldBitSize());
@@ -574,7 +582,7 @@ FormatManager::GetCandidateLanguages(lldb::LanguageType lang_type) {
   case lldb::eLanguageTypeC_plus_plus_03:
   case lldb::eLanguageTypeC_plus_plus_11:
   case lldb::eLanguageTypeC_plus_plus_14:
-    return {lldb::eLanguageTypeC_plus_plus, lldb::eLanguageTypeObjC};
+    return {lldb::eLanguageTypeC_plus_plus};
   default:
     return {lang_type};
   }

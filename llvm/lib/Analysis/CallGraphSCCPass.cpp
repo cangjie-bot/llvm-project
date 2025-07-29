@@ -16,6 +16,7 @@
 
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/CallGraph.h"
@@ -61,6 +62,12 @@ public:
   static char ID;
 
   explicit CGPassManager() : ModulePass(ID) {}
+  ~CGPassManager() override {
+    for (auto &OnTheFlyManager : OnTheFlyManagers) {
+      legacy::FunctionPassManagerImpl *FPP = OnTheFlyManager.second;
+      delete FPP;
+    }
+  }
 
   /// Execute all of the passes scheduled for execution.  Keep track of
   /// whether any of the passes modifies the module, and if so, return true.
@@ -83,6 +90,17 @@ public:
 
   PMDataManager *getAsPMDataManager() override { return this; }
   Pass *getAsPass() override { return this; }
+
+  /// Add RequiredPass into list of lower level passes required by pass P.
+  /// RequiredPass is run on the fly by Pass Manager when P requests it
+  /// through getAnalysis interface.
+  void addLowerLevelRequiredPass(Pass *P, Pass *RequiredPass) override;
+
+  /// Return function pass corresponding to PassInfo PI, that is
+  /// required by CallGraph Pass. Instantiate analysis pass, by using
+  /// its runOnFunction() for function F.
+  std::tuple<Pass *, bool> getOnTheFlyPass(Pass *MP, AnalysisID PI,
+                                           Function &F) override;
 
   // Print passes managed by this manager
   void dumpPassStructure(unsigned Offset) override {
@@ -112,6 +130,9 @@ private:
                     bool &DevirtualizedCall);
   bool RefreshCallGraph(const CallGraphSCC &CurSCC, CallGraph &CG,
                         bool IsCheckingMode);
+  /// Collection of on the fly FPPassManagers. These managers manage
+  // function passes thar are required by cg passes
+  MapVector<Pass *, llvm::legacy::FunctionPassManagerImpl *> OnTheFlyManagers;
 };
 
 } // end anonymous namespace.
@@ -509,6 +530,11 @@ bool CGPassManager::runOnModule(Module &M) {
   CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
   bool Changed = doInitialization(CG);
 
+  for (auto &OnTheFlyManager : OnTheFlyManagers) {
+    llvm::legacy::FunctionPassManagerImpl *FPP = OnTheFlyManager.second;
+    Changed |= FPP->doInitialization(M);
+  }
+
   // Walk the callgraph in bottom-up SCC order.
   scc_iterator<CallGraph*> CGI = scc_begin(&CG);
 
@@ -550,7 +576,41 @@ bool CGPassManager::runOnModule(Module &M) {
     MaxSCCIterations.updateMax(Iteration);
   }
   Changed |= doFinalization(CG);
+  for (auto &OnTheFlyManager : OnTheFlyManagers) {
+    llvm::legacy::FunctionPassManagerImpl *FPP = OnTheFlyManager.second;
+    FPP->releaseMemoryOnTheFly();
+    Changed |= FPP->doFinalization(M);
+  }
+
   return Changed;
+}
+
+/// Return function pass corresponding to PassInfo PI, that is
+/// required by CallGraph Pass. Instantiate analysis pass, by using
+/// its runOnFunction() for function F.
+std::tuple<Pass *, bool> CGPassManager::getOnTheFlyPass(Pass *MP, AnalysisID PI,
+                                                        Function &F) {
+  legacy::FunctionPassManagerImpl *FPP = OnTheFlyManagers[MP];
+  assert(FPP && "Unable to find on the fly pass");
+
+  FPP->releaseMemoryOnTheFly();
+  bool Changed = FPP->run(F);
+  return std::make_tuple(((PMTopLevelManager *)FPP)->findAnalysisPass(PI),
+                         Changed);
+}
+
+/// Add RequiredPass into list of lower level passes required by pass P.
+/// RequiredPass is run on the fly by Pass Manager when P requests it
+/// through getAnalysis interface.
+void CGPassManager::addLowerLevelRequiredPass(Pass *P, Pass *RequiredPass) {
+  assert(RequiredPass && "No required pass?");
+  assert(P->getPotentialPassManagerType() == PMT_CallGraphPassManager &&
+         "Unable to handle Pass that requires lower level Analysis pass");
+  assert((P->getPotentialPassManagerType() <
+          RequiredPass->getPotentialPassManagerType()) &&
+         "Unable to handle Pass that requires lower level Analysis pass");
+
+  addLowerLevelRequiredPassImpl(OnTheFlyManagers, P, RequiredPass);
 }
 
 /// Initialize CG

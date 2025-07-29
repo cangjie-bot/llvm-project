@@ -31,6 +31,9 @@ static bool stripDeadPrototypes(Module &M) {
 
   // Erase dead function prototypes.
   for (Function &F : llvm::make_early_inc_range(M)) {
+    // Cangjie runtime function needs to be processed at the backend..
+    if (F.hasFnAttribute("cj-runtime"))
+      continue;
     // Function must be a prototype and unused.
     if (F.isDeclaration() && F.use_empty()) {
       F.eraseFromParent();
@@ -41,6 +44,9 @@ static bool stripDeadPrototypes(Module &M) {
 
   // Erase dead global var prototypes.
   for (GlobalVariable &GV : llvm::make_early_inc_range(M.globals())) {
+    // Cangjie native GV needs to be processed at the backend..
+    if (GV.hasAttribute("cj-native"))
+      continue;
     // Global must be a prototype and unused.
     if (GV.isDeclaration() && GV.use_empty())
       GV.eraseFromParent();

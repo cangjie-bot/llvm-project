@@ -34,6 +34,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
@@ -80,6 +81,10 @@ static cl::opt<unsigned>
     BlockNumberLimit("memdep-block-number-limit", cl::Hidden, cl::init(1000),
                      cl::desc("The number of blocks to scan during memory "
                               "dependency analysis (default = 1000)"));
+
+namespace llvm {
+extern cl::opt<bool> GVNDisableBarrier;
+} // namespace llvm
 
 // Limit on the number of memdep results to process.
 static const unsigned int NumResultsLimit = 100;
@@ -464,6 +469,29 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
         if (ID == Intrinsic::masked_load)
           continue;
         return MemDepResult::getClobber(II);
+      }
+      case Intrinsic::cj_gcwrite_ref: {
+        if (!GVNDisableBarrier) {
+          MemoryLocation Loc = MemoryLocation::get(II);
+
+          // Avoid optimizing finalizer obj
+          if (const CallBase *CB =
+                  dyn_cast<CallBase>(getUnderlyingObject(Loc.Ptr))) {
+            Function *F = CB->getCalledFunction();
+            if (F && (F->getName() == "CJ_MCC_NewFinalizerStub" ||
+                      F->getName() == "CJ_MCC_OnFinalizerCreated"))
+              continue;
+          }
+
+          AliasResult R = BatchAA.alias(Loc, MemLoc);
+          if (R == AliasResult::NoAlias)
+            continue;
+          if (R == AliasResult::MustAlias)
+            return MemDepResult::getDef(II);
+          if (isInvariantLoad)
+            continue;
+          return MemDepResult::getClobber(II);
+        }
       }
       }
     }

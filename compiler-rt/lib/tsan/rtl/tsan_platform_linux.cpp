@@ -148,7 +148,33 @@ void WriteMemoryProfile(char *buf, uptr buf_size, u64 uptime_ns) {
       stacks.allocated >> 20, nlive, nthread);
 }
 
-#if !SANITIZER_GO
+#if SANITIZER_CJ
+void MapCangjieShadow(uptr heap, u64 size) {
+  char name[256];
+  uptr last = 0;
+  bool heap_mapped = false;
+  MemoryMappingLayout proc_maps(true);
+  MemoryMappedSegment segment(name, ARRAY_SIZE(name));
+  while (proc_maps.Next(&segment)) {
+    if (segment.filename[0] != 0 && segment.filename[0] != '[' && segment.IsWritable()) {
+      if (!heap_mapped && last < heap && segment.start > heap) {
+        MapShadow(heap, size);
+        heap_mapped = true;
+      }
+      MapShadow(segment.start, segment.end - segment.start);
+      last = segment.start;
+    }
+  }
+  if (!heap_mapped) {
+    MapShadow(heap, size);
+  }
+}
+
+void InitializeShadowMemoryPlatform() {
+}
+#endif
+
+#if !SANITIZER_GO && !SANITIZER_CJ
 // Mark shadow for .rodata sections with the special Shadow::kRodata marker.
 // Accesses to .rodata can't race, so this saves time, memory and trace space.
 static void MapRodata() {
@@ -211,7 +237,7 @@ void InitializeShadowMemoryPlatform() {
   MapRodata();
 }
 
-#endif  // #if !SANITIZER_GO
+#endif  // #if !SANITIZER_GO && !SANITIZER_CJ
 
 void InitializePlatformEarly() {
   vmaSize =
@@ -267,7 +293,7 @@ void InitializePlatform() {
   // Go maps shadow memory lazily and works fine with limited address space.
   // Unlimited stack is not a problem as well, because the executable
   // is not compiled with -pie.
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   {
     bool reexec = false;
     // TSan doesn't play well with unlimited stack size (as stack
@@ -475,7 +501,7 @@ int call_pthread_cancel_with_cleanup(int (*fn)(void *arg),
 }
 #endif  // !SANITIZER_GO
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 void ReplaceSystemMalloc() { }
 #endif
 

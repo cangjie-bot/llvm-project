@@ -180,6 +180,8 @@ class AliasSet : public ilist_node<AliasSet> {
 
   unsigned SetSize = 0;
 
+  Value *BasePtr = nullptr;
+
   void addRef() { ++RefCount; }
 
   void dropRef(AliasSetTracker &AST) {
@@ -209,6 +211,10 @@ public:
 
   /// Merge the specified alias set into this alias set.
   void mergeSetIn(AliasSet &AS, AliasSetTracker &AST);
+
+  Value *getBasePtr() const { return BasePtr; }
+  void setBasePtr(Value *Ptr) { BasePtr = Ptr; }
+  void clearBasePtr() { BasePtr = nullptr; }
 
   // Alias Set iteration - Allow access to all of the pointers which are part of
   // this alias set.
