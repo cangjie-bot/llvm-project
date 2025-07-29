@@ -93,7 +93,7 @@ SANITIZER_WEAK_ATTRIBUTE int
 real_sigaction(int signum, const void *act, void *oldact);
 
 int internal_sigaction(int signum, const void *act, void *oldact) {
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   if (&real_sigaction)
     return real_sigaction(signum, act, oldact);
 #endif

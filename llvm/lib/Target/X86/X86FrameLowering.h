@@ -72,6 +72,9 @@ public:
                                  MachineBasicBlock::iterator MBBI,
                                  const DebugLoc &DL, bool IsPrologue) const;
 
+  const std::vector<MCPhysReg>
+  getArgRegs(const MachineFunction &MF) const override;
+
   /// emitProlog/emitEpilog - These methods insert prolog and epilog code into
   /// the function.
   void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
@@ -109,6 +112,9 @@ public:
 
   StackOffset getFrameIndexReference(const MachineFunction &MF, int FI,
                                      Register &FrameReg) const override;
+
+  StackOffset getFrameIndexRefForCJ(const MachineFunction &MF, int FI,
+                                    Register &FrameReg) const override;
 
   int getWin64EHFrameIndexRef(const MachineFunction &MF, int FI,
                               Register &SPReg) const;

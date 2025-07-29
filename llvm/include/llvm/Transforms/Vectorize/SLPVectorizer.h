@@ -58,6 +58,8 @@ struct SLPVectorizerPass : public PassInfoMixin<SLPVectorizerPass> {
   using StoreListMap = MapVector<Value *, StoreList>;
   using GEPList = SmallVector<GetElementPtrInst *, 8>;
   using GEPListMap = MapVector<Value *, GEPList>;
+  using CJGCWriteList = SmallVector<CallInst *, 8>;
+  using CJGCWriteListMap = MapVector<Value *, CJGCWriteList>;
 
   ScalarEvolution *SE = nullptr;
   TargetTransformInfo *TTI = nullptr;
@@ -135,13 +137,17 @@ private:
   bool vectorizeStoreChain(ArrayRef<Value *> Chain, slpvectorizer::BoUpSLP &R,
                            unsigned Idx, unsigned MinVF);
 
-  bool vectorizeStores(ArrayRef<StoreInst *> Stores, slpvectorizer::BoUpSLP &R);
+  template <typename T>
+  bool vectorizeStoresOrGCWrites(ArrayRef<T *> Stores, slpvectorizer::BoUpSLP &R);
 
   /// The store instructions in a basic block organized by base pointer.
   StoreListMap Stores;
 
   /// The getelementptr instructions in a basic block organized by base pointer.
   GEPListMap GEPs;
+
+  /// The gc write barrier in a basic block organized by base pointer.
+  CJGCWriteListMap CJGCWrites;
 };
 
 } // end namespace llvm

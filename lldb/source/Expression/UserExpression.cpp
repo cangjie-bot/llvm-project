@@ -406,6 +406,17 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
         exe_ctx.GetBestExecutionContextScope(), error);
   }
 
+  if (result_valobj_sp->IsPointerType()) {
+    Status err;
+    auto name = result_valobj_sp->GetName();
+    bool is_option_enum = result_valobj_sp->GetTypeName().GetStringRef().contains("E2$");
+    result_valobj_sp = result_valobj_sp->Dereference(err);
+    if (err.Fail()) {
+      return lldb::eExpressionSetupError;
+    }
+    result_valobj_sp->SetIsOptionlikeReference(is_option_enum);
+    result_valobj_sp->SetName(name);
+  }
   return execution_results;
 }
 

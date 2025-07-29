@@ -292,6 +292,7 @@ private:
       case Intrinsic::memcpy:      DELEGATE(MemCpyInst);
       case Intrinsic::memmove:     DELEGATE(MemMoveInst);
       case Intrinsic::memset:      DELEGATE(MemSetInst);
+      case Intrinsic::cj_memset:   DELEGATE(MemSetInst);
       case Intrinsic::vastart:     DELEGATE(VAStartInst);
       case Intrinsic::vaend:       DELEGATE(VAEndInst);
       case Intrinsic::vacopy:      DELEGATE(VACopyInst);

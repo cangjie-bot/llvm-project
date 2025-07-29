@@ -44,20 +44,20 @@ define float @_Z3foofffi(float %b, float %x, float %y, i32 %z) uwtable ssp minsi
 ;
 ; CHECK-LINUX-LABEL: _Z3foofffi:
 ; CHECK-LINUX:       // %bb.0: // %entry
-; CHECK-LINUX-NEXT:    stp d11, d10, [sp, #-64]!
-; CHECK-LINUX-NEXT:    stp d9, d8, [sp, #16]
-; CHECK-LINUX-NEXT:    stp x29, x30, [sp, #32]
+; CHECK-LINUX-NEXT:    stp x29, x30, [sp, #-64]
+; CHECK-LINUX-NEXT:    stp d11, d10, [sp, #16]
+; CHECK-LINUX-NEXT:    stp d9, d8, [sp, #32]
 ; CHECK-LINUX-NEXT:    stp x20, x19, [sp, #48]
-; CHECK-LINUX-NEXT:    add x29, sp, #32
-; CHECK-LINUX-NEXT:    .cfi_def_cfa w29, 32
+; CHECK-LINUX-NEXT:    mov x29, sp
+; CHECK-LINUX-NEXT:    .cfi_def_cfa w29, 64
 ; CHECK-LINUX-NEXT:    .cfi_offset w19, -8
 ; CHECK-LINUX-NEXT:    .cfi_offset w20, -16
-; CHECK-LINUX-NEXT:    .cfi_offset w30, -24
-; CHECK-LINUX-NEXT:    .cfi_offset w29, -32
-; CHECK-LINUX-NEXT:    .cfi_offset b8, -40
-; CHECK-LINUX-NEXT:    .cfi_offset b9, -48
-; CHECK-LINUX-NEXT:    .cfi_offset b10, -56
-; CHECK-LINUX-NEXT:    .cfi_offset b11, -64
+; CHECK-LINUX-NEXT:    .cfi_offset b8, -24
+; CHECK-LINUX-NEXT:    .cfi_offset b9, -32
+; CHECK-LINUX-NEXT:    .cfi_offset b10, -40
+; CHECK-LINUX-NEXT:    .cfi_offset b11, -48
+; CHECK-LINUX-NEXT:    .cfi_offset w30, -56
+; CHECK-LINUX-NEXT:    .cfi_offset w29, -64
 ; CHECK-LINUX-NEXT:    fmov s3, #1.00000000
 ; CHECK-LINUX-NEXT:    scvtf s4, w0
 ; CHECK-LINUX-NEXT:    sub w19, w0, #1
@@ -73,12 +73,12 @@ define float @_Z3foofffi(float %b, float %x, float %y, i32 %z) uwtable ssp minsi
 ; CHECK-LINUX-NEXT:    fadd s0, s10, s0
 ; CHECK-LINUX-NEXT:    scvtf s1, w19
 ; CHECK-LINUX-NEXT:    ldp x20, x19, [sp, #48]
-; CHECK-LINUX-NEXT:    ldp x29, x30, [sp, #32]
 ; CHECK-LINUX-NEXT:    fmul s0, s8, s0
 ; CHECK-LINUX-NEXT:    fadd s0, s9, s0
-; CHECK-LINUX-NEXT:    ldp d9, d8, [sp, #16]
+; CHECK-LINUX-NEXT:    ldp d9, d8, [sp, #32]
+; CHECK-LINUX-NEXT:    ldp	d11, d10, [sp, #16]
 ; CHECK-LINUX-NEXT:    fsub s0, s0, s1
-; CHECK-LINUX-NEXT:    ldp d11, d10, [sp], #64
+; CHECK-LINUX-NEXT:    x29, x30, [sp], #64
 ; CHECK-LINUX-NEXT:    ret
 entry:
   %inc = fadd float %b, 1.000000e+00

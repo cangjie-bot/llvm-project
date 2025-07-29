@@ -317,11 +317,11 @@ void IRExecutionUnit::GetRunnableInfo(Status &error, lldb::addr_t &func_addr,
       llvm::SmallVector<char, 256> result_path;
       std::string object_name_model =
           "jit-object-" + module->getModuleIdentifier() + "-%%%.o";
-      FileSpec model_spec 
+      FileSpec model_spec
           = m_out_dir.CopyByAppendingPathComponent(object_name_model);
       std::string model_path = model_spec.GetPath();
 
-      std::error_code result 
+      std::error_code result
         = llvm::sys::fs::createUniqueFile(model_path, fd, result_path);
       if (!result) {
           llvm::raw_fd_ostream fds(fd, true);
@@ -943,13 +943,13 @@ void IRExecutionUnit::GetStaticInitializers(
   }
 }
 
-llvm::JITSymbol 
+llvm::JITSymbol
 IRExecutionUnit::MemoryManager::findSymbol(const std::string &Name) {
     bool missing_weak = false;
     uint64_t addr = GetSymbolAddressAndPresence(Name, missing_weak);
     // This is a weak symbol:
-    if (missing_weak) 
-      return llvm::JITSymbol(addr, 
+    if (missing_weak)
+      return llvm::JITSymbol(addr,
           llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Weak);
     else
       return llvm::JITSymbol(addr, llvm::JITSymbolFlags::Exported);
@@ -961,7 +961,7 @@ IRExecutionUnit::MemoryManager::getSymbolAddress(const std::string &Name) {
   return GetSymbolAddressAndPresence(Name, missing_weak);
 }
 
-uint64_t 
+uint64_t
 IRExecutionUnit::MemoryManager::GetSymbolAddressAndPresence(
     const std::string &Name, bool &missing_weak) {
   Log *log = GetLog(LLDBLog::Expressions);
@@ -1066,9 +1066,16 @@ bool IRExecutionUnit::CommitOneAllocation(lldb::ProcessSP &process_sp,
     break;
   default:
     const bool zero_memory = false;
+    bool keep = false;
+    auto ostype = process_sp->GetTarget().GetArchitecture().GetTriple().getOS();
+    if (ostype == llvm::Triple::Win32) {
+      keep = (record.m_name == ".rdata");
+    } else {
+      keep = (record.m_name == ".rodata");
+    }
     record.m_process_address =
         Malloc(record.m_size, record.m_alignment, record.m_permissions,
-               eAllocationPolicyProcessOnly, zero_memory, error);
+               eAllocationPolicyProcessOnly, zero_memory, error, keep);
     break;
   }
 

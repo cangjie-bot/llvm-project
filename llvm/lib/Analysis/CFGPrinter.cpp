@@ -21,7 +21,6 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/GraphWriter.h"
 
@@ -31,6 +30,19 @@ static cl::opt<std::string>
     CFGFuncName("cfg-func-name", cl::Hidden,
                 cl::desc("The name of a function (or its substring)"
                          " whose CFG is viewed/printed."));
+
+cl::opt<std::string> CJCFGARG("cj-cfg-arg", cl::Hidden,
+                              cl::desc("Arg name to print"));
+
+cl::opt<bool> IfCJCFGOnly("cj-cfg-only", cl::init(false), cl::Hidden,
+                          cl::desc("If cj cfg only"));
+
+cl::opt<bool> IfCJCFGComplex("cj-cfg-complex", cl::init(false), cl::Hidden,
+                             cl::desc("If cj cfg complex"));
+
+// 80: llvm default cfg columns
+cl::opt<unsigned> CJCFGCol("cj-cfg-columns", cl::init(80), cl::Hidden,
+                           cl::desc("Max columns of cj cfg"));
 
 static cl::opt<std::string> CFGDotFilenamePrefix(
     "cfg-dot-filename-prefix", cl::Hidden,
@@ -90,6 +102,20 @@ static void viewCFG(Function &F, const BlockFrequencyInfo *BFI,
   CFGInfo.setRawEdgeWeights(UseRawEdgeWeight);
 
   ViewGraph(&CFGInfo, "cfg." + F.getName(), CFGOnly);
+}
+
+// Set name for all instructions for CJ DFX
+static void setNameCJDFX(Function &F) {
+  unsigned Index = 0;
+  for (auto &Arg : F.args()) {
+    if (!Arg.hasName())
+      Arg.setName("d" + Twine(Index++));
+  }
+  for (auto &I : instructions(F)) {
+    if (I.getType() != Type::getVoidTy(F.getContext()) && !I.hasName()) {
+      I.setName("d" + Twine(Index++));
+    }
+  }
 }
 
 namespace {
@@ -255,6 +281,92 @@ PreservedAnalyses CFGOnlyPrinterPass::run(Function &F,
   return PreservedAnalyses::all();
 }
 
+namespace {
+struct CJCFGViewerLegacyPass : public FunctionPass {
+  static char ID; // Pass identifcation, replacement for typeid
+  CJCFGViewerLegacyPass() : FunctionPass(ID) {
+    initializeCJCFGViewerLegacyPassPass(*PassRegistry::getPassRegistry());
+  }
+
+  bool runOnFunction(Function &F) override {
+    if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+      return false;
+    setNameCJDFX(F);
+    auto *BPI = &getAnalysis<BranchProbabilityInfoWrapperPass>().getBPI();
+    auto *BFI = &getAnalysis<BlockFrequencyInfoWrapperPass>().getBFI();
+    viewCFG(F, BFI, BPI, getMaxFreq(F, BFI));
+    return false;
+  }
+
+  void print(raw_ostream &OS, const Module * = nullptr) const override {}
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    FunctionPass::getAnalysisUsage(AU);
+    AU.addRequired<BlockFrequencyInfoWrapperPass>();
+    AU.addRequired<BranchProbabilityInfoWrapperPass>();
+    AU.setPreservesAll();
+  }
+};
+} // namespace
+
+char CJCFGViewerLegacyPass::ID = 0;
+INITIALIZE_PASS(CJCFGViewerLegacyPass, "view-cj-cfg", "View CJ CFG of function",
+                false, true)
+
+PreservedAnalyses CJCFGViewerPass::run(Function &F,
+                                       FunctionAnalysisManager &AM) {
+  if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+    return PreservedAnalyses::all();
+  setNameCJDFX(F);
+  auto *BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
+  auto *BPI = &AM.getResult<BranchProbabilityAnalysis>(F);
+  viewCFG(F, BFI, BPI, getMaxFreq(F, BFI));
+  return PreservedAnalyses::all();
+}
+
+namespace {
+struct CJCFGPrinterLegacyPass : public FunctionPass {
+  static char ID; // Pass identification, replacement for typeid
+  CJCFGPrinterLegacyPass() : FunctionPass(ID) {
+    initializeCJCFGPrinterLegacyPassPass(*PassRegistry::getPassRegistry());
+  }
+
+  bool runOnFunction(Function &F) override {
+    if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+      return false;
+    setNameCJDFX(F);
+    auto *BPI = &getAnalysis<BranchProbabilityInfoWrapperPass>().getBPI();
+    auto *BFI = &getAnalysis<BlockFrequencyInfoWrapperPass>().getBFI();
+    writeCFGToDotFile(F, BFI, BPI, getMaxFreq(F, BFI));
+    return false;
+  }
+
+  void print(raw_ostream &OS, const Module * = nullptr) const override {}
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    FunctionPass::getAnalysisUsage(AU);
+    AU.addRequired<BlockFrequencyInfoWrapperPass>();
+    AU.addRequired<BranchProbabilityInfoWrapperPass>();
+    AU.setPreservesAll();
+  }
+};
+} // namespace
+
+char CJCFGPrinterLegacyPass::ID = 0;
+INITIALIZE_PASS(CJCFGPrinterLegacyPass, "dot-cj-cfg",
+                "Print CJ CFG of function to 'dot' file", false, true)
+
+PreservedAnalyses CJCFGPrinterPass::run(Function &F,
+                                        FunctionAnalysisManager &AM) {
+  if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+    return PreservedAnalyses::all();
+  setNameCJDFX(F);
+  auto *BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
+  auto *BPI = &AM.getResult<BranchProbabilityAnalysis>(F);
+  writeCFGToDotFile(F, BFI, BPI, getMaxFreq(F, BFI));
+  return PreservedAnalyses::all();
+}
+
 /// viewCFG - This function is meant for use from the debugger.  You can just
 /// say 'call F->viewCFG()' and a ghostview window should pop up from the
 /// program, displaying the CFG of the current function.  This depends on there
@@ -288,6 +400,14 @@ FunctionPass *llvm::createCFGPrinterLegacyPassPass() {
 
 FunctionPass *llvm::createCFGOnlyPrinterLegacyPassPass() {
   return new CFGOnlyPrinterLegacyPass();
+}
+
+FunctionPass *llvm::createCJCFGViewerLegacyPassPass() {
+  return new CJCFGViewerLegacyPass();
+}
+
+FunctionPass *llvm::createCJCFGPrinterLegacyPassPass() {
+  return new CJCFGPrinterLegacyPass();
 }
 
 /// Find all blocks on the paths which terminate with a deoptimize or 

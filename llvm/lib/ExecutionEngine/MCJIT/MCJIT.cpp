@@ -22,6 +22,7 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -29,6 +30,11 @@
 #include <mutex>
 
 using namespace llvm;
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> CangjieJIT;
+} // namespace llvm
 
 namespace {
 
@@ -155,6 +161,12 @@ std::unique_ptr<MemoryBuffer> MCJIT::emitObject(Module *M) {
   // This must be a module which has already been added but not loaded to this
   // MCJIT instance, since these conditions are tested by our caller,
   // generateCodeForModule.
+
+  Metadata *MD = M->getModuleFlag("Cangjie_OPT");
+  if (MD != nullptr) {
+    CJPipeline = true;
+    CangjieJIT = true;
+  }
 
   legacy::PassManager PM;
 

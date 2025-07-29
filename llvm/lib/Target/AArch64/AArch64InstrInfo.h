@@ -59,8 +59,16 @@ public:
 
   unsigned isLoadFromStackSlot(const MachineInstr &MI,
                                int &FrameIndex) const override;
+  unsigned isLoadFromStackSlot(const MachineInstr &MI, int &FrameIndex,
+                               unsigned &MemBytes) const override;
   unsigned isStoreToStackSlot(const MachineInstr &MI,
                               int &FrameIndex) const override;
+  unsigned isStoreToStackSlot(const MachineInstr &MI, int &FrameIndex,
+                              unsigned &MemBytes) const override;
+
+  bool isADDXri(const MachineInstr &MI) const override;
+
+  bool isORRXri(const MachineInstr &MI) const override;
 
   /// Does this instruction set its full destination register to zero?
   static bool isGPRZero(const MachineInstr &MI);
@@ -363,6 +371,10 @@ private:
   /// Returns an unused general-purpose register which can be used for
   /// constructing an outlined call if one exists. Returns 0 otherwise.
   Register findRegisterToSaveLRTo(outliner::Candidate &C) const;
+
+  /// Return the maximum number of bytes of Cangjie Specific CallInst Size.
+  /// 0 means MI is not a Cangjie Specific Call.
+  unsigned getCangjieSpecificCallInstSizeInBytes(const MachineInstr &MI) const;
 
   /// Remove a ptest of a predicate-generating operation that already sets, or
   /// can be made to set, the condition codes in an identical manner

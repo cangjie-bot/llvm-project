@@ -16,11 +16,16 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar/SCCP.h"
 #include "llvm/Transforms/Utils/SCCPSolver.h"
 
 using namespace llvm;
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
 
 PreservedAnalyses IPSCCPPass::run(Module &M, ModuleAnalysisManager &AM) {
   const DataLayout &DL = M.getDataLayout();
@@ -30,9 +35,10 @@ PreservedAnalyses IPSCCPPass::run(Module &M, ModuleAnalysisManager &AM) {
   };
   auto getAnalysis = [&FAM](Function &F) -> AnalysisResultsForFn {
     DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
-    return {
-        std::make_unique<PredicateInfo>(F, DT, FAM.getResult<AssumptionAnalysis>(F)),
-        &DT, FAM.getCachedResult<PostDominatorTreeAnalysis>(F)};
+    return {std::make_unique<PredicateInfo>(
+                F, DT, FAM.getResult<AssumptionAnalysis>(F)),
+            &DT, FAM.getCachedResult<PostDominatorTreeAnalysis>(F),
+            CJPipeline ? &FAM.getResult<LoopAnalysis>(F) : nullptr};
   };
 
   if (!runIPSCCP(M, DL, GetTLI, getAnalysis))

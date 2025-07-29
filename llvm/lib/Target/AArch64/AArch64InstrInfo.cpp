@@ -33,6 +33,7 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/Statepoint.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
@@ -73,6 +74,59 @@ AArch64InstrInfo::AArch64InstrInfo(const AArch64Subtarget &STI)
                           AArch64::CATCHRET),
       RI(STI.getTargetTriple()), Subtarget(STI) {}
 
+/// Return the maximum number of bytes of Cangjie Specific CallInst.
+/// 0 means MI is not a Cangjie Specific Call.
+unsigned AArch64InstrInfo::getCangjieSpecificCallInstSizeInBytes(
+    const MachineInstr &MI) const {
+  if (!MI.isCall()) {
+    return 0;
+  }
+  if (MI.getNumOperands() == 0) {
+    return 0;
+  }
+  const MachineOperand *MOSym = nullptr;
+  if (MI.getOpcode() == TargetOpcode::STATEPOINT) {
+    StatepointOpers SO(&MI);
+    if (SO.getID() == CJStatepointID::NewArrayFast) {
+      return 52; // 52: 52 bytes(13 insts) for new array call
+    }
+    MOSym = &(SO.getCallTarget());
+  } else {
+    MOSym = &(MI.getOperand(0));
+  }
+  if (!MOSym->isGlobal()) {
+    return 0;
+  }
+  const auto *Callee = dyn_cast<const Function>(MOSym->getGlobal());
+  if (Callee == nullptr) {
+    return 0;
+  }
+  if (Callee->isCangjieSafePoint()) {
+    // If Jmp size beyond the 19bit, emitting safepoint on following inst
+    // instead of emit it at the end of the function.
+    // Each Inst size is 4 bytes.
+    if (MI.getMF()->getInstructionCount() * 4 > 0x7FFFF) {
+      return 24; // 24: 24 bytes(6 insts) for safepoint call
+    } else {
+      return 12; // 12: 12 bytes(3 insts) for stack-check call
+    }
+  }
+  if (Callee->getName().isCJStackCheck()) {
+    return 12; // 12: 12 bytes(3 insts) for safepoint call
+  }
+  if (Callee->getName().isGetGCPhase()) {
+    return 4; // 4: 4 bytes(1 insts) for GetGCPhase call
+  }
+  const auto &CallerFunc = MI.getParent()->getParent()->getFunction();
+  if (Callee->isCangjieNativeStub(CallerFunc)) {
+    return 24; // 24: 24 bytes(6 insts) for Native Stub
+  }
+  if (Callee->isGetCJThreadId()) {
+    return 12; // 12: 12 bytes(3 insts) for mutex opt
+  }
+  return 0;
+}
+
 /// GetInstSize - Return the number of bytes of code the specified
 /// instruction may be.  This returns the maximum number of bytes.
 unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
@@ -90,9 +144,13 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   if (MI.isMetaInstruction())
     return 0;
 
+  unsigned NumBytes = getCangjieSpecificCallInstSizeInBytes(MI);
+  if (NumBytes != 0) {
+    return NumBytes;
+  }
+
   // FIXME: We currently only handle pseudoinstructions that don't get expanded
   //        before the assembly printer.
-  unsigned NumBytes = 0;
   const MCInstrDesc &Desc = MI.getDesc();
 
   // Size should be preferably set in
@@ -2098,6 +2156,36 @@ unsigned AArch64InstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
   return 0;
 }
 
+unsigned AArch64InstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
+                                               int &FrameIndex,
+                                               unsigned &MemBytes) const {
+  unsigned Reg = isLoadFromStackSlot(MI, FrameIndex);
+  if (Reg) {
+    switch (MI.getOpcode()) {
+    default:
+      break;
+    case AArch64::LDRWui:
+    case AArch64::LDRSui:
+      MemBytes = 4;
+      break;
+    case AArch64::LDRXui:
+    case AArch64::LDRQui:
+      MemBytes = 8;
+      break;
+    case AArch64::LDRBui:
+      MemBytes = 1;
+      break;
+    case AArch64::LDRHui:
+      MemBytes = 2;
+      break;
+    case AArch64::LDRDui:
+      MemBytes = 16;
+      break;
+    }
+  }
+  return Reg;
+}
+
 unsigned AArch64InstrInfo::isStoreToStackSlot(const MachineInstr &MI,
                                               int &FrameIndex) const {
   switch (MI.getOpcode()) {
@@ -2120,6 +2208,46 @@ unsigned AArch64InstrInfo::isStoreToStackSlot(const MachineInstr &MI,
     break;
   }
   return 0;
+}
+
+unsigned AArch64InstrInfo::isStoreToStackSlot(const MachineInstr &MI,
+                                              int &FrameIndex,
+                                              unsigned &MemBytes) const {
+  unsigned Reg = isStoreToStackSlot(MI, FrameIndex);
+  if (Reg) {
+    switch (MI.getOpcode()) {
+    default:
+      break;
+    case AArch64::STRWui:
+    case AArch64::STRSui:
+      MemBytes = 4;
+      break;
+    case AArch64::STRXui:
+    case AArch64::STRQui:
+    case AArch64::LDR_PXI:
+    case AArch64::STR_PXI:
+      MemBytes = 8;
+      break;
+    case AArch64::STRBui:
+      MemBytes = 1;
+      break;
+    case AArch64::STRHui:
+      MemBytes = 2;
+      break;
+    case AArch64::STRDui:
+      MemBytes = 16;
+      break;
+    }
+  }
+  return Reg;
+}
+
+bool AArch64InstrInfo::isADDXri(const MachineInstr &MI) const {
+  return MI.getOpcode() == AArch64::ADDXri;
+}
+
+bool AArch64InstrInfo::isORRXri(const MachineInstr &MI) const {
+  return MI.getOpcode() == AArch64::ORRXri;
 }
 
 /// Check all MachineMemOperands for a hint to suppress pairing.

@@ -45,6 +45,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
@@ -62,6 +63,10 @@
 #define DEBUG_TYPE "basicaa"
 
 using namespace llvm;
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 
 /// Enable analysis of recursive PHI nodes.
 static cl::opt<bool> EnableRecPhiAnalysis("basic-aa-recphi", cl::Hidden,
@@ -946,10 +951,14 @@ ModRefInfo BasicAAResult::getModRefInfo(const CallBase *Call,
         Result = setRef(Result);
         continue;
       }
-      // Operand aliases 'Object' but call only writes into it.
-      if (Call->onlyWritesMemory(OperandNo)) {
-        Result = setMod(Result);
-        continue;
+      // Parameters of the GCPtr type in cangjie are read by the runtime and
+      // therefore cannot be considered writeonly in any case.
+      if (!CJPipeline || !isGCPointerType((*CI)->getType())) {
+        // Operand aliases 'Object' but call only writes into it.
+        if (Call->onlyWritesMemory(OperandNo)) {
+          Result = setMod(Result);
+          continue;
+        }
       }
       // This operand aliases 'Object' and call reads and writes into it.
       // Setting ModRef will not yield an early return below, MustAlias is not

@@ -725,6 +725,10 @@ unsigned X86InstrInfo::isStoreToStackSlotPostFE(const MachineInstr &MI,
   return 0;
 }
 
+bool X86InstrInfo::isLEA64r(const MachineInstr &MI) const {
+  return MI.getOpcode() == X86::LEA64r;
+}
+
 /// Return true if register is PIC base; i.e.g defined by X86::MOVPC32r.
 static bool regIsPICBase(Register BaseReg, const MachineRegisterInfo &MRI) {
   // Don't waste compile time scanning use-def chains of physregs.

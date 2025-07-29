@@ -81,7 +81,7 @@ protected:
   PageSizeTest() : Host(Triple::normalize(sys::getProcessTriple())) {}
 
   bool isSupported() const {
-    // For now just on X86-64 and Aarch64. This can be expanded in the future.
+    // For now just on X86-64 and AArch64. This can be expanded in the future.
     return (Host.getArch() == Triple::x86_64 ||
             Host.getArch() == Triple::aarch64) &&
            Host.getOS() == Triple::Linux;

@@ -4326,6 +4326,11 @@ public:
     return DL.isLittleEndian();
   }
 
+  virtual bool
+  isCangjieGetFPStateInstr(unsigned Opcode) const {
+    return false;
+  }
+
   /// Returns a 0 terminated array of registers that can be safely used as
   /// scratch registers.
   virtual const MCPhysReg *getScratchRegisters(CallingConv::ID CC) const {

@@ -651,6 +651,8 @@ public:
   bool generateFMAsInMachineCombiner(EVT VT,
                                      CodeGenOpt::Level OptLevel) const override;
 
+  bool isCangjieGetFPStateInstr(unsigned Opcode) const override;
+
   const MCPhysReg *getScratchRegisters(CallingConv::ID CC) const override;
 
   /// Returns false if N is a bit extraction pattern of (X >> C) & Mask.
@@ -982,6 +984,8 @@ private:
   SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSPONENTRY(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerGET_FP_STATE(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerRESET_FP_STATE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFLT_ROUNDS_(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSET_ROUNDING(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINSERT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;

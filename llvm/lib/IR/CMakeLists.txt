@@ -1,3 +1,4 @@
+include_directories(${CANGJIE_DEMANGLE_DIR})
 add_llvm_component_library(LLVMCore
   AbstractCallSite.cpp
   AsmWriter.cpp
@@ -6,6 +7,7 @@ add_llvm_component_library(LLVMCore
   AutoUpgrade.cpp
   BasicBlock.cpp
   BuiltinGCs.cpp
+  CJIntrinsics.cpp
   Comdat.cpp
   ConstantFold.cpp
   ConstantRange.cpp
@@ -54,6 +56,7 @@ add_llvm_component_library(LLVMCore
   PseudoProbe.cpp
   ReplaceConstant.cpp
   Statepoint.cpp
+  CJStructTypeGCInfo.cpp
   StructuralHash.cpp
   Type.cpp
   TypeFinder.cpp
@@ -66,6 +69,7 @@ add_llvm_component_library(LLVMCore
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/IR
+  ${CANGJIE_DEMANGLE_DIR}
 
   LINK_LIBS
   ${LLVM_PTHREAD_LIB}
@@ -78,3 +82,33 @@ add_llvm_component_library(LLVMCore
   Remarks
   Support
   )
+
+if(BUILD_SHARED_LIBS)
+  target_link_libraries(LLVMCore PRIVATE ${CANGJIE_DEMANGLE_DIR}/libcangjie-demangle.a)
+else()
+  target_link_libraries(LLVMCore PRIVATE -fstack-protector-all)
+  if(WIN32)
+    add_custom_command(TARGET LLVMCore
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/tmp
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/tmp
+      COMMAND ${CMAKE_COMMAND} -E copy ${CANGJIE_DEMANGLE_DIR}/libcangjie-demangle.a
+                                       ${CMAKE_BINARY_DIR}/lib/
+      COMMAND cd ${CMAKE_BINARY_DIR}/tmp
+      COMMAND ${CMAKE_AR} x ${CMAKE_BINARY_DIR}/lib/libLLVMCore.a
+      COMMAND ${CMAKE_AR} x ${CMAKE_BINARY_DIR}/lib/libcangjie-demangle.a
+      COMMAND ${CMAKE_AR} cr ${CMAKE_BINARY_DIR}/lib/libLLVMCore.a ${CMAKE_BINARY_DIR}/tmp/*${CMAKE_CXX_OUTPUT_EXTENSION}
+    )
+  else()
+    add_custom_command(TARGET LLVMCore
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/tmp
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/tmp
+      COMMAND ${CMAKE_COMMAND} -E copy ${CANGJIE_DEMANGLE_DIR}/libcangjie-demangle.a
+                                       ${CMAKE_BINARY_DIR}/lib/
+      COMMAND cd ${CMAKE_BINARY_DIR}/tmp && ${CMAKE_AR} x ${CMAKE_BINARY_DIR}/lib/libLLVMCore.a
+      COMMAND cd ${CMAKE_BINARY_DIR}/tmp && ${CMAKE_AR} x ${CMAKE_BINARY_DIR}/lib/libcangjie-demangle.a
+      COMMAND cd ${CMAKE_BINARY_DIR}/tmp && ${CMAKE_AR} cr ${CMAKE_BINARY_DIR}/lib/libLLVMCore.a *.o
+    )
+  endif()
+endif()

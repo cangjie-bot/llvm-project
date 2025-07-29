@@ -4,6 +4,12 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+//
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Target/ThreadPlan.h"
@@ -15,6 +21,8 @@
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/State.h"
+#include "lldb/Target/ThreadPlanRunToAddress.h"
+#include "lldb/Target/SectionLoadList.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -286,4 +294,124 @@ lldb::StateType ThreadPlanNull::GetPlanRunState() {
                LLVM_PRETTY_FUNCTION, m_tid, GetThread().GetProtocolID());
 #endif
   return eStateRunning;
+}
+
+bool ThreadPlan::CFFIGetValueFromReg(Target &target, StackFrame *frame,
+                                     uint64_t *addr, const char *reg) {
+  if (!frame) {
+    return false;
+  }
+  auto reg_ctx = frame->GetRegisterContext();
+  if (!reg_ctx) {
+    return false;
+  }
+  auto reg_info = reg_ctx->GetRegisterInfoByName(reg);
+  if (!reg_info) {
+    return false;
+  }
+  RegisterValue mem_addr;
+  if (!reg_ctx->ReadRegister(reg_info, mem_addr)) {
+    return false;
+  }
+  uint64_t value = mem_addr.GetAsUInt64(UINT64_MAX);
+  if (value == UINT64_MAX) {
+    return false;
+  }
+  *addr = value;
+  return true;
+}
+
+ThreadPlanSP ThreadPlan::CFFIMakeThreadPlanRunToAddress(Thread &thread, uint64_t cfunc_addr,
+                                                        bool stop_others) {
+  typedef std::vector<lldb::addr_t> AddressVector;
+  AddressVector addrs;
+  addrs.push_back(cfunc_addr);
+  return std::make_shared<ThreadPlanRunToAddress>(thread, addrs, stop_others);
+}
+
+static void GetCFFIRegNameFromArchitecture(Target &target, std::string &cffi_next,
+                                           std::string &cffi_final) {
+  auto arch_type = target.GetArchitecture().GetTriple().getArch();
+  switch (arch_type) {
+  case llvm::Triple::x86_64:
+    cffi_next = "rsp";
+#if defined(_WIN32)
+    cffi_final = "rcx";
+#endif
+#if defined(__linux__) || defined(__APPLE__)
+    cffi_final = "rdi";
+#endif
+    break;
+  case llvm::Triple::aarch64:
+    cffi_next = "x9";
+    cffi_final = "x20";
+    break;
+  default:
+    break;
+  }
+}
+
+static bool IsCFFIStubFunc(ConstString name) {
+  return name == "CJ_MCC_C2NStub" || name == "CJ_MCC_N2CStub";
+}
+
+static bool IsCFFIWarperFunc(ConstString name) {
+  return name == "wrapper.FCivE";
+}
+
+static bool GetCFFIFuncAddrFromMemoryAddress(Target &target, uint64_t mem_addr, uint64_t *cfunc_addr) {
+  Status error;
+  Address symbol_containing_address;
+  auto section_load_list = target.GetSectionLoadList();
+  target.ReadMemory(Address(mem_addr), cfunc_addr, sizeof(uint64_t), error);
+  if (error.Fail() || !section_load_list.ResolveLoadAddress(*cfunc_addr, symbol_containing_address)) {
+    return false;
+  }
+  return true;
+}
+
+ThreadPlanSP ThreadPlan::CFFILookForPlanToStepThroughFromCurrentPC() {
+  Thread &thread = GetThread();
+  Target &target = GetTarget();
+  auto current_pc = thread.GetRegisterContext()->GetPC();
+  auto section_load_list = target.GetSectionLoadList();
+  Address symbol_containing_address;
+  if (!section_load_list.ResolveLoadAddress(current_pc, symbol_containing_address)) {
+    return nullptr;
+  }
+  lldb_private::SymbolContext sym;
+  symbol_containing_address.ResolveFunctionScope(sym);
+  ConstString name = sym.GetFunctionName();
+  StackFrame *frame = thread.GetStackFrameAtIndex(0).get();
+  if (!frame) {
+    return nullptr;
+  }
+  std::string cffi_next;
+  std::string cffi_final;
+  uint64_t cfunc_addr = 0;
+  GetCFFIRegNameFromArchitecture(target, cffi_next, cffi_final);
+  if (IsCFFIStubFunc(name)) {
+    uint64_t reg_value = 0;
+    if (cffi_next.empty() || cffi_final.empty()) {
+      return nullptr;
+    }
+    CFFIGetValueFromReg(target, frame, &reg_value, cffi_next.c_str());
+    auto arch_type = target.GetArchitecture().GetTriple().getArch();
+    if (arch_type == llvm::Triple::x86_64) {
+      // We are located in cangjie runtime function CJ_MCC_C2NStub or CJ_MCC_N2CStub,
+      // we read the cfunc from the memory, the memory addr from cffi_next register require offset 0x10.
+      reg_value += 0x10;
+      if (!GetCFFIFuncAddrFromMemoryAddress(target, reg_value, &cfunc_addr)) {
+        return nullptr;
+      }
+      return CFFIMakeThreadPlanRunToAddress(thread, cfunc_addr, true);
+    } else if (arch_type == llvm::Triple::aarch64) {
+      return CFFIMakeThreadPlanRunToAddress(thread, reg_value, true);
+    }
+  } else if (IsCFFIWarperFunc(name)) {
+    // We are located in func warpper, we direct read the cfunc address from cffi_final register.
+    CFFIGetValueFromReg(target, frame, &cfunc_addr, cffi_final.c_str());
+    return CFFIMakeThreadPlanRunToAddress(thread, cfunc_addr, true);
+  }
+  return nullptr;
 }

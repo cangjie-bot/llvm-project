@@ -64,9 +64,11 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
@@ -89,6 +91,10 @@
 
 using namespace llvm;
 using namespace PatternMatch;
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
 
 #define DEBUG_TYPE "dse"
 
@@ -821,6 +827,17 @@ struct DSEState {
     });
 
     CodeMetrics::collectEphemeralValues(&F, &AC, EphValues);
+
+    // Set the WillReturn attribute of cj.memset, so that the DSE can eliminate
+    // it.
+    if (Function *CJMemset = F.getParent()->getFunction("llvm.cj.memset.p0i8"))
+      CJMemset->addFnAttr(llvm::Attribute::WillReturn);
+  }
+
+  ~DSEState() {
+    // Currently, we do not want other Passes to eliminate cj.memset.
+    if (Function *CJMemset = F.getParent()->getFunction("llvm.cj.memset.p0i8"))
+      CJMemset->removeFnAttr(llvm::Attribute::WillReturn);
   }
 
   /// Return 'OW_Complete' if a store to the 'KillingLoc' location (by \p
@@ -993,6 +1010,19 @@ struct DSEState {
   Optional<MemoryLocation> getLocForWrite(Instruction *I) const {
     if (!I->mayWriteToMemory())
       return None;
+
+    // Currently, it is only safe to delete gcwrite in unreachable.
+    if (CJPipeline && isa<IntrinsicInst>(I)) {
+      auto *II = cast<IntrinsicInst>(I);
+      auto ID = II->getIntrinsicID();
+      if (ID == Intrinsic::cj_gcwrite_ref)
+        return MemoryLocation::get(II);
+      if (ID == Intrinsic::cj_gcread_generic ||
+          ID == Intrinsic::cj_assign_generic)
+        return MemoryLocation::getAfter(II->getArgOperand(0));
+      if (ID == Intrinsic::cj_gcwrite_generic)
+        return MemoryLocation::getAfter(II->getArgOperand(1));
+    }
 
     if (auto *CB = dyn_cast<CallBase>(I))
       return MemoryLocation::getForDest(CB, TLI);
@@ -1234,6 +1264,7 @@ struct DSEState {
     bool CanOptimize = OptimizeMemorySSA &&
                        KillingDef->getDefiningAccess() == StartAccess &&
                        !KillingI->mayReadFromMemory();
+    bool FindSafePointCall = false;
 
     // Find the next clobbering Mod access for DefLoc, starting at StartAccess.
     Optional<MemoryLocation> CurrentLoc;
@@ -1277,6 +1308,20 @@ struct DSEState {
       // KillingDef. If it is not, check the next candidate.
       MemoryDef *CurrentDef = cast<MemoryDef>(Current);
       Instruction *CurrentI = CurrentDef->getMemoryInst();
+
+      // Check if we find a safepoint call
+      if (auto *CB = dyn_cast<CallBase>(CurrentI)) {
+        if (isSafepointCall(CB))
+          FindSafePointCall = true;
+      }
+
+      // If CurrentI is cj_memset and we find a safepoint between KillingI and
+      // CurrentI, then KillingI can not kill CurrentI.
+      if (FindSafePointCall && isa<IntrinsicInst>(CurrentI)) {
+        auto *II = cast<IntrinsicInst>(CurrentI);
+        if (II->getIntrinsicID() == Intrinsic::cj_memset)
+          continue;
+      }
 
       if (canSkipDef(CurrentDef, !isInvisibleToCallerOnUnwind(KillingUndObj))) {
         CanOptimize = false;
@@ -1702,7 +1747,8 @@ struct DSEState {
         const Value *UO = getUnderlyingObject(DefLoc->Ptr);
         if (!isInvisibleToCallerAfterRet(UO))
           continue;
-
+        if (CJPipeline && maybeCJFinalizerObj(const_cast<Value*>(UO)))
+          continue;
         if (isWriteAtEndOfFunction(Def)) {
           // See through pointer-to-pointer bitcasts
           LLVM_DEBUG(dbgs() << "   ... MemoryDef is not accessed until the end "
@@ -2191,7 +2237,6 @@ public:
       for (auto &I : instructions(F))
         NumRemainingStores += isa<StoreInst>(&I);
 #endif
-
     return Changed;
   }
 

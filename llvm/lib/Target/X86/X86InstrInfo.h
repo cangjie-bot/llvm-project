@@ -240,6 +240,8 @@ public:
   unsigned isStoreToStackSlotPostFE(const MachineInstr &MI,
                                     int &FrameIndex) const override;
 
+  bool isLEA64r(const MachineInstr &MI) const override;
+
   bool isReallyTriviallyReMaterializable(const MachineInstr &MI) const override;
   void reMaterialize(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
                      Register DestReg, unsigned SubIdx,

@@ -245,8 +245,8 @@ TEST(LowLevelTypeTest, Pointer) {
   DataLayout DL("p64:64:64-p127:512:512:512-p16777215:65528:8");
 
   for (unsigned AS : {0U, 1U, 127U, 0xffffU,
-        static_cast<unsigned>(maxUIntN(23)),
-        static_cast<unsigned>(maxUIntN(24))}) {
+        static_cast<unsigned>(maxUIntN(19)),
+        static_cast<unsigned>(maxUIntN(20))}) {
     for (ElementCount EC :
          {ElementCount::getFixed(2), ElementCount::getFixed(3),
           ElementCount::getFixed(4), ElementCount::getFixed(256),

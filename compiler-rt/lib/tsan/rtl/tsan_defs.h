@@ -42,7 +42,7 @@ typedef __m128i m128;
 #endif
 
 #ifndef TSAN_CONTAINS_UBSAN
-# if CAN_SANITIZE_UB && !SANITIZER_GO
+# if CAN_SANITIZE_UB && !SANITIZER_GO && !SANITIZER_CJ
 #  define TSAN_CONTAINS_UBSAN 1
 # else
 #  define TSAN_CONTAINS_UBSAN 0

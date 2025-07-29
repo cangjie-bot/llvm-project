@@ -191,6 +191,7 @@
 #include "AArch64RegisterInfo.h"
 #include "AArch64Subtarget.h"
 #include "AArch64TargetMachine.h"
+#include "CangjieDemangle.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "MCTargetDesc/AArch64MCTargetDesc.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -215,7 +216,6 @@
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugLoc.h"
-#include "llvm/IR/Function.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/Support/CommandLine.h"
@@ -256,8 +256,50 @@ cl::opt<bool> EnableHomogeneousPrologEpilog(
     "homogeneous-prolog-epilog", cl::Hidden,
     cl::desc("Emit homogeneous prologue and epilogue for the size "
              "optimization (default = off)"));
-
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 STATISTIC(NumRedZoneFunctions, "Number of functions using red zone");
+
+static bool isCJMachO(MachineFunction &MF) {
+  return (MF.getFunction().hasCangjieGC() &&
+          MF.getTarget().getTargetTriple().isOSBinFormatMachO());
+}
+
+static void storeFunctionAddress(MachineFunction &MF,
+                                 MachineBasicBlock &MBB,
+                                 MachineBasicBlock::iterator MBBI,
+                                 const DebugLoc &DL,
+                                 const TargetInstrInfo *TII) {
+  if (isCJMachO(MF)) {
+    // Use X9 store func_begin
+    BuildMI(MBB, MBBI, DL, TII->get(AArch64::ADR), AArch64::X9)
+        .addGlobalAddress(&MF.getFunction())
+        .setMIFlag(MachineInstr::FrameSetup);
+    // Use X10 store .Lmethod_desc.xxx
+    BuildMI(MBB, MBBI, DL, TII->get(AArch64::ADRP), AArch64::X10)
+        .addGlobalAddress(&MF.getFunction())
+        .setMIFlag(MachineInstr::FrameSetup);
+    // -2: X9 is in -2 * 8 offsets of X29.
+    BuildMI(MBB, MBBI, DL, TII->get(AArch64::STPXi))
+        .addReg(AArch64::X10)
+        .addReg(AArch64::X9)
+        .addReg(AArch64::FP)
+        .addImm(-2)
+        .setMIFlag(MachineInstr::FrameSetup);
+    return;
+  }
+  // Use X9 store func_begin
+  BuildMI(MBB, MBBI, DL, TII->get(AArch64::ADR), AArch64::X9) // reg2 fp
+      .addGlobalAddress(&MF.getFunction())
+      .setMIFlag(MachineInstr::FrameSetup);
+  // frame object has saved.
+  BuildMI(MBB, MBBI, DL, TII->get(AArch64::STURXi))
+      .addReg(AArch64::X9)
+      .addReg(AArch64::FP)
+      .addImm(-8)
+      .setMIFlag(MachineInstr::FrameSetup);
+}
 
 /// Returns how much of the incoming argument stack area (in bytes) we should
 /// clean up in an epilogue. For the C calling convention this will be 0, for
@@ -1239,6 +1281,13 @@ static void fixupCalleeSaveRestoreStackOffset(MachineInstr &MI,
     return;
 
   unsigned Opc = MI.getOpcode();
+  // Ignore instructions that do not operate on SP, i.e. shadow call stack
+  // instructions and associated CFI instruction.
+  if (Opc == AArch64::ADR || Opc == AArch64::STURXi) {
+    assert(MI.getOperand(0).getReg() != AArch64::SP);
+    return;
+  }
+
   unsigned Scale;
   switch (Opc) {
   case AArch64::STPXi:
@@ -1372,6 +1421,16 @@ static void emitShadowCallStackEpilogue(const TargetInstrInfo &TII,
   }
 }
 
+const std::vector<MCPhysReg>
+AArch64FrameLowering::getArgRegs(const MachineFunction &MF) const {
+  return { AArch64::X0, AArch64::X1, AArch64::X2, AArch64::X3, AArch64::X4,
+           AArch64::X5, AArch64::X6, AArch64::X7 };
+}
+
+MCPhysReg AArch64FrameLowering::getX8Register() const {
+  return AArch64::X8;
+}
+
 void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
                                         MachineBasicBlock &MBB) const {
   MachineBasicBlock::iterator MBBI = MBB.begin();
@@ -1490,6 +1549,20 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
   // function, including the funclet.
   int64_t NumBytes = IsFunclet ? getWinEHFuncletFrameSize(MF)
                                : MFI.getStackSize();
+
+  assert(NumBytes >= 0 && "NumBytes less than 0 in aarch64!");
+  // 2147483648: 2*1024*1024*1024, 2GB
+  if (CJPipeline && (uint64_t)NumBytes >= 2147483648) {
+    auto D = Cangjie::Demangle(MF.getName().str());
+    std::string DemangledName = D.GetPkgName() +
+                                std::string(D.GetPkgName().empty() ? "" : "::") +
+                                D.GetFullName();
+    report_fatal_error("The stacksize of " + Twine(DemangledName) +
+                       " exceeds cangjie max stacksize(2GB).\nCompilation "
+                       "stopped! Please check the implementation of " +
+                       Twine(DemangledName) + "!", false);
+  }
+
   if (!AFI->hasStackFrame() && !windowsRequiresStackProbe(MF, NumBytes)) {
     assert(!HasFP && "unexpected function without stack frame but with FP");
     assert(!SVEStackSize &&
@@ -1567,14 +1640,14 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
     ++MBBI;
   }
 
+  // Only set up FP if we actually need to.
+  int64_t FPOffset = AFI->getCalleeSaveBaseToFrameRecordOffset();
+
+  if (CombineSPBump)
+    FPOffset += AFI->getLocalStackSize();
+
   // For funclets the FP belongs to the containing function.
   if (!IsFunclet && HasFP) {
-    // Only set up FP if we actually need to.
-    int64_t FPOffset = AFI->getCalleeSaveBaseToFrameRecordOffset();
-
-    if (CombineSPBump)
-      FPOffset += AFI->getLocalStackSize();
-
     if (AFI->hasSwiftAsyncContext()) {
       // Before we update the live FP we have to ensure there's a valid (or
       // null) asynchronous context in its slot just before FP in the frame
@@ -1603,6 +1676,9 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
       emitFrameOffset(MBB, MBBI, DL, AArch64::FP, AArch64::SP,
                       StackOffset::getFixed(FPOffset), TII,
                       MachineInstr::FrameSetup, false, NeedsWinCFI, &HasWinCFI);
+      // store func address to stack slot.
+      if (MF.getFunction().hasCangjieGC())
+        storeFunctionAddress(MF, MBB, MBBI, DL, TII);
     }
     if (EmitCFI) {
       // Define the current CFA rule to use the provided FP.
@@ -1617,6 +1693,11 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
           .addCFIIndex(CFIIndex)
           .setMIFlags(MachineInstr::FrameSetup);
     }
+  }
+  // Prepare for StackCheck
+  // 16: stur x9, [x29, #-8]. Need x9, and align16(8)
+  if (NumBytes == 0) {
+    preCJStackCheck(MF, MBBI, FPOffset - 16);
   }
 
   // Now emit the moves for whatever callee saved regs we have (including FP,
@@ -1777,6 +1858,19 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
           SVEStackSize +
               StackOffset::getFixed((int64_t)MFI.getStackSize() - NumBytes));
     }
+    // Prepare for StackCheck
+    // 16: stur x9, [x29, #-8]. Need x9, and align16(8)
+    if (isCJMachO(MF)) {
+      // For macos, x9 and callee saved registers have been stored to stack now,
+      // and callee saved registers is after x9, so NumBytes need add the size
+      // of callee saved registers.
+      preCJStackCheck(MF, MBBI, NumBytes + FPOffset - 16);
+    } else {
+      // For others, x9 has not been stored to stack now, so reserve 16 bytes
+      // for it.
+      preCJStackCheck(MF, MBBI, NumBytes - 16);
+    }
+
     if (NeedsRealignment) {
       const unsigned NrBitsToZero = Log2(MFI.getMaxAlign());
       assert(NrBitsToZero > 1);
@@ -2224,7 +2318,9 @@ AArch64FrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
   return resolveFrameIndexReference(
       MF, FI, FrameReg,
       /*PreferFP=*/
-      MF.getFunction().hasFnAttribute(Attribute::SanitizeHWAddress),
+      CJPipeline
+          ? true
+          : MF.getFunction().hasFnAttribute(Attribute::SanitizeHWAddress),
       /*ForSimm=*/false);
 }
 
@@ -2636,6 +2732,13 @@ static void computeCalleeSaveRegisterPairs(
         RPI.Reg2 == AArch64::FP)
       ByteOffset += StackFillDir * 8;
 
+    if (NeedsFrameRecord && isCJMachO(MF) && RPI.Reg2 == AArch64::FP) {
+      // 16: size of CJ method PC info and Lmethod_desc.xxx.
+      // Cangjie's CJ method PC info and Lmethod_desc.xxx is before callee saved
+      // registers in macos of Mx, so allocate an extra 16 bytes for it.
+      ByteOffset -= 16;
+    }
+
     assert(!(RPI.isScalable() && RPI.isPaired()) &&
            "Paired spill/fill instructions don't exist for SVE vectors");
 
@@ -2664,6 +2767,12 @@ static void computeCalleeSaveRegisterPairs(
     if (NeedsFrameRecord && AFI->hasSwiftAsyncContext() &&
         RPI.Reg2 == AArch64::FP)
       Offset += 8;
+
+    if (NeedsFrameRecord && isCJMachO(MF) && RPI.Reg2 == AArch64::FP) {
+      // 16: size of CJ method PC info and Lmethod_desc.xxx.
+      Offset += 16;
+    }
+
     RPI.Offset = Offset / Scale;
 
     assert(((!RPI.isScalable() && RPI.Offset >= -64 && RPI.Offset <= 63) ||
@@ -3102,6 +3211,10 @@ void AArch64FrameLowering::determineCalleeSaves(MachineFunction &MF,
   if (hasFP(MF) && AFI->hasSwiftAsyncContext())
     CSStackSize += 8;
 
+  if (hasFP(MF) && isCJMachO(MF))
+    // 16: size of CJ method PC info and Lmethod_desc.xxx.
+    CSStackSize += 16;
+
   uint64_t AlignedCSStackSize = alignTo(CSStackSize, 16);
   LLVM_DEBUG(dbgs() << "Estimated stack frame size: "
                << EstimatedStackSize + AlignedCSStackSize
@@ -3134,6 +3247,14 @@ bool AArch64FrameLowering::assignCalleeSavedSpillSlots(
   if (CSI.empty())
     return true; // Early exit if no callee saved registers are modified!
 
+  auto UpdateFrameIdxBoundary = [&](unsigned NewValue) {
+    if (NewValue < MinCSFrameIndex) {
+      MinCSFrameIndex = NewValue;
+    }
+    if (NewValue > MaxCSFrameIndex) {
+      MaxCSFrameIndex = NewValue;
+    }
+  };
   // Now that we know which registers need to be saved and restored, allocate
   // stack slots for them.
   MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -3143,8 +3264,7 @@ bool AArch64FrameLowering::assignCalleeSavedSpillSlots(
   if (UsesWinAAPCS && hasFP(MF) && AFI->hasSwiftAsyncContext()) {
     int FrameIdx = MFI.CreateStackObject(8, Align(16), true);
     AFI->setSwiftAsyncContextFrameIdx(FrameIdx);
-    if ((unsigned)FrameIdx < MinCSFrameIndex) MinCSFrameIndex = FrameIdx;
-    if ((unsigned)FrameIdx > MaxCSFrameIndex) MaxCSFrameIndex = FrameIdx;
+    UpdateFrameIdxBoundary((unsigned)FrameIdx);
   }
 
   for (auto &CS : CSI) {
@@ -3155,17 +3275,33 @@ bool AArch64FrameLowering::assignCalleeSavedSpillSlots(
     Align Alignment(RegInfo->getSpillAlign(*RC));
     int FrameIdx = MFI.CreateStackObject(Size, Alignment, true);
     CS.setFrameIdx(FrameIdx);
-
-    if ((unsigned)FrameIdx < MinCSFrameIndex) MinCSFrameIndex = FrameIdx;
-    if ((unsigned)FrameIdx > MaxCSFrameIndex) MaxCSFrameIndex = FrameIdx;
+    UpdateFrameIdxBoundary((unsigned)FrameIdx);
+    if (Reg == AArch64::FP && hasFP(MF) && MF.getFunction().hasCangjieGC()) {
+      bool IsCJMachO = isCJMachO(MF);
+      // 8: size of CJ method PC info
+      uint64_t CJSize = 8;
+      if (IsCJMachO) {
+        // 16: size of CJ method PC info and Lmethod_desc.xxx
+        CJSize = 16;
+      }
+      // For mac, store CJ method PC info and Lmethod_desc.xxx
+      // For others, store CJ method PC info
+      // CreateStackObject returning a nonnegative identifier
+      // to represent a new statically sized stack object
+      auto CJIdx = static_cast<unsigned>(
+          MFI.CreateStackObject(CJSize /*size*/, Align(8) /*align*/, true));
+      if (IsCJMachO) {
+        AFI->setCJMachOPCContextFrameIdx(CJIdx);
+      }
+      UpdateFrameIdxBoundary(CJIdx);
+    }
 
     // Grab 8 bytes below FP for the extended asynchronous frame info.
     if (hasFP(MF) && AFI->hasSwiftAsyncContext() && !UsesWinAAPCS &&
         Reg == AArch64::FP) {
       FrameIdx = MFI.CreateStackObject(8, Alignment, true);
       AFI->setSwiftAsyncContextFrameIdx(FrameIdx);
-      if ((unsigned)FrameIdx < MinCSFrameIndex) MinCSFrameIndex = FrameIdx;
-      if ((unsigned)FrameIdx > MaxCSFrameIndex) MaxCSFrameIndex = FrameIdx;
+      UpdateFrameIdxBoundary((unsigned)FrameIdx);
     }
   }
   return true;

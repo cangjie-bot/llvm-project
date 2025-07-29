@@ -1,0 +1,3 @@
+; XFAIL: *
+; RUN: opt < %s -passes=pgo-instr-use -pgo-test-profile-file=%t.profdata -S  2>&1
+Test:bb0:0 _ZN7default1BE

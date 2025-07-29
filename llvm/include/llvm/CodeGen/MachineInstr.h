@@ -114,6 +114,14 @@ public:
                                         // this instruction.
   };
 
+  enum MIExtFlag {
+    NoExtFlags   = 0,
+    EpilogueIns  = 1,                   // Set to mark certain RSP recovery
+                                        // instruction as part of epilogue
+                                        // instructions for Cangjie function.
+                                        // Not all epilogue instructions need
+                                        // to be marked.
+  };
 private:
   const MCInstrDesc *MCID;              // Instruction descriptor.
   MachineBasicBlock *Parent = nullptr;  // Pointer to the owning basic block.
@@ -125,6 +133,9 @@ private:
   uint16_t Flags = 0;                   // Various bits of additional
                                         // information about machine
                                         // instruction.
+
+  uint8_t ExtFlags = 0;                 // Extended bits of flag used by
+                                        // Cangjie about machine instruction.
 
   uint8_t AsmPrinterFlags = 0;          // Various bits of information used by
                                         // the AsmPrinter to emit helpful
@@ -257,6 +268,11 @@ private:
   /// defined by this instruction.
   unsigned DebugInstrNum;
 
+  /// Used for cangjie stack check.
+  /// For X86: the size is frame size.
+  /// For aarch64: the size is addsize calculated for sp.
+  unsigned CJStackSize;
+
   // Intrusive list support
   friend struct ilist_traits<MachineInstr>;
   friend struct ilist_callback_traits<MachineBasicBlock>;
@@ -348,6 +364,12 @@ public:
   void clearFlag(MIFlag Flag) {
     Flags &= ~((uint16_t)Flag);
   }
+
+  /// Return whether an extended MI flag is set.
+  bool getExtFlag(MIExtFlag Flag) const { return ExtFlags & Flag; }
+
+  /// Set a extended MI flag.
+  void setExtFlag(MIExtFlag Flag) { ExtFlags |= (uint16_t)Flag; }
 
   /// Return true if MI is in a bundle (but not the first MI in a bundle).
   ///
@@ -461,6 +483,10 @@ public:
   /// into \p MF. Needed for transformations that create an instruction but
   /// don't immediately insert them.
   unsigned getDebugInstrNum(MachineFunction &MF);
+
+  unsigned peekCJStackSize() const { return CJStackSize; }
+
+  void setCJStackSize(uint64_t Num) { CJStackSize = Num; }
 
   /// Examine the instruction number of this MachineInstr. May be zero if
   /// it hasn't been assigned a number yet.
@@ -970,9 +996,6 @@ public:
     return hasProperty(MCID::RegSequence, Type);
   }
 
-  /// Return true if this instruction behaves
-  /// the same way as the generic EXTRACT_SUBREG instructions.
-  /// E.g., on ARM,
   /// rX, rY VMOVRRD dZ
   /// is equivalent to two EXTRACT_SUBREG:
   /// rX = EXTRACT_SUBREG dZ, ssub_0
@@ -1155,6 +1178,8 @@ public:
   /// affect the notion of identical.
   bool isIdenticalTo(const MachineInstr &Other,
                      MICheckType Check = CheckDefs) const;
+
+  bool isCalDerivedPtrInCangjieCopyGC(MachineRegisterInfo *MRI) const;
 
   /// Unlink 'this' from the containing basic block, and return it without
   /// deleting it.

@@ -11,6 +11,7 @@
 // Diagnostics reporting is still done as part of the LLVMContext.
 //===----------------------------------------------------------------------===//
 
+#include "CangjieDemangle.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
@@ -63,6 +64,17 @@ void DiagnosticInfoInlineAsm::print(DiagnosticPrinter &DP) const {
   DP << getMsgStr();
   if (getLocCookie())
     DP << " at line " << getLocCookie();
+}
+
+std::string DiagnosticInfoResourceLimit::GetDemangleName() const {
+  auto D = Cangjie::Demangle(Fn.getName().str());
+  std::string DemangledName = D.GetPkgName() +
+                              std::string(D.GetPkgName().empty() ? "" : "::") +
+                              D.GetFullName();
+  if (!DemangledName.empty()) {
+    return DemangledName;
+  }
+  return Fn.getName().str();
 }
 
 void DiagnosticInfoResourceLimit::print(DiagnosticPrinter &DP) const {

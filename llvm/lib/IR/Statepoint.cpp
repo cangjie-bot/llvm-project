@@ -38,3 +38,20 @@ llvm::parseStatepointDirectivesFromAttrs(AttributeList AS) {
 
   return Result;
 }
+
+uint64_t llvm::getCJStatepointID(CallBase *Call) {
+  Function *Callee = Call->getCalledFunction();
+  if (!Callee)
+    return CJStatepointID::Default;
+
+  if (Callee->isCangjieSafePoint())
+    return CJStatepointID::Safepoint;
+
+  if (Callee->isCangjieStackCheck())
+    return CJStatepointID::StackCheck;
+
+  if (Call->getMetadata("fast_new_array"))
+    return CJStatepointID::NewArrayFast;
+
+  return CJStatepointID::Default;
+}

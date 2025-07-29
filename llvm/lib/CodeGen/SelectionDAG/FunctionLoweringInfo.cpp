@@ -32,6 +32,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Statepoint.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -44,13 +45,27 @@ using namespace llvm;
 /// PHI nodes or outside of the basic block that defines it, or used by a
 /// switch or atomic instruction, which may expand to multiple basic blocks.
 static bool isUsedOutsideOfDefiningBlock(const Instruction *I) {
-  if (I->use_empty()) return false;
-  if (isa<PHINode>(I)) return true;
+  if (I->use_empty())
+    return false;
+  if (isa<PHINode>(I))
+    return true;
   const BasicBlock *BB = I->getParent();
-  for (const User *U : I->users())
-    if (cast<Instruction>(U)->getParent() != BB || isa<PHINode>(U))
+  for (const User *U : I->users()) {
+    if (cast<Instruction>(U)->getParent() != BB || isa<PHINode>(U)) {
       return true;
-
+    }
+    // GCRelocate use value indirectly through Statepoint
+    if (isa<GCStatepointInst>(U)) {
+      for (const User *SU : U->users()) {
+        if (const auto *RelocateInst = dyn_cast<GCRelocateInst>(SU)) {
+          if (RelocateInst->getDerivedPtr() == I &&
+              RelocateInst->getParent() != I->getParent()) {
+            return true;
+          }
+        }
+      }
+    }
+  }
   return false;
 }
 

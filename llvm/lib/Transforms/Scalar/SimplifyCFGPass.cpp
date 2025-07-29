@@ -35,6 +35,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
@@ -79,6 +80,10 @@ static cl::opt<bool> UserSinkCommonInsts(
 
 
 STATISTIC(NumSimpl, "Number of blocks simplified");
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 
 static bool
 performBlockTailMerging(Function &F, ArrayRef<BasicBlock *> BBs,
@@ -153,11 +158,45 @@ performBlockTailMerging(Function &F, ArrayRef<BasicBlock *> BBs,
   return true;
 }
 
+static bool moveCJMemsetInstToPredBB(BasicBlock &BB) {
+  SmallVector<Instruction *> InstsToKill;
+  bool Changed = false;
+  for (auto I = BB.begin(); I != BB.end(); ++I) {
+    Instruction &Inst = *I;
+    IntrinsicInst *II = dyn_cast<IntrinsicInst>(&Inst);
+    if (!II || II->getIntrinsicID() != Intrinsic::cj_memset) {
+      continue;
+    }
+    auto *BCI = dyn_cast<BitCastInst>(Inst.getOperand(0));
+    if (!BCI || !isa<PHINode>(BCI->getOperand(0))) {
+      continue;
+    }
+    auto *PhiInst = dyn_cast<PHINode>(BCI->getOperand(0));
+    for (unsigned Idx = 0, E = PhiInst->getNumIncomingValues(); Idx != E;
+         ++Idx) {
+      BasicBlock *PredBB = PhiInst->getIncomingBlock(Idx);
+      Value *PredValue = PhiInst->getIncomingValue(Idx);
+      Instruction *EndInst = dyn_cast<Instruction>(&PredBB->back());
+      IRBuilder<> Builder(EndInst);
+      // 1: Inst 1st operand value
+      // 2: Inst 2st Operand value
+      Builder.CreateCJMemSet(PredValue, Inst.getOperand(1), Inst.getOperand(2),
+                             Align(1));
+    }
+    Changed = true;
+    InstsToKill.push_back(&Inst);
+  }
+  for (auto *I : InstsToKill) {
+    I->eraseFromParent();
+  }
+  return Changed;
+}
+
 static bool tailMergeBlocksWithSimilarFunctionTerminators(Function &F,
                                                           DomTreeUpdater *DTU) {
   SmallMapVector<unsigned /*TerminatorOpcode*/, SmallVector<BasicBlock *, 2>, 4>
       Structure;
-
+  bool Changed = false;
   // Scan all the blocks in the function, record the interesting-ones.
   for (BasicBlock &BB : F) {
     if (DTU && DTU->isBBPendingDeletion(&BB))
@@ -200,11 +239,14 @@ static bool tailMergeBlocksWithSimilarFunctionTerminators(Function &F,
                [](Value *Op) { return Op->getType()->isTokenTy(); }))
       continue;
 
+    // If the value in the memset function is determined by the phi node,
+    // move the memset instruction to the predecessor node.
+    if (CJPipeline)
+      Changed |= moveCJMemsetInstToPredBB(BB);
+
     // Canonical blocks are uniqued based on the terminator type (opcode).
     Structure[Term->getOpcode()].emplace_back(&BB);
   }
-
-  bool Changed = false;
 
   std::vector<DominatorTree::UpdateType> Updates;
 
@@ -291,9 +333,9 @@ static bool simplifyFunctionCFGImpl(Function &F, const TargetTransformInfo &TTI,
   return true;
 }
 
-static bool simplifyFunctionCFG(Function &F, const TargetTransformInfo &TTI,
-                                DominatorTree *DT,
-                                const SimplifyCFGOptions &Options) {
+bool llvm::simplifyFunctionCFG(Function &F, const TargetTransformInfo &TTI,
+                               DominatorTree *DT,
+                               const SimplifyCFGOptions &Options) {
   assert((!RequireAndPreserveDomTree ||
           (DT && DT->verify(DominatorTree::VerificationLevel::Full))) &&
          "Original domtree is invalid?");

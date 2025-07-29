@@ -133,10 +133,27 @@ Status CreateHostSysRootModuleLink(const FileSpec &root_dir_spec,
       JoinPath(JoinPath(root_dir_spec, hostname),
                platform_module_spec.GetPath().c_str());
   if (FileSystem::Instance().Exists(sysroot_module_path_spec)) {
+    if (FileSystem::Instance().Exists(local_module_spec)) {
+      UUID sysroot_module_sp_uuid = (std::make_shared<Module>(ModuleSpec(sysroot_module_path_spec)))->GetUUID();
+      UUID module_spec_uuid = (std::make_shared<Module>(ModuleSpec(local_module_spec)))->GetUUID();
+      if (sysroot_module_sp_uuid.IsValid() && (sysroot_module_sp_uuid == module_spec_uuid)) {
+        delete_existing = false;
+      }
+    }
+
     if (!delete_existing)
       return Status();
 
     DecrementRefExistingModule(root_dir_spec, sysroot_module_path_spec);
+  }
+
+  if (FileSystem::Instance().Exists(sysroot_module_path_spec)) {
+    auto module_sp =
+        std::make_shared<Module>(ModuleSpec(sysroot_module_path_spec));
+    UUID module_uuid = module_sp->GetUUID();
+    if (!module_uuid.IsValid()) {
+      return Status();
+    }
   }
 
   const auto error = MakeDirectory(

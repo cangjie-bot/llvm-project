@@ -3288,7 +3288,11 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
 
   // Get a count of how many bytes are to be pushed on the stack.
   unsigned NumBytes = CCInfo.getAlignedCallFrameSize();
-
+  // Cangjie need to add frame info for CFFI stub.
+  if (Callee) {
+    CCInfo.AddAlignedCallFrameSizeMetaDataForCJFFI(
+        const_cast<Function *>(dyn_cast<Function>(Callee)), NumBytes);
+  }
   // Issue CALLSEQ_START
   unsigned AdjStackDown = TII.getCallFrameSetupOpcode();
   BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(AdjStackDown))

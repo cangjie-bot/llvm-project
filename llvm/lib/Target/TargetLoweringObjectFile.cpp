@@ -213,6 +213,29 @@ SectionKind TargetLoweringObjectFile::getKindForGlobal(const GlobalObject *GO,
   // Global variables require more detailed analysis.
   const auto *GVar = cast<GlobalVariable>(GO);
 
+  if (GVar->isCJTypeInfo())
+    return SectionKind::getCJTypeInfo();
+  if (GVar->isCJTypeTemplate())
+    return SectionKind::getCJTypeTemplate();
+  if (GVar->isCJTypeName() || GVar->isCJTIOffsets() || GVar->isCJTITypeArgs() ||
+      GVar->isCJTIFields() || GVar->isCJTTFieldsFns() ||
+      GVar->isCJReflectUpperBounds() || GVar->isCJFunctableTable())
+    return SectionKind::getCJTypeFields();
+  if (GVar->isCJGCTib())
+    return SectionKind::getCJGCTib();
+  if (GVar->isCJMTable())
+    return SectionKind::getCJMTable();
+  if (GVar->isCJReflectPkgInfo())
+    return SectionKind::getCJReflectPkgInfo();
+  if (GVar->isCJReflectGV())
+    return SectionKind::getCJReflectGV();
+  if (GVar->isCJReflectGeneticTI())
+    return SectionKind::getCJReflectGenericTI();
+  if (GVar->isCJStaticGenericTI())
+    return SectionKind::getCJStaticGenericTI();
+  if (GVar->isCJInnerTypeExtensions())
+    return SectionKind::getCJInnerTypeExtensions();
+
   // Handle thread-local data first.
   if (GVar->isThreadLocal()) {
     if (isSuitableForBSS(GVar) && !TM.Options.NoZerosInBSS) {
@@ -335,8 +358,11 @@ MCSection *TargetLoweringObjectFile::SectionForGlobal(
   }
 
   if (auto *F = dyn_cast<Function>(GO)) {
-    if (F->hasFnAttribute("implicit-section-name"))
+    bool EmitUniqueSection = TM.getFunctionSections();
+    if (F->hasFnAttribute("implicit-section-name") ||
+        (F->hasFnAttribute("cjinit") && !EmitUniqueSection)) {
       return getExplicitSectionGlobal(GO, Kind, TM);
+    }
   }
 
   // Use default section depending on the 'type' of global

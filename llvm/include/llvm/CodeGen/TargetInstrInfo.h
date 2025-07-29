@@ -334,6 +334,18 @@ public:
     return false;
   }
 
+  virtual bool isLEA64r(const MachineInstr &MI) const {
+    return false;
+  }
+
+  virtual bool isADDXri(const MachineInstr &MI) const {
+    return false;
+  }
+
+  virtual bool isORRXri(const MachineInstr &MI) const {
+    return false;
+  }
+
   /// Compute the size in bytes and offset within a stack slot of a spilled
   /// register or subregister.
   ///

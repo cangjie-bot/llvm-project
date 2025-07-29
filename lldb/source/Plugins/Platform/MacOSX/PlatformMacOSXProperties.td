@@ -8,7 +8,7 @@ let Definition = "platformdarwinkernel" in {
 
 let Definition = "platformdarwin" in {
   def IgnoredExceptions: Property<"ignored-exceptions", "String">,
-    DefaultStringValue<"">,
+    DefaultStringValue<"EXC_BAD_ACCESS">,
     Desc<"List the mach exceptions to ignore, separated by '|' "
          "(e.g. 'EXC_BAD_ACCESS|EXC_BAD_INSTRUCTION'). "
          "lldb will instead stop on the BSD signal the exception was converted "

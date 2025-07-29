@@ -77,7 +77,7 @@ let Definition = "target" in {
     DefaultUnsignedValue<256>,
     Desc<"Maximum number of children to expand in any level of depth.">;
   def MaxChildrenDepth: Property<"max-children-depth", "UInt64">,
-    DefaultUnsignedValue<0xFFFFFFFF>,
+    DefaultUnsignedValue<0x05>,
     Desc<"Maximum depth to expand children.">;
   def MaxSummaryLength: Property<"max-string-summary-length", "SInt64">,
     DefaultUnsignedValue<1024>,
@@ -271,7 +271,7 @@ let Definition = "thread" in {
     Desc<"If true, when step-in/step-out/step-over leave the current frame, they will continue to step out till they come to a function with debug information. Passing a frame argument to step-out will override this option.">;
   def StepAvoidRegex: Property<"step-avoid-regexp", "Regex">,
     Global,
-    DefaultStringValue<"^std::">,
+    DefaultStringValue<"^(compress|crypto|encoding|net|serialization|std)[.][a-z]+::">,
     Desc<"A regular expression defining functions step-in won't stop in.">;
   def StepAvoidLibraries: Property<"step-avoid-libraries", "FileSpecList">,
     Global,

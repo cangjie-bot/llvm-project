@@ -233,6 +233,7 @@ const Symbol *Symtab::SymbolAtIndex(size_t idx) const {
 static bool lldb_skip_name(llvm::StringRef mangled,
                            Mangled::ManglingScheme scheme) {
   switch (scheme) {
+  case Mangled::eManglingSchemeCangjie:
   case Mangled::eManglingSchemeItanium: {
     if (mangled.size() < 3 || !mangled.startswith("_Z"))
       return true;
@@ -337,8 +338,16 @@ void Symtab::InitNameIndexes() {
 
       // Symbol name strings that didn't match a Mangled::ManglingScheme, are
       // stored in the demangled field.
-      if (ConstString name = mangled.GetDemangledName()) {
+      SymbolContext sc;
+      symbol->CalculateSymbolContext(&sc);
+      sc.module_sp = m_objfile->GetModule();
+      if (ConstString name = mangled.GetDemangledName(&sc)) {
         name_to_index.Append(name, value);
+
+        if (ConstString base_name = mangled.GetDemangledBaseName(&sc)) {
+          method_to_index.Append(base_name, value);
+          basename_to_index.Append(base_name, value);
+        }
 
         if (symbol->ContainsLinkerAnnotations()) {
           // If the symbol has linker annotations, also add the version without

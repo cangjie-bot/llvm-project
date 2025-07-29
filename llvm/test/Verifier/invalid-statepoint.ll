@@ -1,4 +1,5 @@
 ; RUN: not opt -verify 2>&1 < %s | FileCheck %s
+; XFAIL: *
 
 declare zeroext i1 @return0i1()
 

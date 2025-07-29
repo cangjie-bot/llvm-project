@@ -392,7 +392,11 @@ void ProcessWindows::RefreshStateAfterStop() {
                                                                  site->GetID());
       stop_thread->SetStopInfo(stop_info);
 
-      return;
+      // When both breakpoint and watchpoint events are reported.
+      // If the breakpoint IsInternal, we also need to find watchpoint at this pc.
+      if (!site->IsInternal()) {
+        return;
+      }
     }
 
     auto *reg_ctx = static_cast<RegisterContextWindows *>(
@@ -413,6 +417,12 @@ void ProcessWindows::RefreshStateAfterStop() {
           *stop_thread, id, m_watchpoints[id].address);
       stop_thread->SetStopInfo(stop_info);
 
+      return;
+    }
+
+    // If an internal breakpoint has been set stopinfo.
+    // And we can not find any watchpoint here. We should return.
+    if (site && site->ValidForThisThread(*stop_thread)) {
       return;
     }
 

@@ -41,6 +41,7 @@
 #include "Commands/CommandObjectType.h"
 #include "Commands/CommandObjectVersion.h"
 #include "Commands/CommandObjectWatchpoint.h"
+#include "Commands/CommandObjectCJThread.h"
 
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/PluginManager.h"
@@ -394,12 +395,31 @@ void CommandInterpreter::Initialize() {
   if (cmd_obj_sp)
     AddAlias("image", cmd_obj_sp);
 
+  cmd_obj_sp = GetCommandSPExact("frame variable");
+  if (cmd_obj_sp) {
+    if (auto *locals = AddAlias("locals", cmd_obj_sp, "--")) {
+      locals->SetHelp("Show local variables of Cangjie for the current stack frame."
+                      "Defaults to all arguments and local variables in scope.");
+      locals->SetHelpLong("");
+    }
+  }
+
+  cmd_obj_sp = GetCommandSPExact("target variable");
+  if (cmd_obj_sp) {
+    if (auto *globals = AddAlias("globals", cmd_obj_sp, "--")) {
+      globals->SetHelp("Show global variables of Cangjie for the current target,"
+                       "before or while running a process.");
+      globals->SetHelpLong("");
+    }
+  }
+
   alias_arguments_vector_sp = std::make_shared<OptionArgVector>();
 
   cmd_obj_sp = GetCommandSPExact("expression");
   if (cmd_obj_sp) {
-    AddAlias("p", cmd_obj_sp, "--")->SetHelpLong("");
-    AddAlias("print", cmd_obj_sp, "--")->SetHelpLong("");
+    AddAlias("set", cmd_obj_sp, "-- [cj]")->SetHelpLong("");
+    AddAlias("p", cmd_obj_sp, "-- [cj]")->SetHelpLong("");
+    AddAlias("print", cmd_obj_sp, "-- [cj]")->SetHelpLong("");
     AddAlias("call", cmd_obj_sp, "--")->SetHelpLong("");
     if (auto *po = AddAlias("po", cmd_obj_sp, "-O --")) {
       po->SetHelp("Evaluate an expression on the current thread.  Displays any "
@@ -540,6 +560,7 @@ void CommandInterpreter::LoadCommandDictionary() {
   REGISTER_COMMAND_OBJECT("version", CommandObjectVersion);
   REGISTER_COMMAND_OBJECT("watchpoint", CommandObjectMultiwordWatchpoint);
   REGISTER_COMMAND_OBJECT("language", CommandObjectLanguage);
+  REGISTER_COMMAND_OBJECT("cjthread", CommandObjectMultiwordCJThread);
 
   // clang-format off
   const char *break_regexes[][2] = {

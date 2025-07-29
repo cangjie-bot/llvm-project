@@ -72,6 +72,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "inline"
 
+extern cl::opt<int> MaxRecursionInl;
+
 STATISTIC(NumInlined, "Number of functions inlined");
 STATISTIC(NumCallsDeleted, "Number of call sites deleted, not inlined");
 STATISTIC(NumDeleted, "Number of functions deleted because all callers found");
@@ -333,9 +335,15 @@ static InlineResult inlineCallIfPossible(
 
 /// Return true if the specified inline history ID
 /// indicates an inline history that includes the specified function.
+/// SkipFirst allows to skip the check for the first items of the list.
 static bool inlineHistoryIncludes(
     Function *F, int InlineHistoryID,
-    const SmallVectorImpl<std::pair<Function *, int>> &InlineHistory) {
+    const SmallVectorImpl<std::pair<Function *, int>> &InlineHistory,
+    int SkipFirst) {
+  for (int I = 0; InlineHistoryID != -1 && I < SkipFirst; ++I) {
+    InlineHistoryID = InlineHistory[InlineHistoryID].second;
+  }
+
   while (InlineHistoryID != -1) {
     assert(unsigned(InlineHistoryID) < InlineHistory.size() &&
            "Invalid inline history ID");
@@ -470,7 +478,8 @@ inlineCallsImpl(CallGraphSCC &SCC, CallGraph &CG,
         // which would provide the same callsites, which would cause us to
         // infinitely inline.
         if (InlineHistoryID != -1 &&
-            inlineHistoryIncludes(Callee, InlineHistoryID, InlineHistory)) {
+            inlineHistoryIncludes(Callee, InlineHistoryID, InlineHistory,
+                                  MaxRecursionInl - 1)) {
           setInlineRemark(CB, "recursive");
           continue;
         }
@@ -869,11 +878,11 @@ PreservedAnalyses InlinerPass::run(LazyCallGraph::SCC &InitialC,
       CallBase *CB = P.first;
       const int InlineHistoryID = P.second;
       Function &Callee = *CB->getCalledFunction();
-
       if (InlineHistoryID != -1 &&
-          inlineHistoryIncludes(&Callee, InlineHistoryID, InlineHistory)) {
-        LLVM_DEBUG(dbgs() << "Skipping inlining due to history: "
-                          << F.getName() << " -> " << Callee.getName() << "\n");
+          inlineHistoryIncludes(&Callee, InlineHistoryID, InlineHistory,
+                                MaxRecursionInl - 1)) {
+        LLVM_DEBUG(dbgs() << "Skipping inlining due to history: " << F.getName()
+                          << " -> " << Callee.getName() << "\n");
         setInlineRemark(*CB, "recursive");
         continue;
       }

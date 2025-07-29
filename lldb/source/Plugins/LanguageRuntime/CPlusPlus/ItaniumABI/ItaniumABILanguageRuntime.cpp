@@ -4,37 +4,30 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+//
 //===----------------------------------------------------------------------===//
 
 #include "ItaniumABILanguageRuntime.h"
 
-#include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
-#include "lldb/Breakpoint/BreakpointLocation.h"
-#include "lldb/Core/Mangled.h"
-#include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
-#include "lldb/Core/ValueObject.h"
-#include "lldb/Core/ValueObjectMemory.h"
 #include "lldb/DataFormatters/FormattersHelpers.h"
 #include "lldb/Expression/DiagnosticManager.h"
 #include "lldb/Expression/FunctionCaller.h"
 #include "lldb/Interpreter/CommandObject.h"
 #include "lldb/Interpreter/CommandObjectMultiword.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
-#include "lldb/Symbol/Symbol.h"
-#include "lldb/Symbol/SymbolFile.h"
 #include "lldb/Symbol/TypeList.h"
-#include "lldb/Target/Process.h"
-#include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/StopInfo.h"
-#include "lldb/Target/Target.h"
-#include "lldb/Target/Thread.h"
-#include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/Scalar.h"
-#include "lldb/Utility/Status.h"
+
+#include "cangjie/Basic/UGTypeKind.h"
 
 #include <vector>
 
@@ -44,6 +37,7 @@ using namespace lldb_private;
 LLDB_PLUGIN_DEFINE_ADV(ItaniumABILanguageRuntime, CXXItaniumABI)
 
 static const char *vtable_demangled_prefix = "vtable for ";
+static const size_t name_size = 128;
 
 char ItaniumABILanguageRuntime::ID = 0;
 
@@ -182,6 +176,983 @@ TypeAndOrName ItaniumABILanguageRuntime::GetTypeInfoFromVTableAddress(
   return TypeAndOrName();
 }
 
+static bool ReadMemoryFromAddress(Process& process, addr_t addr, void *buf, size_t size) {
+  Status err;
+  process.ReadMemory(addr, buf, size, err);
+  if (err.Success()) {
+    return true;
+  }
+
+  return false;
+}
+
+bool TypeInfo::IsFunc() const
+{
+  return type == UGTypeKind::UG_FUNC;
+}
+
+bool TypeInfo::IsCFunc() const
+{
+  return type == UGTypeKind::UG_CFUNC;
+}
+
+bool TypeInfo::IsVArray() const
+{
+  return type == UGTypeKind::UG_VARRAY;
+}
+
+std::string TypeInfo::GetName(Process& process) const
+{
+  Status err;
+  if (this->typeArgNum == 0) {
+    if (this->name != nullptr) {
+      char res[name_size + 1];
+      res[name_size] = '\0';
+      if (ReadMemoryFromAddress(process, (uint64_t)this->name, res, name_size)) {
+        return std::string(res);
+      }
+    } else {
+      return "";
+    }
+  }
+
+  uint64_t args = (uint64_t)this->typeArgs;
+  uint64_t argTiAddr;
+  TypeInfo argTi;
+  if (this->IsFunc()) {
+    if (!ReadMemoryFromAddress(process, (uint64_t)args, &argTiAddr, sizeof(uint64_t)) ||
+        !ReadMemoryFromAddress(process, (uint64_t)argTiAddr, &argTi, sizeof(TypeInfo))) {
+      return "";
+    }
+    return argTi.GetName(process);
+  }
+
+  std::string typeName;
+
+  uint32_t argSize = this->typeArgNum;
+  uint32_t startIter = 0;
+  std::string suffix;
+  // For CFunc, it should be formatted as (typeArg1,typeArg2,...,typeArgN)->typeArg0
+  if (this->IsCFunc()) {
+    startIter = 1U;
+    typeName.append("(");
+    process.ReadMemory(args, &argTiAddr, sizeof(uint64_t), err);
+    process.ReadMemory(argTiAddr, &argTi, sizeof(TypeInfo), err);
+    std::string returnTypeName = argTi.GetName(process);
+    suffix.append(")->").append(returnTypeName);
+  } else {
+    TypeTemplate sourceGeneric;
+    process.ReadMemory((uint64_t)this->sourceGeneric, &sourceGeneric, sizeof(TypeTemplate), err);
+    char sourceGenericName[name_size + 1];
+    sourceGenericName[name_size] = '\0';
+    process.ReadMemory((uint64_t)sourceGeneric.name, sourceGenericName, name_size, err);
+    typeName.append(sourceGenericName).append("<");
+    suffix.append(">");
+  }
+
+  if (this->IsVArray()) {
+    process.ReadMemory(args, &argTiAddr, sizeof(uint64_t), err);
+    process.ReadMemory(argTiAddr, &argTi, sizeof(TypeInfo), err);
+    std::string tiName = argTi.GetName(process);
+    typeName.append(tiName).append(",").append(std::to_string(argSize));
+  }
+  for (uint32_t idx = startIter; idx < argSize; ++idx) {
+    if (ReadMemoryFromAddress(process, args + idx * 8U, &argTiAddr, sizeof(uint64_t)) &&
+        ReadMemoryFromAddress(process, argTiAddr, &argTi, sizeof(TypeInfo))) {
+      std::string tiName = argTi.GetName(process);
+      typeName.append(tiName);
+      if (idx < (argSize - 1U)) {
+        typeName.append(",");
+      }
+    } else {
+      break;
+    }
+  }
+  typeName.append(suffix);
+  return typeName;
+}
+
+ConstString GetTypeName(Process& process, TypeInfo& typeInfo) {
+    std::string temp_name = typeInfo.GetName(process);
+    UGTypeKind typekind = static_cast<UGTypeKind>(typeInfo.type);
+    auto pos = temp_name.find(":");
+    if (typekind == UGTypeKind::UG_ENUM || typekind == UGTypeKind::UG_COMMON_ENUM) {
+      // type_name: "default:RGBColor"  ==>  "default::E1$RGBColor"
+      if (pos != std::string::npos && temp_name.find("std.core:Option") != 0) {
+        std::string enum_prefix = "::E1$";
+        temp_name = temp_name.substr(0, pos) + enum_prefix + temp_name.substr(pos + 1);
+        pos = temp_name.find(":", pos + enum_prefix.size());
+      }
+    }
+    // type_name: "default:A"  ==> "default::A"
+    while (pos != std::string::npos) {
+      // type_name: "default:$Captured_Int64"  ==> "default::$Captured_Int64"
+      temp_name.replace(pos, 1, "::");
+      pos = temp_name.find(":", pos + 2); // size of "::" is 2
+    }
+    return ConstString(temp_name.c_str());
+}
+
+CompilerType LookupDynamicType(Process& process, UGTypeKind typekind, ConstString& type_name) {
+  if (typekind == UGTypeKind::UG_CLASS || typekind == UGTypeKind::UG_INTERFACE ||
+    typekind == UGTypeKind::UG_COMMON_ENUM) {
+    return CompilerType();
+  }
+  TypeList types;
+  llvm::DenseSet<SymbolFile *> searched_symbol_files;
+  auto& target = process.GetTarget();
+  target.GetImages().FindTypes(nullptr, type_name, true, 1, searched_symbol_files, types);
+  size_t num_types = types.GetSize();
+  for (size_t ti = 0; ti < num_types; ++ti) {
+    auto type_sp = types.GetTypeAtIndex(ti);
+    auto type = type_sp->GetFullCompilerType();
+    if (type.IsValid()) {
+      return type;
+    }
+  }
+  return CompilerType();
+}
+
+bool IsRefType(int8_t type) {
+    if (type < 0) {
+        return true;
+    }
+    return false;
+}
+
+std::string ItaniumABILanguageRuntime::GetReflectionFieldName(int16_t id, TypeInfo& typeInfo) {
+  uint64_t field_name_addr;
+  Status error;
+  char field_name[name_size + 1];
+  field_name[name_size] = '\0';
+  // The `relection` field of `TypeInfo` has two structures: one for enums and another for non-enums.
+  // for non-enums named Reflection.
+  // EnumReflection
+  if (typeInfo.flag == UGTypeKind::UG_ENUM || typeInfo.flag == UGTypeKind::UG_COMMON_ENUM) {
+    return "";
+  }
+  // Reflection
+  uint64_t name_addr_offset;
+  uint64_t names_addr;
+  m_process->ReadMemory((uint64_t)typeInfo.reflection, &name_addr_offset, sizeof(uint64_t), error);
+  field_name_addr = (uint64_t)typeInfo.reflection + name_addr_offset;
+  m_process->ReadMemory(field_name_addr + id * BitsPerByte, &names_addr, sizeof(uint64_t), error);
+  field_name_addr = field_name_addr + names_addr + id * BitsPerByte;
+
+  m_process->ReadMemory(field_name_addr, field_name, name_size, error);
+  std::string fname(field_name);
+  if (fname.empty()) {
+    fname = "x" + std::to_string(id);
+  }
+  return fname;
+}
+
+void ItaniumABILanguageRuntime::AddFieldToRecordType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, CompilerType& dynamic_type, bool is_class_member) {
+    Status error;
+    int16_t super_fields_num = 0;
+    if (typeInfo.super) {
+      TypeInfo superti;
+      m_process->ReadMemory((uint64_t)(typeInfo.super), &superti, sizeof(TypeInfo), error);
+      if (error.Success()) {
+        auto super_type = GetDynamicTypeFromGenericTypeInfo(ast, superti);
+        if (!super_type.IsValid()) {
+          return;
+        }
+        if (is_class_member && super_type.GetTypeName() == "std.core::Object") {
+          // add typeinfo* to class member.
+          CompilerType ti_type = ast.GetBasicType(eBasicTypeVoid).GetPointerType();
+          ast.AddFieldToRecordType(dynamic_type, "$ti*", ti_type, lldb::eAccessPublic, 0);
+        } else {
+          // DW_TAG_inheritance
+          std::vector<std::unique_ptr<clang::CXXBaseSpecifier>> bases;
+          bases.push_back(
+            ast.CreateBaseClassSpecifier(super_type.GetOpaqueQualType(), lldb::eAccessPublic, false, true));
+          ast.TransferBaseClasses(dynamic_type.GetOpaqueQualType(), std::move(bases));
+          super_fields_num = superti.fieldsNum;
+        }
+      }
+    }
+    uint64_t field_type_addr = 0;
+    uint64_t field_name_addr = 0;
+    char field_name[name_size + 1];
+    field_name[name_size] = '\0';
+    for (int16_t i = 0; i < typeInfo.fieldsNum - super_fields_num; i++) {
+      m_process->ReadMemory((uint64_t)(typeInfo.fields) + i * BitsPerByte, &field_type_addr, sizeof(uint64_t), error);
+      TypeInfo fieldti;
+      m_process->ReadMemory(field_type_addr, &fieldti, sizeof(TypeInfo), error);
+      CompilerType field_type;
+      if (IsRefType(fieldti.type)) {
+        field_type = GetDynamicTypeFromGenericTypeInfo(ast, fieldti).GetPointerType();
+      } else {
+        field_type = GetDynamicTypeFromGenericTypeInfo(ast, fieldti);
+      }
+      std::string fname = GetReflectionFieldName(i, typeInfo);
+      auto field = ast.AddFieldToRecordType(dynamic_type, fname.c_str(), field_type, lldb::eAccessPublic, 0);
+      if (field_type.GetTypeName() == "Unit") {
+        clang::ASTContext &clang_ast =  ast.getASTContext();
+        llvm::APInt bitfield_bit_size_apint(clang_ast.getTypeSize(clang_ast.IntTy),
+                                            0);
+        auto unit_bit_width = new (clang_ast)
+            clang::IntegerLiteral(clang_ast, bitfield_bit_size_apint,
+                                  clang_ast.IntTy, clang::SourceLocation());
+        field->setBitWidth(unit_bit_width);
+      }
+    }
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicClassType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
+    if (type_name.GetStringRef().contains("$C")) {
+      return GetDynamicFuncType(ast, typeInfo, type_name);
+    }
+    CompilerType dynamic_type = ast.GetTypeForIdentifier<clang::CXXRecordDecl>(type_name);
+    if (dynamic_type.IsValid()) {
+      return dynamic_type;
+    }
+    dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                    type_name.GetCString(), clang::TTK_Class, lldb::eLanguageTypeC);
+    ast.StartTagDeclarationDefinition(dynamic_type);
+    AddFieldToRecordType(ast, typeInfo, dynamic_type, true);
+    ast.CompleteTagDeclarationDefinition(dynamic_type);
+    return dynamic_type;
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicRawArrayType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
+    CompilerType dynamic_type = ast.GetTypeForIdentifier<clang::CXXRecordDecl>(type_name);
+    if (dynamic_type.IsValid()) {
+      return dynamic_type;
+    }
+    dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                    type_name.GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+    ast.StartTagDeclarationDefinition(dynamic_type);
+    // add _typeinfo to raw-array member.
+    auto ti_type = ast.GetBasicType(eBasicTypeVoid).GetPointerType();
+    ast.AddFieldToRecordType(dynamic_type, "$ti*", ti_type, lldb::eAccessPublic, 0);
+
+    // add size to raw-array member.
+    CompilerType basic_type = ast.GetBasicType(eBasicTypeLongLong).CreateTypedef(
+            "Int64", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+    ast.AddFieldToRecordType(dynamic_type, "size", basic_type, lldb::eAccessPublic, 0);
+
+    // add elements to raw-array member.
+    CompilerType field_type;
+    Status error;
+    TypeInfo fieldti;
+    m_process->ReadMemory((uint64_t)(typeInfo.super), &fieldti, sizeof(TypeInfo), error);
+    if (error.Success()) {
+      if (IsRefType(fieldti.type)) {
+        field_type = GetDynamicTypeFromGenericTypeInfo(ast, fieldti).GetPointerType();
+      } else {
+        field_type = GetDynamicTypeFromGenericTypeInfo(ast, fieldti);
+      }
+    } else {
+      // If raw-array does not have a field, use UInt8 as the default value.
+      field_type = ast.GetBasicType(eBasicTypeUnsignedChar).CreateTypedef(
+            "UInt8", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+    }
+    auto field = ast.AddFieldToRecordType(dynamic_type, "elements", field_type, lldb::eAccessPublic, 0);
+    if (field_type.GetTypeName() == "Unit") {
+      clang::ASTContext &clang_ast =  ast.getASTContext();
+      llvm::APInt bitfield_bit_size_apint(clang_ast.getTypeSize(clang_ast.IntTy),
+                                          0);
+      auto unit_bit_width = new (clang_ast)
+          clang::IntegerLiteral(clang_ast, bitfield_bit_size_apint,
+                                clang_ast.IntTy, clang::SourceLocation());
+      field->setBitWidth(unit_bit_width);
+    }
+    ast.CompleteTagDeclarationDefinition(dynamic_type);
+    return dynamic_type;
+}
+
+bool IsFunctionType(ConstString& type_name) {
+  ConstString compare("(.+::|^)\\(.*\\)( ?)->.+$");
+  RegularExpression regex(compare.GetStringRef());
+  return regex.Execute(type_name.AsCString());
+}
+
+ConstString GetFunctionTypeName(std::string type_name,
+    uint64_t para_num, std::vector<CompilerType>& param_types, CompilerType& return_type) {
+    std::string name = type_name.substr(0, type_name.find(":")) + "::(";
+    uint64_t para_id = 0;
+    for (auto& para : param_types) {
+      para_id++;
+      name += std::string(para.GetTypeName().GetCString());
+      if (para_id != para_num) {
+        name += ",";
+      }
+    }
+    name += ")->" + std::string(return_type.GetTypeName().GetCString());
+    std::string enum_prefix = "E1$";
+    auto pos = name.find(enum_prefix);
+    while (pos != std::string::npos) {
+      name.replace(pos, enum_prefix.size(), "");
+      pos = name.find(enum_prefix, pos + 1);
+    }
+    return ConstString(name.c_str());
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicFuncType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
+    // type_name: (Int32) -> Int32
+    Status error;
+    TypeInfo closure_ti;
+    TypeInfo func_ti;
+    bool need_refresh_name = false;
+
+    if (typeInfo.type == UGTypeKind::UG_CLASS) {
+      m_process->ReadMemory((uint64_t)(typeInfo.super), &closure_ti, sizeof(TypeInfo), error);
+      uint64_t func_ti_addr = 0;
+      m_process->ReadMemory((uint64_t)(closure_ti.typeArgs), &func_ti_addr, sizeof(uint64_t), error);
+      m_process->ReadMemory(func_ti_addr, &func_ti, sizeof(TypeInfo), error);
+      need_refresh_name = true;
+    } else if (typeInfo.type == UGTypeKind::UG_FUNC) {
+      uint64_t func_ti_addr = 0;
+      m_process->ReadMemory((uint64_t)(typeInfo.typeArgs), &func_ti_addr, sizeof(uint64_t), error);
+      m_process->ReadMemory(func_ti_addr, &func_ti, sizeof(TypeInfo), error);
+      need_refresh_name = true;
+    } else if (typeInfo.type == UGTypeKind::UG_CFUNC) {
+      func_ti = typeInfo;
+    } else {
+      return CompilerType();
+    }
+
+    uint8_t type_arg_num = func_ti.typeArgNum;
+    uint64_t type_args = (uint64_t)func_ti.typeArgs;
+
+    if (!error.Success()) {
+      return CompilerType();
+    }
+    if (type_arg_num < 1) {
+      return CompilerType();
+    }
+    // para_typeinfo: type_args[1..type_arg_num-1]
+    uint64_t para_ti_addr = 0;
+    TypeInfo fieldti;
+    std::vector<CompilerType> param_types;
+    for (int8_t i = 1; i < type_arg_num; i++) {
+      m_process->ReadMemory(type_args + i * BitsPerByte, &para_ti_addr, sizeof(uint64_t), error);
+      m_process->ReadMemory(para_ti_addr, &fieldti, sizeof(TypeInfo), error);
+      param_types.push_back(GetDynamicTypeFromGenericTypeInfo(ast, fieldti));
+    }
+
+    // return_typeinfo: type_args[0]
+    uint64_t return_ti_addr = 0;
+    m_process->ReadMemory(type_args, &return_ti_addr, sizeof(uint64_t), error);
+    m_process->ReadMemory(return_ti_addr, &fieldti, sizeof(TypeInfo), error);
+    if (!error.Success()) {
+      return CompilerType();
+    }
+    auto return_type = GetDynamicTypeFromGenericTypeInfo(ast, fieldti);
+    if (need_refresh_name) {
+      // type_name: default$$Auto_Env__ZN7default3gooEi
+      type_name = GetFunctionTypeName(type_name.GetCString(), type_arg_num - 1, param_types, return_type);
+    }
+
+    CompilerType dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                    type_name.GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+    ast.StartTagDeclarationDefinition(dynamic_type);
+    // add typeinfo*.
+    auto ti_type = ast.GetBasicType(eBasicTypeVoid).GetPointerType();
+    ast.AddFieldToRecordType(dynamic_type, "$ti*", ti_type, lldb::eAccessPublic, 0);
+    // type -> subroutine -> pointer
+    unsigned type_quals = 0;
+    auto subroutine_type = ast.CreateFunctionType(return_type,
+                    param_types.data(), param_types.size(), false, type_quals, clang::CC_C);
+    ast.AddFieldToRecordType(dynamic_type, "ptr", subroutine_type.GetPointerType(), lldb::eAccessPublic, 0);
+    ast.CompleteTagDeclarationDefinition(dynamic_type);
+    return dynamic_type;
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicCStringType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
+    CompilerType dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                    type_name.GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+    ast.StartTagDeclarationDefinition(dynamic_type);
+    ast.AddFieldToRecordType(dynamic_type, "chars", ast.GetCStringType(false), lldb::eAccessPublic, 0);
+    ast.CompleteTagDeclarationDefinition(dynamic_type);
+    return dynamic_type;
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicCPointerType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
+    // CPointer<UInt8>
+    Status error;
+    TypeInfo fieldti;
+    m_process->ReadMemory((uint64_t)(typeInfo.super), &fieldti, sizeof(TypeInfo), error);
+    if (!error.Success()) {
+      return CompilerType();
+    }
+    CompilerType dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                    type_name.GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+    ast.StartTagDeclarationDefinition(dynamic_type);
+    auto child_type = GetDynamicTypeFromGenericTypeInfo(ast, fieldti);
+    ast.AddFieldToRecordType(dynamic_type, "ptr", child_type.GetPointerType(), lldb::eAccessPublic, 0);
+    ast.CompleteTagDeclarationDefinition(dynamic_type);
+    return dynamic_type;
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicCFuncType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
+    // type_name: (Int32) -> Int32
+    Status error;
+    int8_t type_arg_num = typeInfo.typeArgNum;
+    uint64_t type_args = (uint64_t)typeInfo.typeArgs;
+    if (type_arg_num < 1) {
+      return CompilerType();
+    }
+    // para_num: type_arg_num - 1
+    int8_t para_num = type_arg_num - 1;
+
+    // para_typeinfo: type_args
+    uint64_t para_ti_addr = 0;
+    TypeInfo fieldti;
+    std::vector<CompilerType> param_types;
+    for (int8_t i = 0; i < para_num; i++) {
+      m_process->ReadMemory(type_args + i * BitsPerByte, &para_ti_addr, sizeof(uint64_t), error);
+      m_process->ReadMemory(para_ti_addr, &fieldti, sizeof(TypeInfo), error);
+      param_types.push_back(GetDynamicTypeFromGenericTypeInfo(ast, fieldti));
+    }
+
+    // return_typeinfo: super.typeArgs + para_num * BitsPerByte
+    uint64_t return_ti_addr = 0;
+    m_process->ReadMemory(type_args + para_num * BitsPerByte, &return_ti_addr, sizeof(uint64_t), error);
+    m_process->ReadMemory(return_ti_addr, &fieldti, sizeof(TypeInfo), error);
+    if (!error.Success()) {
+      return CompilerType();
+    }
+    auto return_type = GetDynamicTypeFromGenericTypeInfo(ast, fieldti);
+    CompilerType dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                    type_name.GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+    ast.StartTagDeclarationDefinition(dynamic_type);
+    unsigned type_quals = 0;
+    auto subroutine_type = ast.CreateFunctionType(return_type,
+                    param_types.data(), param_types.size(), false, type_quals, clang::CC_C);
+    ast.AddFieldToRecordType(dynamic_type, "ptr", subroutine_type.GetPointerType(), lldb::eAccessPublic, 0);
+    ast.CompleteTagDeclarationDefinition(dynamic_type);
+    return dynamic_type;
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicVArrayType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
+    // VArray<Int64, $3>
+    Status error;
+    TypeInfo fieldti;
+    m_process->ReadMemory((uint64_t)(typeInfo.super), &fieldti, sizeof(TypeInfo), error);
+    if (!error.Success()) {
+      return CompilerType();
+    }
+    auto field_type = GetDynamicTypeFromGenericTypeInfo(ast, fieldti);
+    if (!type_name.GetStringRef().contains("$")) {
+      // VArray<Int64,3>
+      std::string field_type_name = field_type.GetTypeName().GetCString();
+      std::string full_type_name = "VArray<" + field_type_name + ",$" + std::to_string(typeInfo.fieldsNum) + ">";
+      type_name = ConstString(full_type_name.c_str());
+    }
+    return ast.CreateArrayType(field_type, typeInfo.fieldsNum, false).CreateTypedef(
+                    type_name.GetCString(), ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicTupleType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
+    Status error;
+    CompilerType dynamic_type = ast.GetTypeForIdentifier<clang::CXXRecordDecl>(type_name);
+    if (dynamic_type.IsValid()) {
+      return dynamic_type;
+    }
+    dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                    type_name.GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+    ast.StartTagDeclarationDefinition(dynamic_type);
+    uint64_t field_type_addr = 0;
+    TypeInfo fieldti;
+    for (int16_t i = 0; i < typeInfo.fieldsNum; i++) {
+      m_process->ReadMemory((uint64_t)(typeInfo.fields) + i * BitsPerByte, &field_type_addr, sizeof(uint64_t), error);
+      m_process->ReadMemory(field_type_addr, &fieldti, sizeof(TypeInfo), error);
+      auto field_type = GetDynamicTypeFromGenericTypeInfo(ast, fieldti);
+      std::string field_name = "_" + std::to_string(i);
+      ast.AddFieldToRecordType(dynamic_type, field_name.c_str(), field_type, lldb::eAccessPublic, 0);
+    }
+    ast.CompleteTagDeclarationDefinition(dynamic_type);
+    return dynamic_type;
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicStructType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
+    CompilerType dynamic_type = ast.GetTypeForIdentifier<clang::CXXRecordDecl>(type_name);
+    if (dynamic_type.IsValid()) {
+      return dynamic_type;
+    }
+    dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                    type_name.GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+    ast.StartTagDeclarationDefinition(dynamic_type);
+    AddFieldToRecordType(ast, typeInfo, dynamic_type);
+    ast.CompleteTagDeclarationDefinition(dynamic_type);
+    return dynamic_type;
+}
+
+static CompilerType CreateEnumType(TypeSystemClang& ast, Process& process,
+    std::string& enum_name, uint64_t ctor_num, uint64_t enumCtorInfo_addr) {
+    // enum_name: "RGBColor"
+    CompilerType basic_type = ast.GetBasicType(eBasicTypeInt).CreateTypedef(
+            "Int32", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+    CompilerType enumType = ast.CreateEnumerationType(enum_name.c_str(),
+            ast.GetTranslationUnitDecl(), OptionalClangModuleID(), Declaration(), basic_type, false);
+    ast.StartTagDeclarationDefinition(enumType);
+    Status error;
+    char ctor_name[name_size + 1];
+    ctor_name[name_size] = '\0';
+    // The `relection` field of `TypeInfo` has two structures: one for enums and another for non-enums.
+    // for enums named EnumReflection
+    for (uint64_t i = 0; i < ctor_num; i++) {
+      uint64_t name_addr = 0;
+      uint64_t name_addr_offset = 0;
+      process.ReadMemory(enumCtorInfo_addr + i * BitsPerWidth, &name_addr_offset, sizeof(uint64_t), error);
+      name_addr = enumCtorInfo_addr + i * BitsPerWidth + name_addr_offset;
+      process.ReadMemory(name_addr, ctor_name, name_size, error);
+      ast.AddEnumerationValueToEnumerationType(enumType, Declaration(), ctor_name, i, 4);
+    }
+    ast.CompleteTagDeclarationDefinition(enumType);
+    return enumType;
+}
+
+void ItaniumABILanguageRuntime::CreateAndAddInheritTypeToRecordType(CompilerType& dynamic_type, CompilerType& enum_type,
+    TypeSystemClang& ast, uint64_t ctor_num, uint64_t ctors_addr) {
+    CompilerType basic_type = ast.GetBasicType(eBasicTypeLongLong).CreateTypedef(
+            "Int64", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+    auto ti_type = ast.GetBasicType(eBasicTypeVoid).GetPointerType();
+    TypeInfo ctor_ti;
+    Status error;
+    std::string enum_name(enum_type.GetTypeName().AsCString());
+    std::vector<std::unique_ptr<clang::CXXBaseSpecifier>> bases;  // DW_TAG_inheritance
+    for (uint64_t i = 0; i < ctor_num; i++) {
+      auto ctor_name = enum_name + "_ctor_" + std::to_string(i);
+      auto ctor_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+              ctor_name.c_str(), clang::TTK_Struct, lldb::eLanguageTypeC);
+      ast.StartTagDeclarationDefinition(ctor_type);
+      ast.AddFieldToRecordType(ctor_type, "$ti*", ti_type, lldb::eAccessPublic, 0);
+      ast.AddFieldToRecordType(ctor_type, "constructor", enum_type, lldb::eAccessPublic, 0);
+      uint64_t ctor_addr = 0;
+      m_process->ReadMemory(ctors_addr + i * BitsPerByte, &ctor_addr, sizeof(uint64_t), error);
+      m_process->ReadMemory(ctor_addr, &ctor_ti, sizeof(TypeInfo), error);
+      if (!error.Success()) {
+        continue;
+      }
+      if (ctor_ti.fieldsNum > 1) {
+        uint64_t ctor_para_addr = 0;
+        TypeInfo ctor_para_ti;
+        for (int16_t j = 0; j < ctor_ti.fieldsNum - 1; j++) {
+          m_process->ReadMemory((uint64_t)(ctor_ti.fields) + (j + 1)  * BitsPerByte, &ctor_para_addr,
+                                sizeof(uint64_t), error);
+          m_process->ReadMemory(ctor_para_addr, &ctor_para_ti, sizeof(TypeInfo), error);
+          if (!error.Success()) {
+            break;
+          }
+          auto ctor_para_type = GetDynamicTypeFromGenericTypeInfo(ast, ctor_para_ti);
+          std::string ctor_para_name = "arg_" + std::to_string(j + 1);
+          ast.AddFieldToRecordType(ctor_type, ctor_para_name.c_str(),
+            IsRefType(ctor_para_ti.type) ? ctor_para_type.GetPointerType() : ctor_para_type, lldb::eAccessPublic, 0);
+        }
+      }
+      ast.CompleteTagDeclarationDefinition(ctor_type);
+      auto inherit_type = ast.CreateBaseClassSpecifier(ctor_type.GetOpaqueQualType(),
+                                    lldb::eAccessPublic, false, true);
+      auto type_source_info = inherit_type->getTypeSourceInfo();
+      if (type_source_info) {
+        auto type = ast.GetType(type_source_info->getType());
+        ast.StartTagDeclarationDefinition(type);
+        ast.CompleteTagDeclarationDefinition(type);
+      }
+      bases.push_back(std::move(inherit_type));
+    }
+    ast.TransferBaseClasses(dynamic_type.GetOpaqueQualType(), std::move(bases));
+}
+
+void ItaniumABILanguageRuntime::CreateAndAddInheritTypeToEnum3Type(CompilerType& dynamic_type, CompilerType& enum_type,
+    TypeSystemClang& ast, uint64_t ctor_num, uint64_t ctors_addr) {
+    TypeInfo ctor_ti;
+    Status error;
+    std::string enum_name(enum_type.GetTypeName().AsCString());
+    std::vector<std::unique_ptr<clang::CXXBaseSpecifier>> bases;  // DW_TAG_inheritance
+    for (uint64_t i = 0; i < ctor_num; i++) {
+      auto ctor_name = enum_name + "_ctor_" + std::to_string(i);
+      auto ctor_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+              ctor_name.c_str(), clang::TTK_Struct, lldb::eLanguageTypeC);
+      ast.StartTagDeclarationDefinition(ctor_type);
+      uint64_t ctor_addr = 0;
+     // the offset of the enumCtors array member is 16, type info offset is 8.
+      m_process->ReadMemory(ctors_addr + i * BitsPerWidth + BitsPerByte, &ctor_addr, sizeof(uint64_t), error);
+      m_process->ReadMemory(ctor_addr, &ctor_ti, sizeof(TypeInfo), error);
+      if (!error.Success()) {
+        continue;
+      }
+      ast.AddFieldToRecordType(ctor_type, "constructor", enum_type, lldb::eAccessPublic, 0);
+      if (ctor_ti.fieldsNum > 1) {
+        uint64_t ctor_para_addr = 0;
+        TypeInfo ctor_para_ti;
+        for (int16_t j = 1; j < ctor_ti.fieldsNum; j++) {
+          m_process->ReadMemory((uint64_t)(ctor_ti.fields) + j * BitsPerByte, &ctor_para_addr,
+                                sizeof(uint64_t), error);
+          m_process->ReadMemory(ctor_para_addr, &ctor_para_ti, sizeof(TypeInfo), error);
+          if (!error.Success()) {
+            break;
+          }
+          auto ctor_para_type = GetDynamicTypeFromGenericTypeInfo(ast, ctor_para_ti);
+          std::string ctor_para_name = "arg_" + std::to_string(j);
+          ast.AddFieldToRecordType(ctor_type, ctor_para_name.c_str(), ctor_para_type, lldb::eAccessPublic, 0);
+        }
+      }
+      auto inherit_type = ast.CreateBaseClassSpecifier(ctor_type.GetOpaqueQualType(),
+                                    lldb::eAccessPublic, false, true);
+      auto type_source_info = inherit_type->getTypeSourceInfo();
+      if (type_source_info) {
+        auto type = ast.GetType(type_source_info->getType());
+        ast.StartTagDeclarationDefinition(type);
+        ast.CompleteTagDeclarationDefinition(type);
+      }
+      bases.push_back(std::move(inherit_type));
+    }
+    ast.TransferBaseClasses(dynamic_type.GetOpaqueQualType(), std::move(bases));
+}
+
+CompilerType ItaniumABILanguageRuntime::CreateEnum2Type(TypeSystemClang& ast,
+  CompilerType& enum_type, ConstString type_name, uint64_t ctor_num, uint64_t enumCtorInfo_addr) {
+  bool is_reference = false;
+  auto dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                      type_name.GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+  ast.StartTagDeclarationDefinition(dynamic_type);
+  TypeInfo ctor_ti;
+  Status error;
+  std::string enum_name(enum_type.GetTypeName().AsCString());
+  for (uint64_t i = 0; i < ctor_num; i++) {
+    uint64_t ctor_addr = 0;
+    // the offset of the enumCtors array member is 16, type info offset is 8.
+    m_process->ReadMemory(enumCtorInfo_addr + i * BitsPerWidth + BitsPerByte, &ctor_addr, sizeof(uint64_t), error);
+    m_process->ReadMemory(ctor_addr, &ctor_ti, sizeof(TypeInfo), error);
+    if (!error.Success()) {
+      continue;
+    }
+    if (ctor_ti.fieldsNum < 1) {
+      continue;
+    }
+    uint64_t ctor_para_addr = 0;
+    TypeInfo ctor_para_ti;
+    for (int16_t j = 1; j < ctor_ti.fieldsNum; j++) {
+      m_process->ReadMemory((uint64_t)(ctor_ti.fields) + (j)  * BitsPerByte, &ctor_para_addr, sizeof(uint64_t), error);
+      m_process->ReadMemory(ctor_para_addr, &ctor_para_ti, sizeof(TypeInfo), error);
+      if (!error.Success()) {
+        break;
+      }
+      auto ctor_para_type = GetDynamicTypeFromGenericTypeInfo(ast, ctor_para_ti);
+      ast.AddFieldToRecordType(dynamic_type, "constructor", enum_type, lldb::eAccessPublic, 0);
+      if (IsRefType(ctor_para_ti.type)) {
+        is_reference = true;
+        ast.AddFieldToRecordType(dynamic_type, "val", ctor_para_type.GetPointerType(), lldb::eAccessPublic, 0);
+      } else {
+        ast.AddFieldToRecordType(dynamic_type, "val", ctor_para_type, lldb::eAccessPublic, 0);
+      }
+    }
+  }
+  ast.CompleteTagDeclarationDefinition(dynamic_type);
+  return is_reference ? dynamic_type.GetPointerType() : dynamic_type;
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicOptionType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name, CompilerType& enum_type) {
+    Status error;
+    uint64_t val_ti_addr = 0;
+    TypeInfo valti;
+    m_process->ReadMemory((uint64_t)typeInfo.typeArgs, &val_ti_addr, sizeof(uint64_t), error);
+    m_process->ReadMemory(val_ti_addr, &valti, sizeof(TypeInfo), error);
+    if (!error.Success()) {
+      CompilerType();
+    }
+    auto option_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+        type_name.GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+    ast.StartTagDeclarationDefinition(option_type);
+    auto val_type = GetDynamicTypeFromGenericTypeInfo(ast, valti);
+    if (IsRefType(valti.type)) {
+      ast.AddFieldToRecordType(option_type, "val", val_type.GetPointerType(), lldb::eAccessPublic, 0);
+    } else {
+      ast.AddFieldToRecordType(option_type, "constructor", enum_type, lldb::eAccessPublic, 0);
+      ast.AddFieldToRecordType(option_type, "val", val_type, lldb::eAccessPublic, 0);
+    }
+    ast.CompleteTagDeclarationDefinition(option_type);
+    return option_type;
+}
+
+ReflectModifyType ItaniumABILanguageRuntime::GetEnumKind(TypeInfo& typeInfo) {
+  uint32_t modifier = 0;
+  Status error;
+  uint64_t modifier_addr = (uint64_t)typeInfo.reflection + BitsPerByte;
+  m_process->ReadMemory(modifier_addr, &modifier, sizeof(uint32_t), error);
+  bool isEnumKind0 = static_cast<bool>(modifier & RMT_ENUM_KIND0);
+  bool isEnumKind1 = static_cast<bool>(modifier & RMT_ENUM_KIND1);
+  bool isEnumKind2 = static_cast<bool>(modifier & RMT_ENUM_KIND2);
+  bool isEnumKind3 = static_cast<bool>(modifier & RMT_ENUM_KIND3);
+  if (isEnumKind0) {
+    return RMT_ENUM_KIND0;
+  } else if (isEnumKind1) {
+    return RMT_ENUM_KIND1;
+  } else if (isEnumKind2) {
+    return RMT_ENUM_KIND2;
+  } else if (isEnumKind3) {
+    return RMT_ENUM_KIND3;
+  } else {
+    return RMT_MAX;
+  }
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicEnumType(
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
+    Status error;
+    auto typekind = static_cast<UGTypeKind>(typeInfo.type);
+    if (typekind == UGTypeKind::UG_COMMON_ENUM) {
+      m_process->ReadMemory(reinterpret_cast<uint64_t>(typeInfo.super), &typeInfo, sizeof(typeInfo), error);
+      type_name = GetTypeName(*m_process, typeInfo);
+    }
+    const std::string ENUM_PREFIX_NAME = "E1$";
+    const std::string E0_PREFIX_NAME = "E0$";
+    // type_name: "default::E1$RGBColor"
+    std::string enum_name(type_name.GetCString());
+    auto pos = enum_name.find("$");
+    if (pos != std::string::npos) {
+      auto ltPos = enum_name.find(ENUM_PREFIX_NAME);
+      if (ltPos != std::string::npos) {
+        enum_name = enum_name.substr(0, ltPos) + enum_name.substr(ltPos+ ENUM_PREFIX_NAME.size(), enum_name.size());
+      }
+      ltPos = enum_name.find(E0_PREFIX_NAME);
+      if (ltPos != std::string::npos) {
+        enum_name = enum_name.substr(0, ltPos) + enum_name.substr(ltPos+ E0_PREFIX_NAME.size(), enum_name.size());
+      }
+    } else {
+      // std.core::Option
+      pos = enum_name.find("::");
+      if (pos != std::string::npos) {
+        enum_name = enum_name.substr(pos + 2);  // size of "::" is 2
+      }
+    }
+    // Memory Layout of Reflection
+    //   enumCtors -> [name + typeinfo]...
+    //   u32 modifier
+    //   u32 enumCtorInfoCnt
+    uint32_t ctor_num = 0;
+    ReflectModifyType enum_kind = GetEnumKind(typeInfo);
+    // enumCtor count's offset is 12.
+    m_process->ReadMemory((uint64_t)typeInfo.reflection + 12, &ctor_num, sizeof(uint32_t), error);
+    if (ctor_num == 0) {
+      return CompilerType();
+    }
+    uint64_t ctors_addr = (uint64_t)typeInfo.reflection;
+    uint64_t ctor_para_addr = 0;
+    m_process->ReadMemory(ctors_addr, &ctor_para_addr, sizeof(uint64_t), error);
+    ctor_para_addr = ctors_addr + ctor_para_addr;
+
+    auto enum_type = CreateEnumType(ast, *m_process, enum_name, ctor_num, ctor_para_addr);
+    if (enum_kind == ReflectModifyType::RMT_ENUM_KIND0) {
+      return enum_type;
+    }
+    // std.core::Option
+    ConstString match("^std[.]core::(Enum\\$)?Option<.+>( \\*)?$");
+    RegularExpression regex(match.GetStringRef());
+    if (regex.Execute(type_name.AsCString())) {
+      return GetDynamicOptionType(ast, typeInfo, type_name, enum_type);
+    }
+
+    if (enum_kind == ReflectModifyType::RMT_ENUM_KIND2) {
+      std::string enum_type_name(type_name.AsCString());
+      if (auto pos = enum_type_name.find("E1$"); pos != std::string::npos) {
+          enum_type_name.replace(pos, std::string("E1$").size(), "E2$");
+      }
+      type_name.SetCString(enum_type_name.c_str());
+      return CreateEnum2Type(ast, enum_type, type_name, ctor_num, ctor_para_addr);
+    }
+    if (enum_kind == ReflectModifyType::RMT_ENUM_KIND3) {
+      std::string enum_type_name(type_name.AsCString());
+      if (auto pos = enum_type_name.find("E1$"); pos != std::string::npos) {
+          enum_type_name.replace(pos, std::string("E1$").size(), "E3$");
+      }
+      type_name.SetCString(enum_type_name.c_str());
+    }
+
+    auto dynamic_type = ast.GetTypeForIdentifier<clang::CXXRecordDecl>(type_name);
+    if (dynamic_type.IsValid()) {
+      return dynamic_type;
+    }
+    dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                    type_name.GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+    ast.StartTagDeclarationDefinition(dynamic_type);
+    auto ti_type = ast.GetBasicType(eBasicTypeVoid).GetPointerType();
+    ast.AddFieldToRecordType(dynamic_type, "$ti*", ti_type, lldb::eAccessPublic, 0);
+    if (enum_kind == ReflectModifyType::RMT_ENUM_KIND3) {
+      CreateAndAddInheritTypeToEnum3Type(dynamic_type, enum_type, ast, ctor_num, ctor_para_addr);
+    } else {
+      CreateAndAddInheritTypeToRecordType(dynamic_type, enum_type, ast, ctor_num, ctor_para_addr);
+    }
+    ast.CompleteTagDeclarationDefinition(dynamic_type);
+
+    return dynamic_type;
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicTypeFromPrimitiveType(TypeSystemClang& ast, TypeInfo& typeInfo) {
+  CompilerType dynamic_type;
+  auto typekind = static_cast<UGTypeKind>(typeInfo.type);
+  switch (typekind) {
+    case UGTypeKind::UG_NOTHING:
+      break;
+    case UGTypeKind::UG_UNIT: {
+      dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(),
+          lldb::eAccessPublic, "Unit", clang::TTK_Struct, lldb::eLanguageTypeC);
+      ast.StartTagDeclarationDefinition(dynamic_type);
+      ast.CompleteTagDeclarationDefinition(dynamic_type);
+      break;
+    }
+    case UGTypeKind::UG_BOOLEAN:
+      dynamic_type = ast.GetBasicType(eBasicTypeBool).CreateTypedef(
+          "Bool", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_RUNE:
+      dynamic_type = ast.GetBasicType(eBasicTypeChar32).CreateTypedef(
+          "Rune", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_UINT8:
+      dynamic_type = ast.GetBasicType(eBasicTypeUnsignedChar).CreateTypedef(
+          "UInt8", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_UINT16:
+      dynamic_type = ast.GetBasicType(eBasicTypeUnsignedShort).CreateTypedef(
+          "UInt16", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_UINT32:
+      dynamic_type = ast.GetBasicType(eBasicTypeUnsignedInt).CreateTypedef(
+          "UInt32", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_UINT64:
+      dynamic_type = ast.GetBasicType(eBasicTypeUnsignedLongLong).CreateTypedef(
+          "UInt64", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_UINT_NATIVE:
+      dynamic_type = ast.GetBasicType(eBasicTypeUnsignedLongLong).CreateTypedef(
+          "UIntNative", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_INT8:
+      dynamic_type = ast.GetBasicType(eBasicTypeSignedChar).CreateTypedef(
+          "Int8", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_INT16:
+      dynamic_type = ast.GetBasicType(eBasicTypeShort).CreateTypedef(
+          "Int16", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_INT32:
+      dynamic_type = ast.GetBasicType(eBasicTypeInt).CreateTypedef(
+          "Int32", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_INT64:
+      dynamic_type = ast.GetBasicType(eBasicTypeLongLong).CreateTypedef(
+          "Int64", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_INT_NATIVE:
+      dynamic_type = ast.GetBasicType(eBasicTypeLongLong).CreateTypedef(
+          "IntNative", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_FLOAT16:
+      dynamic_type = ast.GetBasicType(eBasicTypeHalf).CreateTypedef(
+          "Float16", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_FLOAT32:
+      dynamic_type = ast.GetBasicType(eBasicTypeFloat).CreateTypedef(
+          "Float32", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    case UGTypeKind::UG_FLOAT64:
+      dynamic_type = ast.GetBasicType(eBasicTypeDouble).CreateTypedef(
+          "Float64", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+      break;
+    default:
+      break;
+  }
+  return dynamic_type;
+}
+
+CompilerType ItaniumABILanguageRuntime::GetDynamicTypeFromGenericTypeInfo(
+    TypeSystemClang& ast, TypeInfo& typeInfo) {
+    auto type_name = GetTypeName(*m_process, typeInfo);
+    if (type_name.IsEmpty()) {
+      return CompilerType();
+    }
+    auto typekind = static_cast<UGTypeKind>(typeInfo.type);
+    // For Primitive type
+    if (typekind >= UGTypeKind::UG_NOTHING && typekind <= UGTypeKind::UG_FLOAT64) {
+      return GetDynamicTypeFromPrimitiveType(ast, typeInfo);
+    }
+    // For other types.
+    CompilerType dynamic_type;
+    switch (typekind) {
+      case UGTypeKind::UG_CLASS:
+      case UGTypeKind::UG_INTERFACE:
+        dynamic_type = GetDynamicClassType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_RAWARRAY:
+        dynamic_type = GetDynamicRawArrayType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_FUNC:
+        dynamic_type = GetDynamicFuncType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_CSTRING:
+        dynamic_type = GetDynamicCStringType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_CPOINTER:
+        dynamic_type = GetDynamicCPointerType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_CFUNC:
+        dynamic_type = GetDynamicCFuncType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_VARRAY:
+        dynamic_type = GetDynamicVArrayType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_TUPLE:
+        dynamic_type = GetDynamicTupleType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_STRUCT:
+        dynamic_type = GetDynamicStructType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_ENUM:
+      case UGTypeKind::UG_COMMON_ENUM:
+        dynamic_type = GetDynamicEnumType(ast, typeInfo, type_name);
+        break;
+      default:
+        break;
+    }
+    return dynamic_type;
+}
+
+bool ItaniumABILanguageRuntime::GetGenericDynamicType(ValueObject &in_value,
+    TypeAndOrName &class_type_or_name, Address &dynamic_address, Value::ValueType &value_type) {
+    auto generic_type = in_value.GetCompilerType();
+    auto *ast = llvm::dyn_cast_or_null<TypeSystemClang>(generic_type.GetTypeSystem());
+    if (!ast) {
+      return false;
+    }
+    Status error;
+    uint64_t type_info_addr = 0;
+    TypeInfo typeInfo;
+    m_process->ReadMemory(in_value.GetAddressOf(), &type_info_addr, sizeof(uint64_t), error);
+    m_process->ReadMemory(type_info_addr, &typeInfo, sizeof(typeInfo), error);
+    if (!error.Success()) {
+      return false;
+    }
+    auto dynamic_type = GetDynamicTypeFromGenericTypeInfo(*ast, typeInfo);
+    if (!dynamic_type.IsValid()) {
+      return false;
+    }
+    in_value.SetGenericValueType(!IsRefType(typeInfo.type));
+    class_type_or_name.SetCompilerType(dynamic_type);
+    in_value.SetOverrideType(dynamic_type);
+    dynamic_address = IsRefType(typeInfo.type) ?
+        Address(in_value.GetAddressOf()) : Address(in_value.GetAddressOf() + BitsPerByte);
+    value_type = Value::ValueType::LoadAddress;
+    return true;
+}
+
 bool ItaniumABILanguageRuntime::GetDynamicTypeAndAddress(
     ValueObject &in_value, lldb::DynamicValueType use_dynamic,
     TypeAndOrName &class_type_or_name, Address &dynamic_address,
@@ -193,7 +1164,16 @@ bool ItaniumABILanguageRuntime::GetDynamicTypeAndAddress(
   // contain the full class name. The second pointer above the "address point"
   // is the "offset_to_top".  We'll use that to get the start of the value
   // object which holds the dynamic type.
-  //
+  if (in_value.GetCangjieDynamicType(class_type_or_name)) {
+    if (in_value.IsCangjieGenericType()) {
+      return GetGenericDynamicType(in_value, class_type_or_name, dynamic_address, value_type);
+    }
+    // Other types except struct already have the typeinfo type in debuginfo, and no offset 8 is required.
+    dynamic_address = in_value.GetCompilerType().GetTypeClass() == lldb::eTypeClassClass ?
+                        Address(in_value.GetAddressOf()) : Address(in_value.GetAddressOf() + BitsPerByte);
+    value_type = Value::ValueType::LoadAddress;
+    return true;
+  }
 
   class_type_or_name.Clear();
   value_type = Value::ValueType::Scalar;

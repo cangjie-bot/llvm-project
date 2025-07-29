@@ -524,6 +524,14 @@ protected:
 
   bool IsUsuallyUnexplainedStopReason(lldb::StopReason);
 
+  bool CFFIGetValueFromReg(Target &target, StackFrame *frame, uint64_t *addr,
+                           const char *reg);
+
+  lldb::ThreadPlanSP CFFIMakeThreadPlanRunToAddress(Thread &thread, uint64_t cfunc_addr,
+                                                    bool stop_others);
+
+  lldb::ThreadPlanSP CFFILookForPlanToStepThroughFromCurrentPC();
+
   Status m_status;
   Process &m_process;
   lldb::tid_t m_tid;

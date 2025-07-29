@@ -72,6 +72,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "loop-unroll"
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
+
 cl::opt<bool> llvm::ForgetSCEVInLoopUnroll(
     "forget-scev-loop-unroll", cl::init(false), cl::Hidden,
     cl::desc("Forget everything in SCEV when doing LoopUnroll, instead of just"
@@ -239,6 +243,8 @@ TargetTransformInfo::UnrollingPreferences llvm::gatherUnrollingPreferences(
     UP.MaxCount = UnrollMaxCount;
   if (UnrollFullMaxCount.getNumOccurrences() > 0)
     UP.FullUnrollMaxCount = UnrollFullMaxCount;
+  if (CJPipeline)
+    UP.Partial = true;
   if (UnrollAllowPartial.getNumOccurrences() > 0)
     UP.Partial = UnrollAllowPartial;
   if (UnrollAllowRemainder.getNumOccurrences() > 0)

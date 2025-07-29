@@ -172,7 +172,8 @@ void MCMachOStreamer::changeSection(MCSection *Section,
   StringRef SegName = MSec.getSegmentName();
   if (SegName == "__DWARF")
     CreatedADWARFSection = true;
-  else if (Created && DWARFMustBeAtTheEnd && !canGoAfterDWARF(MSec))
+  else if (Created && DWARFMustBeAtTheEnd && !canGoAfterDWARF(MSec) &&
+           !SegName.equals("__CJ_METADATA"))
     assert((!CreatedADWARFSection ||
             Section == getContext().getObjectFileInfo()->getStackMapSection())
            && "Creating regular section after DWARF");

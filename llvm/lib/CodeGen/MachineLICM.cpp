@@ -1007,6 +1007,12 @@ bool MachineLICMBase::IsLoopInvariantInst(MachineInstr &I) {
     LLVM_DEBUG(dbgs() << "LICM: Instruction not a LICM candidate\n");
     return false;
   }
+
+  // derived ptr need to be recalculated in copy gc
+  if (I.isCalDerivedPtrInCangjieCopyGC(MRI)) {
+    return false;
+  }
+
   return CurLoop->isLoopInvariant(I);
 }
 

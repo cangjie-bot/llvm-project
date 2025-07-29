@@ -46,6 +46,8 @@ public:
 
   ConstString GetName() const;
 
+  ConstString GetMangledName() const;
+
   ConstString GetUnqualifiedName() const;
 
   SymbolContextScope *GetSymbolContextScope() const { return m_owner_scope; }

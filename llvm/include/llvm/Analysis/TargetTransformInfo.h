@@ -877,7 +877,7 @@ public:
   /// Return the expected cost for the given integer when optimising
   /// for size. This is different than the other integer immediate cost
   /// functions in that it is subtarget agnostic. This is useful when you e.g.
-  /// target one ISA such as Aarch32 but smaller encodings could be possible
+  /// target one ISA such as AArch32 but smaller encodings could be possible
   /// with another such as Thumb. This return value is used as a penalty when
   /// the total costs for a constant is calculated (the bigger the cost, the
   /// more beneficial constant hoisting is).

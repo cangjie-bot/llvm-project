@@ -35,15 +35,23 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Argument.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/CJIntrinsics.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -51,6 +59,7 @@
 #define DEBUG_TYPE "safepoint-ir-verifier"
 
 using namespace llvm;
+using namespace cangjie;
 
 /// This option is used for writing test cases.  Instead of crashing the program
 /// when verification fails, report a message to the console (for FileCheck
@@ -249,27 +258,6 @@ INITIALIZE_PASS_BEGIN(SafepointIRVerifier, "verify-safepoint-ir",
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_END(SafepointIRVerifier, "verify-safepoint-ir",
                     "Safepoint IR Verifier", false, false)
-
-static bool isGCPointerType(Type *T) {
-  if (auto *PT = dyn_cast<PointerType>(T))
-    // For the sake of this example GC, we arbitrarily pick addrspace(1) as our
-    // GC managed heap.  We know that a pointer into this heap needs to be
-    // updated and that no other pointer does.
-    return (1 == PT->getAddressSpace());
-  return false;
-}
-
-static bool containsGCPtrType(Type *Ty) {
-  if (isGCPointerType(Ty))
-    return true;
-  if (VectorType *VT = dyn_cast<VectorType>(Ty))
-    return isGCPointerType(VT->getScalarType());
-  if (ArrayType *AT = dyn_cast<ArrayType>(Ty))
-    return containsGCPtrType(AT->getElementType());
-  if (StructType *ST = dyn_cast<StructType>(Ty))
-    return llvm::any_of(ST->elements(), containsGCPtrType);
-  return false;
-}
 
 // Debugging aid -- prints a [Begin, End) range of values.
 template<typename IteratorTy>
@@ -908,4 +896,324 @@ static void Verify(const Function &F, const DominatorTree &DT,
     dbgs() << "No illegal uses found by SafepointIRVerifier in: " << F.getName()
            << "\n";
   }
+}
+
+bool llvm::isGCPointerType(Type *T) {
+  if (auto *PT = dyn_cast<PointerType>(T))
+    // For the sake of this example GC, we arbitrarily pick addrspace(1) as our
+    // GC managed heap.  We know that a pointer into this heap needs to be
+    // updated and that no other pointer does.
+    return (1 == PT->getAddressSpace());
+  return false;
+}
+
+bool llvm::isGCPtr(Value *V) {
+  if (!V->getType()->isPointerTy())
+    return false;
+
+  return isGCPointerType(V->stripPointerCasts()->getType());
+}
+
+bool llvm::containsGCPtrType(Type *Ty) {
+  if (isGCPointerType(Ty))
+    return true;
+  if (VectorType *VT = dyn_cast<VectorType>(Ty))
+    return isGCPointerType(VT->getScalarType());
+  if (ArrayType *AT = dyn_cast<ArrayType>(Ty))
+    return containsGCPtrType(AT->getElementType());
+  if (StructType *ST = dyn_cast<StructType>(Ty))
+    return llvm::any_of(ST->elements(), containsGCPtrType);
+  return false;
+}
+
+bool llvm::isHandledGCPointerType(Type *T) {
+  // We fully support gc pointers
+  if (isGCPointerType(T))
+    return true;
+  // We partially support vectors of gc pointers. The code will assert if it
+  // can't handle something.
+  if (auto VT = dyn_cast<VectorType>(T))
+    if (isGCPointerType(VT->getElementType()))
+      return true;
+  // We partially support struct of gc pointers. The code will assert if it
+  // can't handle something.
+  if (StructType *ST = dyn_cast<StructType>(T))
+    return llvm::any_of(ST->elements(), containsGCPtrType);
+  return false;
+}
+
+bool llvm::isMemoryContainsGCPtrType(Type *T) {
+  if (auto *PT = dyn_cast<PointerType>(T)) {
+    return !isGCPointerType(PT) && containsGCPtrType(PT->getElementType());
+  }
+  return false;
+}
+
+Value *llvm::findMemoryBasePointer(Value *V) {
+  if (!isa<PointerType>(V->getType()))
+    return V;
+  Value *CV = V;
+  while (true) {
+    if (auto *CI = dyn_cast<CastInst>(CV)) {
+      CV = CI->stripPointerCasts();
+      // If we find a cast instruction here, it means we've found a cast which
+      // is not simply a pointer cast (i.e. an inttoptr).  We don't know how to
+      // handle int->ptr && ptr->int conversion.
+      if (isa<CastInst>(CV)) {
+#ifndef NDEBUG
+        auto *IntToPtrI = dyn_cast<IntToPtrInst>(CV);
+        assert(
+            !isGCPointerType(IntToPtrI->getOperand(0)->getType()) &&
+            "IntToPtr is now allowed to be used to convert int to gc-pointer");
+        assert(
+            !isMemoryContainsGCPtrType(IntToPtrI->getOperand(0)->getType()) &&
+            "IntToPtr is now allowed to be used to convert int to memory type "
+            "which contains gc-pointer");
+#endif
+        return CV;
+      }
+    } else if (auto *GEPI = dyn_cast<GetElementPtrInst>(CV)) {
+      CV = GEPI->getPointerOperand();
+    } else if (auto *CE = dyn_cast<ConstantExpr>(CV)) {
+      CV = CE->getOperand(0);
+    } else {
+      break;
+    }
+  }
+
+  // Assert terminator insts
+  assert(isa<AllocaInst>(CV) || isa<Argument>(CV) || isa<Constant>(CV) ||
+         isa<CallInst>(CV) || isa<InvokeInst>(CV) || isa<LoadInst>(CV) ||
+         isa<PHINode>(CV) || isa<SelectInst>(CV) || isa<ExtractValueInst>(CV));
+  return CV;
+}
+
+Instruction *llvm::createStoreOrMems(CallBase *CI, IRBuilder<> &Builder) {
+  auto getAtomicOrdering = [](Value *Order) {
+    return (AtomicOrdering)(cast<ConstantInt>(Order)->getZExtValue() +
+                            (unsigned)AtomicOrdering::Monotonic);
+  };
+  LLVMContext &C = CI->getContext();
+  Intrinsic::ID IID = CI->getIntrinsicID();
+  Instruction *NewInst = nullptr;
+  switch (IID) {
+  case Intrinsic::cj_gcwrite_ref: {
+    if (auto *VecType = dyn_cast<VectorType>(getValueArg(CI)->getType())) {
+      MaybeAlign Align = CI->getModule()->getDataLayout().getABITypeAlign(
+          VecType->getElementType());
+      NewInst = Builder.CreateAlignedStore(getValueArg(CI),
+                                           getPointerArg(CI), Align);
+    } else {
+      NewInst = Builder.CreateStore(getValueArg(CI), getPointerArg(CI));
+    }
+    break;
+  }
+  case Intrinsic::cj_gcread_ref:
+    NewInst = Builder.CreateLoad(CI->getType(), getPointerArg(CI));
+    NewInst->takeName(CI);
+    CI->replaceAllUsesWith(NewInst);
+    break;
+  case Intrinsic::cj_gcwrite_static_ref:
+    NewInst = Builder.CreateStore(getValueArg(CI), getPointerArg(CI));
+    break;
+  case Intrinsic::cj_gcread_static_ref:
+    NewInst = Builder.CreateLoad(CI->getType(), getPointerArg(CI));
+    NewInst->takeName(CI);
+    CI->replaceAllUsesWith(NewInst);
+    break;
+  case Intrinsic::cj_gcwrite_struct:
+  case Intrinsic::cj_gcread_struct:
+  case Intrinsic::cj_gcwrite_static_struct:
+  case Intrinsic::cj_gcread_static_struct:
+    NewInst = Builder.CreateMemCpy(getDest(CI), Align(8), getSource(CI),
+                                   Align(8), getSize(CI));
+    break;
+  case Intrinsic::cj_array_copy_ref:
+  case Intrinsic::cj_array_copy_struct:
+    NewInst =
+        Builder.CreateMemMove(CI->getArgOperand(ArrayCopy::DstPtr), Align(8),
+                              CI->getArgOperand(ArrayCopy::SrcPtr), Align(8),
+                              CI->getArgOperand(ArrayCopy::Size));
+    break;
+  case Intrinsic::cj_atomic_store: {
+    NewInst = Builder.CreateStore(CI->getArgOperand(AtomicStore::Ref),
+                                  CI->getArgOperand(AtomicStore::Field));
+    cast<StoreInst>(NewInst)->setAtomic(getAtomicOrdering(getAtomicOrder(CI)));
+    break;
+  }
+  case Intrinsic::cj_atomic_swap: {
+    Value *P = Builder.CreateAddrSpaceCast(CI->getArgOperand(AtomicSwap::Field),
+                                           Type::getInt64PtrTy(C));
+    Value *V = Builder.CreatePtrToInt(CI->getArgOperand(AtomicSwap::Ref),
+                                      Type::getInt64Ty(C));
+    AtomicOrdering AO = getAtomicOrdering(getAtomicOrder(CI));
+    NewInst =
+        Builder.CreateAtomicRMW(AtomicRMWInst::Xchg, P, V, MaybeAlign(), AO);
+    break;
+  }
+  case Intrinsic::cj_atomic_compare_swap: {
+    Value *P = Builder.CreateAddrSpaceCast(
+        CI->getArgOperand(AtomicCompareSwap::Field), Type::getInt64PtrTy(C));
+    Value *Cmp = Builder.CreatePtrToInt(
+        CI->getArgOperand(AtomicCompareSwap::OldRef), Type::getInt64Ty(C));
+    Value *New = Builder.CreatePtrToInt(
+        CI->getArgOperand(AtomicCompareSwap::NewRef), Type::getInt64Ty(C));
+    AtomicOrdering SuccOder =
+        getAtomicOrdering(CI->getArgOperand(AtomicCompareSwap::SuccOrder));
+    AtomicOrdering FailOder =
+        getAtomicOrdering(CI->getArgOperand(AtomicCompareSwap::FailOrder));
+    NewInst = Builder.CreateAtomicCmpXchg(P, Cmp, New, MaybeAlign(), SuccOder,
+                                          FailOder);
+    break;
+  }
+  default:
+    break;
+  }
+  return NewInst;
+}
+
+bool llvm::isCJWriteBarrierIntrinsic(Intrinsic::ID IID) {
+  return IID == Intrinsic::cj_gcwrite_ref ||
+         IID == Intrinsic::cj_gcwrite_struct ||
+         IID == Intrinsic::cj_gcwrite_static_ref ||
+         IID == Intrinsic::cj_gcwrite_static_struct ||
+         IID == Intrinsic::cj_array_copy_ref ||
+         IID == Intrinsic::cj_array_copy_struct;
+}
+
+bool llvm::isCJReadBarrierIntrinsic(Intrinsic::ID IID) {
+  return IID == Intrinsic::cj_gcread_ref ||
+         IID == Intrinsic::cj_gcread_struct ||
+         IID == Intrinsic::cj_gcread_static_ref ||
+         IID == Intrinsic::cj_gcread_static_struct;
+}
+
+bool llvm::isCJMemcpyIntrinsic(Intrinsic::ID IID) {
+  return IID == Intrinsic::memcpy ||
+         IID == Intrinsic::memset ||
+         IID == Intrinsic::memmove ||
+         IID == Intrinsic::cj_memset;
+}
+
+bool llvm::isCJAtomicIntrinsic(Intrinsic::ID IID) {
+  return IID == Intrinsic::cj_atomic_store ||
+         IID == Intrinsic::cj_atomic_load ||
+         IID == Intrinsic::cj_atomic_swap ||
+         IID == Intrinsic::cj_atomic_compare_swap;
+}
+
+bool llvm::isSafepointCall(CallBase *CB) {
+  if (CB->getCalledFunction() == nullptr) {
+    return true;
+  }
+  Intrinsic::ID IID = CB->getIntrinsicID();
+  if (isCJWriteBarrierIntrinsic(IID) ||
+      isCJMemcpyIntrinsic(IID) ||
+      isCJAtomicIntrinsic(IID)) {
+    return false;
+  }
+  return !CB->getCalledFunction()->hasFnAttribute("gc-leaf-function") &&
+         !CB->getCalledFunction()->hasFnAttribute("cj_fast_call");
+}
+
+// Check if i8 AS(1)*
+bool llvm::isInt8AS1Pty(Type *Ty) {
+  auto *PT = dyn_cast<PointerType>(Ty);
+  if (!PT) {
+    return false;
+  }
+  // 8: for i8 addrspace(1)*
+  return (PT->getAddressSpace() == 1) &&
+         (PT->getElementType()->isIntegerTy(8));
+}
+
+// Check if i8 AS(0)*
+bool llvm::isInt8AS0Pty(Value *Ptr) {
+  auto *PT = dyn_cast<PointerType>(Ptr->getType());
+  if (!PT) {
+    return false;
+  }
+  // 8: for i8 addrspace(0)*
+  return (PT->getAddressSpace() == 0) &&
+         (PT->getElementType()->isIntegerTy(8));
+}
+
+bool llvm::maybeCJFinalizerObj(Value *V) {
+  SmallVector<const Value *, 8> Bases;
+  getUnderlyingObjects(V, Bases, nullptr, 0);
+  for (auto *Base : Bases) {
+    if (auto *CB = dyn_cast<CallBase>(Base)) {
+      auto *F = CB->getCalledFunction();
+      if (F && F->getName() == "CJ_MCC_NewFinalizerStub")
+        return true;
+    }
+  }
+  return false;
+}
+
+Type *llvm::getUniqueActualType(Value *V) {
+  Type *CommonTy = nullptr;
+  for (Value *U : V->users()) {
+    if (auto *BCI = dyn_cast<BitCastInst>(U)) {
+      auto *Ty = BCI->getDestTy();
+      if (CommonTy == nullptr)
+        CommonTy = Ty->getNonOpaquePointerElementType();
+      else if (CommonTy != Ty)
+        return nullptr;
+    }
+  }
+  return CommonTy;
+}
+
+// Find all possible struct types up to.
+void llvm::getAllStructTypes(Value *V, SmallSet<StructType *, 8> &STs) {
+  SmallVector<Value *> WorkList = {V};
+  SmallSet<Value *, 8> Visited;
+  while (!WorkList.empty()) {
+    auto *Ptr = WorkList.pop_back_val();
+    if (!Visited.insert(Ptr).second)
+      continue;
+    if (isa<StructType>(Ptr->getType()->getNonOpaquePointerElementType()))
+      STs.insert(
+          cast<StructType>(Ptr->getType()->getNonOpaquePointerElementType()));
+    if (auto *BI = dyn_cast<BitCastInst>(Ptr))
+      WorkList.push_back(BI->getOperand(0));
+    else if (auto *ASCI = dyn_cast<AddrSpaceCastInst>(Ptr))
+      WorkList.push_back(ASCI->getPointerOperand());
+    else if (auto *GEP = dyn_cast<GEPOperator>(Ptr)) {
+      for (auto GTI = ++gep_type_begin(GEP), GTE = gep_type_end(GEP);
+           GTI != GTE; ++GTI)
+        STs.insert(GTI.getStructTypeOrNull());
+      WorkList.push_back(GEP->getPointerOperand());
+    } else if (auto *PN = dyn_cast<PHINode>(Ptr)) {
+      for (Value *Val : PN->incoming_values())
+        WorkList.push_back(Val);
+    } else if (auto *SI = dyn_cast<SwitchInst>(Ptr)) {
+      for (auto Case : SI->cases())
+        WorkList.push_back(Case.getCaseValue());
+    }
+    // Call, Argument, Alloca, ... -> continue
+  }
+}
+
+// Find last struct type which contain V
+StructType *llvm::getLastStructTypeContain(Value *V) {
+  auto *Ptr = V->stripPointerCasts();
+  if (auto *AI = dyn_cast<AllocaInst>(Ptr))
+    return dyn_cast<StructType>(AI->getAllocatedType());
+  if (auto *Arg = dyn_cast<Argument>(Ptr))
+    if (auto *Ty = getUniqueActualType(Arg))
+      return dyn_cast<StructType>(Ty);
+  if (auto *GEP = dyn_cast<GEPOperator>(Ptr)) {
+    auto *Ty = GEP->getSourceElementType();
+    // Maybe getlementptr i8, i8* %ptr, i64 24
+    if (!isa<StructType>(Ty))
+      return getLastStructTypeContain(
+          GEP->getPointerOperand()->stripPointerCasts());
+    for (auto GTI = ++gep_type_begin(GEP), GTE = gep_type_end(GEP); GTI != GTE;
+         ++GTI)
+      Ty = GTI.getStructTypeOrNull();
+    return dyn_cast_or_null<StructType>(Ty);
+  }
+  return nullptr;
 }

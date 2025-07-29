@@ -102,6 +102,9 @@ namespace llvm {
   /// variable is life and sets machine operand kill flags.
   extern char &LiveVariablesID;
 
+  /// CJStackPointerInserter pass -.
+  extern char &CJStackPointerInserterID;
+
   /// PHIElimination - This pass eliminates machine instruction PHI nodes
   /// by inserting copy instructions.  This destroys SSA information, but is the
   /// desired input for some register allocators.  This pass is "required" by
@@ -274,6 +277,14 @@ namespace llvm {
   /// basic block placement using branch probabilities and block frequency
   /// information.
   extern char &MachineBlockPlacementStatsID;
+
+  /// CJBarrierLowering Pass - Used by cangjie gc barrier to perform its
+  /// default lowering operations.
+  FunctionPass *createCJBarrierLoweringPass(CodeGenOpt::Level OptLevel);
+
+  /// CJBarrierLowering Pass - Used by cangjie gc barrier to perform its
+  /// default lowering operations.
+  extern char &CJBarrierLoweringID;
 
   /// GCLowering Pass - Used by gc.root to perform its default lowering
   /// operations.
@@ -515,6 +526,9 @@ namespace llvm {
 
   /// Create IR Type Promotion pass. \see TypePromotion.cpp
   FunctionPass *createTypePromotionPass();
+
+  /// Create Thread Sanitizer pass. \see ThreadSanitizer.cpp
+  FunctionPass *createThreadSanitizerPass();
 
   /// Add Flow Sensitive Discriminators. PassNum specifies the
   /// sequence number of this pass (starting from 1).

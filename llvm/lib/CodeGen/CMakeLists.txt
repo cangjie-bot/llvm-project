@@ -37,6 +37,7 @@ add_llvm_component_library(LLVMCodeGen
   CallingConvLower.cpp
   CFGuardLongjmp.cpp
   CFIFixup.cpp
+  CJMetadata.cpp
   CFIInstrInserter.cpp
   CodeGen.cpp
   CodeGenCommonISel.cpp
@@ -44,6 +45,8 @@ add_llvm_component_library(LLVMCodeGen
   CodeGenPrepare.cpp
   CommandFlags.cpp
   CriticalAntiDepBreaker.cpp
+  CJBarrierLowering.cpp
+  CJStackPointerInserter.cpp
   DeadMachineInstructionElim.cpp
   DetectDeadLanes.cpp
   DFAPacketizer.cpp
@@ -220,6 +223,7 @@ add_llvm_component_library(LLVMCodeGen
   TargetRegisterInfo.cpp
   TargetSchedule.cpp
   TargetSubtargetInfo.cpp
+  ThreadSanitizerPass.cpp
   TypePromotion.cpp
   TwoAddressInstructionPass.cpp
   UnreachableBlockElim.cpp

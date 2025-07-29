@@ -138,6 +138,13 @@ ThreadPlanSP ThreadPlanShouldStopHere::DefaultStepFromHereCallback(
         current_plan->GetThread().QueueThreadPlanForStepOutNoShouldStop(
             false, nullptr, true, stop_others, eVoteNo, eVoteNoOpinion,
             frame_index, status, true);
+
+  if (!return_plan_sp && status.Fail()) {
+    // Since "step out" may fail because a return address breakpoint cannot be inserted,
+    // we give it a chance to push a "step instruction" plan to get us out of here.
+    return_plan_sp = current_plan->GetThread().QueueThreadPlanForStepSingleInstruction(true, false, true, status);
+  }
+
   return return_plan_sp;
 }
 

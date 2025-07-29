@@ -280,6 +280,11 @@ public:
     return *this;
   }
 
+  const MachineInstrBuilder &setMIExtFlag(MachineInstr::MIExtFlag Flag) const {
+    MI->setExtFlag(Flag);
+    return *this;
+  }
+
   // Add a displacement from an existing MachineOperand with an added offset.
   const MachineInstrBuilder &addDisp(const MachineOperand &Disp, int64_t off,
                                      unsigned char TargetFlags = 0) const {

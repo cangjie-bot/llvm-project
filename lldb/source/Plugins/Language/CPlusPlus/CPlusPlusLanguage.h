@@ -91,7 +91,7 @@ public:
 
   bool IsNilReference(ValueObject &valobj) override;
 
-  llvm::StringRef GetNilReferenceSummaryString() override { return "nullptr"; }
+  llvm::StringRef GetNilReferenceSummaryString() override { return "None"; }
 
   bool IsSourceFile(llvm::StringRef file_path) const override;
 

@@ -86,7 +86,9 @@
 #include <memory>
 
 using namespace llvm;
-
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 #define DEBUG_TYPE "shrink-wrap"
 
 STATISTIC(NumFunc, "Number of functions");
@@ -584,7 +586,10 @@ bool ShrinkWrap::runOnMachineFunction(MachineFunction &MF) {
                     << Restore->getName() << '\n');
 
   MachineFrameInfo &MFI = MF.getFrameInfo();
-  MFI.setSavePoint(Save);
+  // cangjie require prologue to be inserted at the entry BB for unwind reason
+  if (!CJPipeline) {
+    MFI.setSavePoint(Save);
+  }
   MFI.setRestorePoint(Restore);
   ++NumCandidates;
   return false;

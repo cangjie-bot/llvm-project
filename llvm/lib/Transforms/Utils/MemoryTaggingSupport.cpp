@@ -6,7 +6,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This file declares common infrastructure for HWAddressSanitizer and
-// Aarch64StackTagging.
+// AArch64StackTagging.
 //
 //===----------------------------------------------------------------------===//
 

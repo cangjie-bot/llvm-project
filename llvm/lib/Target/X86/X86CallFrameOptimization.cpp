@@ -56,6 +56,11 @@ static cl::opt<bool>
                cl::desc("Avoid optimizing x86 call frames for size"),
                cl::init(false), cl::Hidden);
 
+static cl::opt<bool>
+    EnableX86CFOpt("enable-cangjie-x86-call-frame-opt",
+                   cl::desc("Optimize x86 call frames for size"),
+                   cl::init(false), cl::Hidden);
+
 namespace {
 
 class X86CallFrameOptimization : public MachineFunctionPass {
@@ -133,6 +138,10 @@ INITIALIZE_PASS(X86CallFrameOptimization, DEBUG_TYPE,
 // Also returns false in cases where it's potentially legal, but
 // we don't even want to try.
 bool X86CallFrameOptimization::isLegal(MachineFunction &MF) {
+  if (MF.getFunction().hasCangjieGC() && !EnableX86CFOpt) {
+    NoX86CFOpt.setValue(true);
+  }
+
   if (NoX86CFOpt.getValue())
     return false;
 

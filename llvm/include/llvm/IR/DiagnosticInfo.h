@@ -21,6 +21,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/SourceMgr.h"
@@ -211,7 +212,7 @@ public:
   const char *getResourceName() const { return ResourceName; }
   uint64_t getResourceSize() const { return ResourceSize; }
   uint64_t getResourceLimit() const { return ResourceLimit; }
-
+  std::string GetDemangleName() const;
   /// \see DiagnosticInfo::print.
   void print(DiagnosticPrinter &DP) const override;
 

@@ -119,6 +119,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/FunctionComparator.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
@@ -200,6 +201,7 @@ public:
   }
 
   bool runOnModule(Module &M);
+  void doExceptionOutline(Module &M);
 
 private:
   // The function comparison operator is provided here so that FunctionNodes do
@@ -408,9 +410,118 @@ static bool isEligibleForMerging(Function &F) {
   return !F.isDeclaration() && !F.hasAvailableExternallyLinkage();
 }
 
+static bool isBBEligibleForOutline(llvm::BasicBlock *BB) {
+  if (!BB)
+    return false;
+
+  // Do not optimize the function to prevent the failure of stack frame throwing
+  // due to runtime computation exceptions.
+  if (BB->getParent()->getName().equals("rt$ThrowStackOverflowError"))
+    return false;
+  if (BB->getParent()->getName().equals("rt$ThrowImplicitException"))
+    return false;
+  for (auto &Inst : *BB) {
+    if (const GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(&Inst)) {
+      return false;
+    }
+    if (CallInst *CI = dyn_cast<CallInst>(&Inst)) {
+      Function *Callee = CI->getCalledFunction();
+      if (!Callee)
+        return false;
+      if (Callee->isIntrinsic()) {
+        return false;
+      }
+      if (Callee->getName().isSetDebugLocation() ||
+          Callee->getName().isGetGCPhase() ||
+          Callee->getName().startswith("__builtin_") ||
+          Callee->getName().startswith("llvm.")) {
+        return false;
+      }
+    }
+    for (auto &Use : Inst.operands()) {
+      if (auto *User = Use.get()) {
+        if (auto *UserInst = llvm::dyn_cast<llvm::Instruction>(User)) {
+          // If it's not a Instruction, there's no need to use it in the current
+          // context. For example GV.
+          if (UserInst->getParent() != BB) {
+            return false;
+          }
+        }
+      }
+    }
+  }
+  return true;
+}
+
+static bool isThrowExceptionInstruction(llvm::Instruction *Inst) {
+  if (auto *CallInst = llvm::dyn_cast<llvm::CallInst>(Inst)) {
+    if (auto *Callee = CallInst->getCalledFunction()) {
+      return Callee->getName() == "CJ_MCC_ThrowException";
+    }
+  }
+  return false;
+}
+
+static void getInputArgs(llvm::BasicBlock *BB, SetVector<Value *> &ArgInputs) {
+  for (auto &Inst : *BB) {
+    if (CallInst *CI = dyn_cast<CallInst>(&Inst)) {
+      Function *Callee = CI->getCalledFunction();
+      if (Callee && !Callee->getName().startswith("CJ_MCC") && !Callee->isIntrinsic()) {
+        ArgInputs.insert(Callee);
+      }
+    }
+    for (auto &Use : Inst.operands()) {
+      if (auto *User = Use.get()) {
+        // Values can be Input Arguement.
+        if (auto *GV = llvm::dyn_cast<GlobalVariable>(User)) {
+          ArgInputs.insert(GV);
+        } else if (auto *CE = dyn_cast<ConstantExpr>(User)) {
+          if (CE->getOpcode() == Instruction::BitCast)
+            ArgInputs.insert(CE);
+        } else if (ConstantInt *CI = dyn_cast<ConstantInt>(User)) {
+          ArgInputs.insert(CI);
+        }
+      }
+    }
+  }
+}
+
+static Function* generateFunc(BasicBlock *BB, Function *OrigF) {
+  SmallVector<BasicBlock *> BE;
+  BE.push_back(BB);
+  CodeExtractor CE(BE, nullptr, false, nullptr, nullptr, nullptr, false, false,
+                   nullptr, "exception_outlined_func");
+  SetVector<Value *> ArgInputs;
+  SetVector<Value *> Outputs;
+  getInputArgs(BB, ArgInputs);
+  CodeExtractorAnalysisCache CEAC(*OrigF);
+  Function *Func = CE.extractCodeRegion(CEAC, ArgInputs, Outputs);
+  return Func;
+}
+
+void MergeFunctions::doExceptionOutline(Module &M) {
+  SmallVector<std::pair<llvm::BasicBlock *, llvm::Function *>> ExceptionBBs;
+
+  for (Function &F : M) {
+    for (BasicBlock &BB : F) {
+      for (Instruction &Inst : BB) {
+        if (isThrowExceptionInstruction(&Inst)) {
+          if (!isBBEligibleForOutline(&BB))
+            continue;
+          ExceptionBBs.push_back(std::make_pair(&BB, &F));
+        }
+      }
+    }
+  }
+
+  for (auto &pair : ExceptionBBs) {
+    generateFunc(pair.first, pair.second);
+  }
+}
+
 bool MergeFunctions::runOnModule(Module &M) {
   bool Changed = false;
-
+  doExceptionOutline(M);
   SmallVector<GlobalValue *, 4> UsedV;
   collectUsedGlobalVariables(M, UsedV, /*CompilerUsed=*/false);
   collectUsedGlobalVariables(M, UsedV, /*CompilerUsed=*/true);
@@ -661,6 +772,27 @@ static bool canCreateThunkFor(Function *F) {
   // Don't merge tiny functions using a thunk, since it can just end up
   // making the function larger.
   if (F->size() == 1) {
+    // For a single external function in the standard library, a conservative
+    // strategy is adopted to replace it with a thunk function.
+    if (F->hasCangjieGC() && F->use_empty() && F->hasExternalLinkage()) {
+      uint32_t ExternalFuncThrd = 30;
+      if (F->front().size() <= ExternalFuncThrd) {
+        LLVM_DEBUG(dbgs() << "canCreateThunkFor: " << F->getName()
+                          << "External function is too small to bother "
+                             "creating a thunk for\n");
+        return false;
+      }
+    }
+    // Considering the overhead introduced by GC operations and the number of
+    // lines of code.
+    uint32_t CangjieFuncThrd = 10;
+    if (F->hasCangjieGC() && F->front().size() <= CangjieFuncThrd) {
+      LLVM_DEBUG(
+          dbgs()
+          << "canCreateThunkFor: " << F->getName()
+          << "Cangjie function is too small to bother creating a thunk for\n");
+      return false;
+    }
     if (F->front().size() <= 2) {
       LLVM_DEBUG(dbgs() << "canCreateThunkFor: " << F->getName()
                         << " is too small to bother creating a thunk for\n");

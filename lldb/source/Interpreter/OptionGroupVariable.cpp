@@ -48,6 +48,9 @@ static constexpr OptionDefinition g_variable_options[] = {
     {LLDB_OPT_SET_2, false, "summary-string", 'z',
      OptionParser::eRequiredArgument, nullptr, {}, 0, eArgTypeName,
      "Specify a summary string to use to format the variable output."},
+    {LLDB_OPT_SET_1 | LLDB_OPT_SET_2, false, "no-values", 'v',
+     OptionParser::eNoArgument, nullptr, {}, 0, eArgTypeNone,
+     "Omit variable values."},
 };
 
 static Status ValidateNamedSummary(const char *str, void *) {
@@ -106,6 +109,9 @@ OptionGroupVariable::SetOptionValue(uint32_t option_idx,
   case 'z':
     error = summary_string.SetCurrentValue(option_arg);
     break;
+  case 'v':
+    show_values = false;
+    break;
   default:
     llvm_unreachable("Unimplemented option");
   }
@@ -122,6 +128,7 @@ void OptionGroupVariable::OptionParsingStarting(
   show_decl = false;
   use_regex = false;
   show_scope = false;
+  show_values = true;
   summary.Clear();
   summary_string.Clear();
 }

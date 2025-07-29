@@ -176,6 +176,9 @@ bool simplifyCFG(BasicBlock *BB, const TargetTransformInfo &TTI,
                  const SimplifyCFGOptions &Options = {},
                  ArrayRef<WeakVH> LoopHeaders = {});
 
+bool simplifyFunctionCFG(Function &F, const TargetTransformInfo &TTI,
+                         DominatorTree *DT, const SimplifyCFGOptions &Options);
+
 /// This function is used to flatten a CFG. For example, it uses parallel-and
 /// and parallel-or mode to collapse if-conditions and merge if-regions with
 /// identical statements.

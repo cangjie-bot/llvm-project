@@ -667,7 +667,7 @@ bool Type::GetTypeScopeAndBasename(llvm::StringRef name,
                                    TypeClass &type_class) {
   type_class = eTypeClassAny;
 
-  if (name.empty())
+  if (name.empty() || name.contains("->"))  // For cangjie function type
     return false;
 
   basename = name;

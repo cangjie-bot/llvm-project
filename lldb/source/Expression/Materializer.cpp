@@ -500,6 +500,10 @@ public:
       const bool scalar_is_load_address = false;
       lldb::addr_t addr_of_valobj =
           valobj_sp->GetAddressOf(scalar_is_load_address, &address_type);
+      if (valobj_sp->IsGenericValueType()) {
+          // Offset 8 is required if valobj is a generic value type.
+          addr_of_valobj += 8;
+      }
       if (addr_of_valobj != LLDB_INVALID_ADDRESS) {
         Status write_error;
         map.WritePointerToMemory(load_addr, addr_of_valobj, write_error);

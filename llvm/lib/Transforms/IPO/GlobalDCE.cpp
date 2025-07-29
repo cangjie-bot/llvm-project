@@ -367,9 +367,14 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
 
   // The first pass is to drop initializers of global variables which are dead.
   std::vector<GlobalVariable *> DeadGlobalVars; // Keep track of dead globals
-  for (GlobalVariable &GV : M.globals())
+  for (GlobalVariable &GV : M.globals()) {
+    // Cangjie native GV needs to be processed at the backend..
+    if (GV.hasAttribute("cj-native")) {
+      continue;
+    }
+
     if (!AliveGlobals.count(&GV)) {
-      DeadGlobalVars.push_back(&GV);         // Keep track of dead globals
+      DeadGlobalVars.push_back(&GV); // Keep track of dead globals
       if (GV.hasInitializer()) {
         Constant *Init = GV.getInitializer();
         GV.setInitializer(nullptr);
@@ -377,16 +382,20 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
           Init->destroyConstant();
       }
     }
-
+  }
   // The second pass drops the bodies of functions which are dead...
   std::vector<Function *> DeadFunctions;
-  for (Function &F : M)
+  for (Function &F : M) {
+    // Cangjie runtime function needs to be processed at the backend..
+    if (F.hasFnAttribute("cj-runtime"))
+      continue;
+
     if (!AliveGlobals.count(&F)) {
-      DeadFunctions.push_back(&F);         // Keep track of dead globals
+      DeadFunctions.push_back(&F); // Keep track of dead globals
       if (!F.isDeclaration())
         F.deleteBody();
     }
-
+  }
   // The third pass drops targets of aliases which are dead...
   std::vector<GlobalAlias*> DeadAliases;
   for (GlobalAlias &GA : M.aliases())

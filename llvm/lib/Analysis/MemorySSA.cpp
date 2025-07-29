@@ -84,6 +84,10 @@ static cl::opt<unsigned> MaxCheckLimit(
     cl::desc("The maximum number of stores/phis MemorySSA"
              "will consider trying to walk past (default = 100)"));
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
+
 // Always verify MemorySSA if expensive checking is enabled.
 #ifdef EXPENSIVE_CHECKS
 bool llvm::VerifyMemorySSA = true;
@@ -382,8 +386,17 @@ struct UpwardsMemoryQuery {
 
   UpwardsMemoryQuery(const Instruction *Inst, const MemoryAccess *Access)
       : IsCall(isa<CallBase>(Inst)), Inst(Inst), OriginalAccess(Access) {
-    if (!IsCall)
+    if (!IsCall) {
       StartingLoc = MemoryLocation::get(Inst);
+    } else {
+      const CallBase *CB = dyn_cast<CallBase>(Inst);
+      Intrinsic::ID ID = CB->getIntrinsicID();
+      if (ID == Intrinsic::cj_gcwrite_ref ||
+          ID == Intrinsic::cj_gcwrite_static_ref ||
+          ID == Intrinsic::cj_gcread_static_ref ||
+          ID == Intrinsic::cj_gcread_ref)
+        StartingLoc = MemoryLocation::get(CB);
+    }
   }
 };
 
@@ -392,6 +405,8 @@ struct UpwardsMemoryQuery {
 template <typename AliasAnalysisType>
 static bool isUseTriviallyOptimizableToLiveOnEntry(AliasAnalysisType &AA,
                                                    const Instruction *I) {
+  if (CJPipeline)
+    return false;
   // If the memory can't be changed, then loads of the memory can't be
   // clobbered.
   if (auto *LI = dyn_cast<LoadInst>(I))

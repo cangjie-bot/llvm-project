@@ -277,6 +277,9 @@ public:
   /// Cache) for each task identifier.
   Error run(AddStreamFn AddStream, FileCache Cache = nullptr);
 
+  // Ckeck if all modules from cangjie bc files for cangjie LTO!
+  void checkCJBC();
+
   /// Static method that returns a list of libcall symbols that can be generated
   /// by LTO but might not be visible from bitcode symbol table.
   static ArrayRef<const char*> getRuntimeLibcallSymbols();

@@ -109,21 +109,22 @@ define i64 @test_unsigned_i64_f32(float %f) nounwind {
 define i100 @test_unsigned_i100_f32(float %f) nounwind {
 ; CHECK-LABEL: test_unsigned_i100_f32:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    str d8, [sp, #-16]! // 8-byte Folded Spill
-; CHECK-NEXT:    str x30, [sp, #8] // 8-byte Folded Spill
+; CHECK-NEXT:    str x30, [sp, #-16]! // 8-byte Folded Spill
+; CHECK-NEXT:    str d8, [sp, #8] // 8-byte Folded Spill
 ; CHECK-NEXT:    fmov s8, s0
 ; CHECK-NEXT:    bl __fixunssfti
 ; CHECK-NEXT:    mov w8, #1904214015
 ; CHECK-NEXT:    fcmp s8, #0.0
-; CHECK-NEXT:    ldr x30, [sp, #8] // 8-byte Folded Reload
+
 ; CHECK-NEXT:    mov x10, #68719476735
 ; CHECK-NEXT:    fmov s0, w8
 ; CHECK-NEXT:    csel x8, xzr, x0, lt
 ; CHECK-NEXT:    csel x9, xzr, x1, lt
 ; CHECK-NEXT:    fcmp s8, s0
+; CHECK-NEXT:    ldr d8, [sp, #8] // 8-byte Folded Reload
 ; CHECK-NEXT:    csel x1, x10, x9, gt
 ; CHECK-NEXT:    csinv x0, x8, xzr, le
-; CHECK-NEXT:    ldr d8, [sp], #16 // 8-byte Folded Reload
+; CHECK-NEXT:    ldr x30, [sp], #16 // 8-byte Folded Reload
 ; CHECK-NEXT:    ret
     %x = call i100 @llvm.fptoui.sat.i100.f32(float %f)
     ret i100 %x
@@ -132,20 +133,21 @@ define i100 @test_unsigned_i100_f32(float %f) nounwind {
 define i128 @test_unsigned_i128_f32(float %f) nounwind {
 ; CHECK-LABEL: test_unsigned_i128_f32:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    str d8, [sp, #-16]! // 8-byte Folded Spill
-; CHECK-NEXT:    str x30, [sp, #8] // 8-byte Folded Spill
+; CHECK-NEXT:    str x30, [sp, #-16]! // 8-byte Folded Spill
+; CHECK-NEXT:    str d8, [sp, #8] // 8-byte Folded Spill
 ; CHECK-NEXT:    fmov s8, s0
 ; CHECK-NEXT:    bl __fixunssfti
 ; CHECK-NEXT:    mov w8, #2139095039
 ; CHECK-NEXT:    fcmp s8, #0.0
-; CHECK-NEXT:    ldr x30, [sp, #8] // 8-byte Folded Reload
+
 ; CHECK-NEXT:    fmov s0, w8
 ; CHECK-NEXT:    csel x8, xzr, x1, lt
 ; CHECK-NEXT:    csel x9, xzr, x0, lt
 ; CHECK-NEXT:    fcmp s8, s0
+; CHECK-NEXT:    ldr d8, [sp, #8] // 8-byte Folded Reload
 ; CHECK-NEXT:    csinv x0, x9, xzr, le
 ; CHECK-NEXT:    csinv x1, x8, xzr, le
-; CHECK-NEXT:    ldr d8, [sp], #16 // 8-byte Folded Reload
+; CHECK-NEXT:    ldr x30, [sp], #16 // 8-byte Folded Reload
 ; CHECK-NEXT:    ret
     %x = call i128 @llvm.fptoui.sat.i128.f32(float %f)
     ret i128 %x
@@ -258,21 +260,22 @@ define i64 @test_unsigned_i64_f64(double %f) nounwind {
 define i100 @test_unsigned_i100_f64(double %f) nounwind {
 ; CHECK-LABEL: test_unsigned_i100_f64:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    str d8, [sp, #-16]! // 8-byte Folded Spill
-; CHECK-NEXT:    str x30, [sp, #8] // 8-byte Folded Spill
+; CHECK-NEXT:    str x30, [sp, #-16]! // 8-byte Folded Spill
+; CHECK-NEXT:    str d8, [sp, #8] // 8-byte Folded Spill
 ; CHECK-NEXT:    fmov d8, d0
 ; CHECK-NEXT:    bl __fixunsdfti
 ; CHECK-NEXT:    mov x8, #5057542381537067007
 ; CHECK-NEXT:    fcmp d8, #0.0
-; CHECK-NEXT:    ldr x30, [sp, #8] // 8-byte Folded Reload
+
 ; CHECK-NEXT:    mov x10, #68719476735
 ; CHECK-NEXT:    fmov d0, x8
 ; CHECK-NEXT:    csel x8, xzr, x0, lt
 ; CHECK-NEXT:    csel x9, xzr, x1, lt
 ; CHECK-NEXT:    fcmp d8, d0
+; CHECK-NEXT:    ldr d8, [sp, #8] // 8-byte Folded Reload
 ; CHECK-NEXT:    csel x1, x10, x9, gt
 ; CHECK-NEXT:    csinv x0, x8, xzr, le
-; CHECK-NEXT:    ldr d8, [sp], #16 // 8-byte Folded Reload
+; CHECK-NEXT:    ldr x30, [sp], #16 // 8-byte Folded Reload
 ; CHECK-NEXT:    ret
     %x = call i100 @llvm.fptoui.sat.i100.f64(double %f)
     ret i100 %x
@@ -281,20 +284,21 @@ define i100 @test_unsigned_i100_f64(double %f) nounwind {
 define i128 @test_unsigned_i128_f64(double %f) nounwind {
 ; CHECK-LABEL: test_unsigned_i128_f64:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    str d8, [sp, #-16]! // 8-byte Folded Spill
-; CHECK-NEXT:    str x30, [sp, #8] // 8-byte Folded Spill
+; CHECK-NEXT:    str x30, [sp, #-16]! // 8-byte Folded Spill
+; CHECK-NEXT:    str d8, [sp, #8] // 8-byte Folded Spill
 ; CHECK-NEXT:    fmov d8, d0
 ; CHECK-NEXT:    bl __fixunsdfti
 ; CHECK-NEXT:    mov x8, #5183643171103440895
 ; CHECK-NEXT:    fcmp d8, #0.0
-; CHECK-NEXT:    ldr x30, [sp, #8] // 8-byte Folded Reload
+
 ; CHECK-NEXT:    fmov d0, x8
 ; CHECK-NEXT:    csel x8, xzr, x1, lt
 ; CHECK-NEXT:    csel x9, xzr, x0, lt
 ; CHECK-NEXT:    fcmp d8, d0
+; CHECK-NEXT:    ldr d8, [sp, #8] // 8-byte Folded Reload
 ; CHECK-NEXT:    csinv x0, x9, xzr, le
 ; CHECK-NEXT:    csinv x1, x8, xzr, le
-; CHECK-NEXT:    ldr d8, [sp], #16 // 8-byte Folded Reload
+; CHECK-NEXT:    ldr x30, [sp], #16 // 8-byte Folded Reload
 ; CHECK-NEXT:    ret
     %x = call i128 @llvm.fptoui.sat.i128.f64(double %f)
     ret i128 %x
@@ -472,22 +476,24 @@ define i64 @test_unsigned_i64_f16(half %f) nounwind {
 define i100 @test_unsigned_i100_f16(half %f) nounwind {
 ; CHECK-LABEL: test_unsigned_i100_f16:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    str d8, [sp, #-16]! // 8-byte Folded Spill
+; CHECK-NEXT:    str x30, [sp, #-16]! // 8-byte Folded Spill
+
+; CHECK-NEXT:    str d8, [sp, #8] // 8-byte Folded Spill
 ; CHECK-NEXT:    fcvt s8, h0
-; CHECK-NEXT:    str x30, [sp, #8] // 8-byte Folded Spill
 ; CHECK-NEXT:    fmov s0, s8
 ; CHECK-NEXT:    bl __fixunssfti
 ; CHECK-NEXT:    mov w8, #1904214015
 ; CHECK-NEXT:    fcmp s8, #0.0
-; CHECK-NEXT:    ldr x30, [sp, #8] // 8-byte Folded Reload
+
 ; CHECK-NEXT:    mov x10, #68719476735
 ; CHECK-NEXT:    fmov s0, w8
 ; CHECK-NEXT:    csel x8, xzr, x0, lt
 ; CHECK-NEXT:    csel x9, xzr, x1, lt
 ; CHECK-NEXT:    fcmp s8, s0
+; CHECK-NEXT:    ldr d8, [sp, #8] // 8-byte Folded Reload
 ; CHECK-NEXT:    csel x1, x10, x9, gt
 ; CHECK-NEXT:    csinv x0, x8, xzr, le
-; CHECK-NEXT:    ldr d8, [sp], #16 // 8-byte Folded Reload
+; CHECK-NEXT:    ldr x30, [sp], #16 // 8-byte Folded Reload
 ; CHECK-NEXT:    ret
     %x = call i100 @llvm.fptoui.sat.i100.f16(half %f)
     ret i100 %x
@@ -496,21 +502,23 @@ define i100 @test_unsigned_i100_f16(half %f) nounwind {
 define i128 @test_unsigned_i128_f16(half %f) nounwind {
 ; CHECK-LABEL: test_unsigned_i128_f16:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    str d8, [sp, #-16]! // 8-byte Folded Spill
+; CHECK-NEXT:    str x30, [sp, #-16]! // 8-byte Folded Spill
+
+; CHECK-NEXT:    str d8, [sp, #8] // 8-byte Folded Spill
 ; CHECK-NEXT:    fcvt s8, h0
-; CHECK-NEXT:    str x30, [sp, #8] // 8-byte Folded Spill
 ; CHECK-NEXT:    fmov s0, s8
 ; CHECK-NEXT:    bl __fixunssfti
 ; CHECK-NEXT:    mov w8, #2139095039
 ; CHECK-NEXT:    fcmp s8, #0.0
-; CHECK-NEXT:    ldr x30, [sp, #8] // 8-byte Folded Reload
+
 ; CHECK-NEXT:    fmov s0, w8
 ; CHECK-NEXT:    csel x8, xzr, x1, lt
 ; CHECK-NEXT:    csel x9, xzr, x0, lt
 ; CHECK-NEXT:    fcmp s8, s0
+; CHECK-NEXT:    ldr d8, [sp, #8] // 8-byte Folded Reload
 ; CHECK-NEXT:    csinv x0, x9, xzr, le
 ; CHECK-NEXT:    csinv x1, x8, xzr, le
-; CHECK-NEXT:    ldr d8, [sp], #16 // 8-byte Folded Reload
+; CHECK-NEXT:    ldr x30, [sp], #16 // 8-byte Folded Reload
 ; CHECK-NEXT:    ret
     %x = call i128 @llvm.fptoui.sat.i128.f16(half %f)
     ret i128 %x

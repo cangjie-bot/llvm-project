@@ -87,6 +87,10 @@ STATISTIC(NumEliminated, "Number of tail calls removed");
 STATISTIC(NumRetDuped,   "Number of return duplicated");
 STATISTIC(NumAccumAdded, "Number of accumulators introduced");
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
+
 /// Scan the specified function for alloca instructions.
 /// If it contains any dynamic allocas, returns false.
 static bool canTRE(Function &F) {
@@ -236,6 +240,9 @@ static bool markTails(Function &F, OptimizationRemarkEmitter *ORE) {
         Escaped = ESCAPED;
 
       CallInst *CI = dyn_cast<CallInst>(&I);
+      if (CI && CJPipeline) {
+        CI->setTailCall(false);
+      }
       // A PseudoProbeInst has the IntrInaccessibleMemOnly tag hence it is
       // considered accessing memory and will be marked as a tail call if we
       // don't bail out here.

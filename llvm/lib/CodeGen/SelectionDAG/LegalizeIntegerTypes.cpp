@@ -1722,7 +1722,7 @@ bool DAGTypeLegalizer::PromoteIntegerOperand(SDNode *N, unsigned OpNo) {
   case ISD::VP_REDUCE_UMIN:
     Res = PromoteIntOp_VP_REDUCE(N, OpNo);
     break;
-
+  case ISD::GET_FP_STATE: Res = PromoteIntOp_GET_FP_STATE(N); break;
   case ISD::SET_ROUNDING: Res = PromoteIntOp_SET_ROUNDING(N); break;
   case ISD::STACKMAP:
     Res = PromoteIntOp_STACKMAP(N, OpNo);
@@ -2332,6 +2332,11 @@ SDValue DAGTypeLegalizer::PromoteIntOp_VP_REDUCE(SDNode *N, unsigned OpNo) {
       DAG.getNode(getExtendForIntVecReduction(N), DL, EltVT, N->getOperand(0));
   SDValue Reduce = DAG.getNode(N->getOpcode(), DL, EltVT, NewOps);
   return DAG.getNode(ISD::TRUNCATE, DL, VT, Reduce);
+}
+
+SDValue DAGTypeLegalizer::PromoteIntOp_GET_FP_STATE(SDNode *N) {
+  SDValue Op = ZExtPromotedInteger(N->getOperand(1));
+  return SDValue(DAG.UpdateNodeOperands(N, N->getOperand(0), Op), 0);
 }
 
 SDValue DAGTypeLegalizer::PromoteIntOp_SET_ROUNDING(SDNode *N) {

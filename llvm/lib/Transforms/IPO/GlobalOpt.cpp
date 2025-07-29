@@ -1967,6 +1967,9 @@ OptimizeFunctions(Module &M,
     if (F.hasFnAttribute(Attribute::Naked))
       continue;
 
+    // Cangjie runtime function needs to be processed at the backend..
+    if (F.hasFnAttribute("cj-runtime"))
+      continue;
     // Functions without names cannot be referenced outside this module.
     if (!F.hasName() && !F.isDeclaration() && !F.hasLocalLinkage())
       F.setLinkage(GlobalValue::InternalLinkage);
@@ -2067,6 +2070,10 @@ OptimizeGlobalVars(Module &M,
   bool Changed = false;
 
   for (GlobalVariable &GV : llvm::make_early_inc_range(M.globals())) {
+    // Cangjie native GV needs to be processed at the backend..
+    if (GV.hasAttribute("cj-native")) {
+      continue;
+    }
     // Global variables without names cannot be referenced outside this module.
     if (!GV.hasName() && !GV.isDeclaration() && !GV.hasLocalLinkage())
       GV.setLinkage(GlobalValue::InternalLinkage);

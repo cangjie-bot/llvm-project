@@ -4,6 +4,12 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+//
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Breakpoint/Watchpoint.h"
@@ -20,6 +26,9 @@
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/Stream.h"
+#include "lldb/Symbol/Variable.h"
+#include "lldb/Symbol/VariableList.h"
+#include "lldb/Core/Debugger.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -275,7 +284,58 @@ void Watchpoint::SetIgnoreCount(uint32_t n) {
     SendWatchpointChangedEvent(eWatchpointEventTypeIgnoreChanged);
 }
 
+// Check the variable to be watched is still in the scope or not, if not, skip the hit point.
+bool Watchpoint::InvokeInnerCallback(StoppointCallbackContext *context) {
+  if (!IsWatchVariable()) {
+    return true;
+  }
+
+  ExecutionContext exe_ctx(context->exe_ctx_ref);
+  StackFrame *frame = exe_ctx.GetFramePtr();
+  if (!frame) {
+    return true;
+  }
+
+  uint32_t options = StackFrame::eExpressionPathOptionCheckPtrVsMember |
+     StackFrame::eExpressionPathOptionsAllowDirectIVarAccess;
+  VariableSP var_sp;
+  Status error;
+  ValueObjectSP valobj_sp = frame->GetValueForVariableExpressionPath(
+      GetWatchSpec(), eNoDynamicValues, options, var_sp, error);
+  if (valobj_sp) {
+    return true;
+  }
+
+  // Not in the frame; let's check the globals.
+  Target *target = exe_ctx.GetTargetPtr();
+  if (!target) {
+    return true;
+  }
+
+  VariableList variable_list;
+  ValueObjectList valobj_list;
+  auto getVariableCallback = [](void *baton, const char *name, VariableList &variable_list) {
+    size_t old_size = variable_list.GetSize();
+    Target *target = static_cast<Target *>(baton);
+    if (target) {
+      target->GetImages().FindGlobalVariables(ConstString(name), UINT32_MAX, variable_list);
+    }
+    return variable_list.GetSize() - old_size;
+  };
+
+  Variable::GetValuesForVariableExpressionPath(GetWatchSpec(), exe_ctx.GetBestExecutionContextScope(),
+      getVariableCallback, target->GetDebugger().GetSelectedTarget().get(), variable_list, valobj_list);
+  if (valobj_list.GetSize()) {
+    return true;
+  }
+
+  return false;
+}
+
 bool Watchpoint::InvokeCallback(StoppointCallbackContext *context) {
+  if (!InvokeInnerCallback(context)) {
+    return false;
+  }
   return m_options.InvokeCallback(context, GetID());
 }
 

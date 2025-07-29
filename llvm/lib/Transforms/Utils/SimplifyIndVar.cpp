@@ -442,8 +442,6 @@ bool SimplifyIndvar::eliminateOverflowIntrinsic(WithOverflowInst *WO) {
   else
     NewResult->setHasNoUnsignedWrap(true);
 
-  SmallVector<ExtractValueInst *, 4> ToDelete;
-
   for (auto *U : WO->users()) {
     if (auto *EVI = dyn_cast<ExtractValueInst>(U)) {
       if (EVI->getIndices()[0] == 1)
@@ -452,16 +450,12 @@ bool SimplifyIndvar::eliminateOverflowIntrinsic(WithOverflowInst *WO) {
         assert(EVI->getIndices()[0] == 0 && "Only two possibilities!");
         EVI->replaceAllUsesWith(NewResult);
       }
-      ToDelete.push_back(EVI);
+      DeadInsts.emplace_back(EVI);
     }
   }
 
-  for (auto *EVI : ToDelete)
-    EVI->eraseFromParent();
-
   if (WO->use_empty())
-    WO->eraseFromParent();
-
+    DeadInsts.emplace_back(WO);
   Changed = true;
   return true;
 }

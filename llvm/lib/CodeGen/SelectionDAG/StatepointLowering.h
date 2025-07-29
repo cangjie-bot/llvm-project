@@ -60,6 +60,10 @@ public:
     Locations[Val] = Location;
   }
 
+  void setIsFastISel(bool Flag) {
+    IsFastISel = Flag;
+  }
+
   /// Record the fact that we expect to encounter a given gc_relocate
   /// before the next statepoint.  If we don't see it, we'll report
   /// an assertion.
@@ -119,6 +123,10 @@ private:
 
   /// Keep track of pending gcrelocate calls for consistency check
   SmallVector<const GCRelocateInst *, 10> PendingGCRelocateCalls;
+
+  /// In FastISel, PendingGCRelocateCalls's insert and erase will not match.
+  /// We should remove the incorrect assertion for PendingGCRelocateCalls.
+  bool IsFastISel = false;
 };
 
 } // end namespace llvm

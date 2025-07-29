@@ -75,6 +75,13 @@ ConstString Variable::GetName() const {
   return m_name;
 }
 
+ConstString Variable::GetMangledName() const {
+  ConstString name = m_mangled.GetMangledName();
+  if (name)
+    return name;
+  return m_name;
+}
+
 ConstString Variable::GetUnqualifiedName() const { return m_name; }
 
 bool Variable::NameMatches(ConstString name) const {

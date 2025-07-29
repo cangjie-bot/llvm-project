@@ -31,6 +31,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
@@ -348,6 +349,7 @@ X86RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     assert(!Is64Bit && "CFGuard check mechanism only used on 32-bit X86");
     return (HasSSE ? CSR_Win32_CFGuard_Check_SaveList
                    : CSR_Win32_CFGuard_Check_NoSSE_SaveList);
+  case CallingConv::CangjieGC:
   case CallingConv::Cold:
     if (Is64Bit)
       return CSR_64_MostRegs_SaveList;
@@ -470,6 +472,7 @@ X86RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
     assert(!Is64Bit && "CFGuard check mechanism only used on 32-bit X86");
     return (HasSSE ? CSR_Win32_CFGuard_Check_RegMask
                    : CSR_Win32_CFGuard_Check_NoSSE_RegMask);
+  case CallingConv::CangjieGC:
   case CallingConv::Cold:
     if (Is64Bit)
       return CSR_64_MostRegs_RegMask;
@@ -531,6 +534,16 @@ const uint32_t *X86RegisterInfo::getDarwinTLSCallPreservedMask() const {
 BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
   const X86FrameLowering *TFI = getFrameLowering(MF);
+
+  if (MF.getFunction().hasCangjieGC() ||
+      MF.getFunction().hasFnAttribute("pkg_c_wrapper")) {
+    Reserved.set(X86::R15B);
+    Reserved.set(X86::R15BH);
+    Reserved.set(X86::R15WH);
+    Reserved.set(X86::R15W);
+    Reserved.set(X86::R15D);
+    Reserved.set(X86::R15);
+  }
 
   // Set the floating point control register as reserved.
   Reserved.set(X86::FPCW);
@@ -914,6 +927,15 @@ unsigned X86RegisterInfo::findDeadCallerSavedReg(
 Register X86RegisterInfo::getFrameRegister(const MachineFunction &MF) const {
   const X86FrameLowering *TFI = getFrameLowering(MF);
   return TFI->hasFP(MF) ? FramePtr : StackPtr;
+}
+
+const std::vector<MCPhysReg>
+X86RegisterInfo::getArgRegs(const MachineFunction &MF) const {
+  if (MF.getTarget().getMCAsmInfo()->usesWindowsCFI()) {
+    return { X86::RCX, X86::RDX, X86::R8, X86::R9 };
+  } else {
+    return { X86::RDI, X86::RSI, X86::RDX, X86::RCX, X86::R8, X86::R9 };
+  }
 }
 
 unsigned
