@@ -40,7 +40,6 @@ add_lldb_library(lldbPluginExpressionParserCangjie
   LINK_LIBS
     lldbExpression
     cangjie-frontend
-    ffi
     boundscheck
 )
 else()
@@ -56,14 +55,10 @@ add_lldb_library(lldbPluginExpressionParserCangjie
     lldbExpression
     cangjie-frontend
     cangjie-lsp
-    ffi
     boundscheck
 )
 endif()
 
-if(NOT CMAKE_CROSSCOMPILING)
-  target_link_directories(lldbPluginExpressionParserCangjie PUBLIC ${CANGJIE_ROOT}/../llvm-project/utils/ffi/lib64)
-endif()
 string(REPLACE "AMD64" "x86_64" ARCH_NAME "${CMAKE_SYSTEM_PROCESSOR}")
 target_link_directories(lldbPluginExpressionParserCangjie PUBLIC ${CMAKE_SOURCE_DIR}/../utils/boundscheck/lib/${ARCH_NAME})
 add_compile_definitions(CANGJIE_CODEGEN_CJNATIVE_BACKEND)
