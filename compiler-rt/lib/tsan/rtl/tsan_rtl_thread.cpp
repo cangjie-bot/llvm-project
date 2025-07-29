@@ -30,7 +30,7 @@ ThreadContext::~ThreadContext() {
 
 void ThreadContext::OnReset() { CHECK(!sync); }
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 struct ThreadLeak {
   ThreadContext *tctx;
   int count;
@@ -53,7 +53,7 @@ static void CollectThreadLeaks(ThreadContextBase *tctx_base, void *arg) {
 
 // Disabled on Mac because lldb test TestTsanBasic fails:
 // https://reviews.llvm.org/D112603#3163158
-#if !SANITIZER_GO && !SANITIZER_APPLE
+#if !SANITIZER_GO && !SANITIZER_CJ && !SANITIZER_APPLE
 static void ReportIgnoresEnabled(ThreadContext *tctx, IgnoreSet *set) {
   if (tctx->tid == kMainTid) {
     Printf("ThreadSanitizer: main thread finished with ignores enabled\n");
@@ -85,7 +85,7 @@ static void ThreadCheckIgnore(ThreadState *thr) {}
 
 void ThreadFinalize(ThreadState *thr) {
   ThreadCheckIgnore(thr);
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   if (!ShouldReport(thr, ReportTypeThreadLeak))
     return;
   ThreadRegistryLock l(&ctx->thread_registry);
@@ -164,7 +164,7 @@ void ThreadStart(ThreadState *thr, Tid tid, tid_t os_id,
   uptr stk_size = 0;
   uptr tls_addr = 0;
   uptr tls_size = 0;
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   if (thread_type != ThreadType::Fiber)
     GetThreadStackAndTls(tid == kMainTid, &stk_addr, &stk_size, &tls_addr,
                          &tls_size);
@@ -174,7 +174,7 @@ void ThreadStart(ThreadState *thr, Tid tid, tid_t os_id,
   thr->tls_addr = tls_addr;
   thr->tls_size = tls_size;
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   if (ctx->after_multithreaded_fork) {
     thr->ignore_interceptors++;
     ThreadIgnoreBegin(thr, 0);
@@ -182,7 +182,7 @@ void ThreadStart(ThreadState *thr, Tid tid, tid_t os_id,
   }
 #endif
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   // Don't imitate stack/TLS writes for the main thread,
   // because its initialization is synchronized with all
   // subsequent threads anyway.
@@ -219,7 +219,7 @@ void ThreadFinish(ThreadState *thr) {
   if (thr->tls_addr && thr->tls_size)
     DontNeedShadowFor(thr->tls_addr, thr->tls_size);
   thr->is_dead = true;
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   thr->is_inited = false;
   thr->ignore_interceptors++;
   PlatformCleanUpThreadState(thr);
@@ -235,7 +235,7 @@ void ThreadFinish(ThreadState *thr) {
       IncrementEpoch(thr);
     }
   }
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   UnmapOrDie(thr->shadow_stack, kShadowStackSize * sizeof(uptr));
 #else
   Free(thr->shadow_stack);
@@ -329,7 +329,7 @@ void ThreadSetName(ThreadState *thr, const char *name) {
   ctx->thread_registry.SetThreadName(thr->tid, name);
 }
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 void FiberSwitchImpl(ThreadState *from, ThreadState *to) {
   Processor *proc = from->proc();
   ProcUnwire(proc, from);

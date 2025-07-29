@@ -640,6 +640,8 @@ public:
     case Intrinsic::var_annotation:
     case Intrinsic::experimental_gc_result:
     case Intrinsic::experimental_gc_relocate:
+    case Intrinsic::cj_gc_result:
+    case Intrinsic::cj_gc_relocate:
     case Intrinsic::coro_alloc:
     case Intrinsic::coro_begin:
     case Intrinsic::coro_free:

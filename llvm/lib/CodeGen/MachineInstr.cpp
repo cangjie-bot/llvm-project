@@ -212,9 +212,13 @@ void MachineInstr::addOperand(MachineFunction &MF, const MachineOperand &Op) {
   // OpNo now points as the desired insertion point.  Unless this is a variadic
   // instruction, only implicit regs are allowed beyond MCID->getNumOperands().
   // RegMask operands go between the explicit and implicit operands.
-  assert((MCID->isVariadic() || OpNo < MCID->getNumOperands() ||
-          Op.isValidExcessOperand()) &&
-         "Trying to add an operand to a machine instr that is already done!");
+  Triple ModuleTriple(MF.getFunction().getParent()->getTargetTriple());
+  // 3750: AArch64::MRS
+  if (!(ModuleTriple.getArch() == Triple::aarch64 && getOpcode() == 3750)) {
+    assert((MCID->isVariadic() || OpNo < MCID->getNumOperands() ||
+            Op.isValidExcessOperand()) &&
+          "Trying to add an operand to a machine instr that is already done!");
+  }
 
   MachineRegisterInfo *MRI = getRegInfo();
 
@@ -633,6 +637,31 @@ bool MachineInstr::isIdenticalTo(const MachineInstr &Other,
   return true;
 }
 
+bool MachineInstr::isCalDerivedPtrInCangjieCopyGC(
+    MachineRegisterInfo *MRI) const {
+  Triple ModuleTriple(getMF()->getFunction().getParent()->getTargetTriple());
+  // 325: X86::ADD64ri8  261: AArch64::ADDXri
+  if ((ModuleTriple.getArch() == Triple::x86_64 && getOpcode() == 325) ||
+      (ModuleTriple.getArch() == Triple::aarch64 && getOpcode() == 261)) {
+    for (const MachineOperand &MO : operands()) {
+      if (!MO.isReg()) {
+        continue;
+      }
+
+      Register Reg = MO.getReg();
+      if (Reg == 0) {
+        continue;
+      }
+      // return true if it's gep from a ref ptr
+      for (auto &U : MRI->use_nodbg_operands(Reg)) {
+        if (U.getParent()->getOpcode() == TargetOpcode::STATEPOINT) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
 const MachineFunction *MachineInstr::getMF() const {
   return getParent()->getParent();
 }

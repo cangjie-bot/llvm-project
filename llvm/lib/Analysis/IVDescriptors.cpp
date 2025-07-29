@@ -12,6 +12,7 @@
 
 #include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/DemandedBits.h"
+#include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
@@ -324,17 +325,18 @@ bool RecurrenceDescriptor::AddReductionVar(
         return false;
       }
 
-      const SCEV *PtrScev = SE->getSCEV(SI->getPointerOperand());
+      const SCEV *PtrScev = SE->getSCEV(getLoadStorePointerOperand(Cur));
       // Check it is the same address as previous stores
       if (IntermediateStore) {
         const SCEV *OtherScev =
-            SE->getSCEV(IntermediateStore->getPointerOperand());
+            SE->getSCEV(getLoadStorePointerOperand(IntermediateStore));
 
         if (OtherScev != PtrScev) {
-          LLVM_DEBUG(dbgs() << "Storing reduction value to different addresses "
-                            << "inside the loop: " << *SI->getPointerOperand()
-                            << " and "
-                            << *IntermediateStore->getPointerOperand() << '\n');
+          LLVM_DEBUG(dbgs()
+                     << "Storing reduction value to different addresses "
+                     << "inside the loop: " << *getLoadStorePointerOperand(Cur)
+                     << " and "
+                     << *getLoadStorePointerOperand(IntermediateStore) << '\n');
           return false;
         }
       }
@@ -342,8 +344,8 @@ bool RecurrenceDescriptor::AddReductionVar(
       // Check the pointer is loop invariant
       if (!SE->isLoopInvariant(PtrScev, TheLoop)) {
         LLVM_DEBUG(dbgs() << "Storing reduction value to non-uniform address "
-                          << "inside the loop: " << *SI->getPointerOperand()
-                          << '\n');
+                          << "inside the loop: "
+                          << *getLoadStorePointerOperand(Cur) << '\n');
         return false;
       }
 
@@ -516,7 +518,8 @@ bool RecurrenceDescriptor::AddReductionVar(
     // Check that stored value goes to the phi node again. This way we make sure
     // that the value stored in IntermediateStore is indeed the final reduction
     // value.
-    if (!is_contained(Phi->operands(), IntermediateStore->getValueOperand())) {
+    if (!is_contained(Phi->operands(),
+                      getStoreValueOperand(IntermediateStore))) {
       LLVM_DEBUG(dbgs() << "Not a final reduction value stored: "
                         << *IntermediateStore << '\n');
       return false;
@@ -525,7 +528,7 @@ bool RecurrenceDescriptor::AddReductionVar(
     // If there is an exit instruction it's value should be stored in
     // IntermediateStore
     if (ExitInstruction &&
-        IntermediateStore->getValueOperand() != ExitInstruction) {
+        getStoreValueOperand(IntermediateStore) != ExitInstruction) {
       LLVM_DEBUG(dbgs() << "Last store Instruction of reduction value does not "
                            "store last calculated value of the reduction: "
                         << *IntermediateStore << '\n');
@@ -535,7 +538,8 @@ bool RecurrenceDescriptor::AddReductionVar(
     // If all uses are inside the loop (intermediate stores), then the
     // reduction value after the loop will be the one used in the last store.
     if (!ExitInstruction)
-      ExitInstruction = cast<Instruction>(IntermediateStore->getValueOperand());
+      ExitInstruction =
+          cast<Instruction>(getStoreValueOperand(IntermediateStore));
   }
 
   if (!FoundStartPHI || !FoundReduxOp || !ExitInstruction)

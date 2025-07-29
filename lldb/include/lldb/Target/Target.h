@@ -429,10 +429,15 @@ public:
 
   void SetIsForUtilityExpr(bool b) { m_running_utility_expression = b; }
 
+  bool IsCangjieUserExpr() const { return m_cangjie_user_expr; }
+
+  void SetCangjieUserExpr(bool cangjie_user_expr) { m_cangjie_user_expr = cangjie_user_expr; }
+
 private:
   ExecutionPolicy m_execution_policy = default_execution_policy;
   lldb::LanguageType m_language = lldb::eLanguageTypeUnknown;
   std::string m_prefix;
+  bool m_cangjie_user_expr = true;
   bool m_coerce_to_id = false;
   bool m_unwind_on_error = true;
   bool m_ignore_breakpoints = false;
@@ -1559,6 +1564,23 @@ public:
   llvm::json::Value ReportStatistics();
 
   TargetStats &GetStatistics() { return m_stats; }
+
+  struct CJThread {
+    std::vector<lldb::StackFrameSP> Frames;
+    uint64_t cjthreadID;
+    std::string name;
+    std::string status;
+    CJThread(std::vector<lldb::StackFrameSP> Frames, uint64_t id,
+             std::string name, std::string state) {
+      this->Frames = Frames;
+      this->cjthreadID = id;
+      this->name = name;
+      this->status = state;
+    }
+    ~CJThread() = default;
+  };
+
+  std::vector<std::shared_ptr<struct CJThread>> GetAllCJThreadStatus(lldb_private::ExecutionContext &exe_ctx);
 
 private:
   /// Construct with optional file and arch.

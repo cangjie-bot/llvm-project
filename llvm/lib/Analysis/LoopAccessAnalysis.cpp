@@ -45,6 +45,7 @@
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/PatternMatch.h"
@@ -134,6 +135,34 @@ static cl::opt<unsigned> MaxForkedSCEVDepth(
     "max-forked-scev-depth", cl::Hidden,
     cl::desc("Maximum recursion depth when finding forked SCEVs (default = 5)"),
     cl::init(5));
+cl::opt<bool> EnableCJGCWriteLoopVectorization(
+    "enable-cj-gc-write-loop-vectorization", cl::init(true),
+    cl::desc("enable cj gc write loop vectorization"));
+namespace llvm {
+bool isVectorizableCJGCWrite(Instruction *I) {
+  if (!EnableCJGCWriteLoopVectorization) {
+    return false;
+  }
+  auto *CI = dyn_cast<CallInst>(I);
+  if (CI == nullptr) {
+    return false;
+  }
+  if (CI->getIntrinsicID() != Intrinsic::cj_gcwrite_ref) {
+    return false;
+  }
+  Type *AT = CI->getArgOperand(0)->getType();
+  if (AT->getTypeID() == Type::HalfTyID || AT->getTypeID() == Type::FloatTyID ||
+      AT->getTypeID() == Type::DoubleTyID) {
+    return true;
+  }
+  // only support vectorized gcwrite.integer now
+  if (AT->getTypeID() != Type::IntegerTyID) {
+    return false;
+  }
+  // i1 vectorized is not supported.
+  return AT->getIntegerBitWidth() != 1;
+}
+} // namespace llvm
 
 bool VectorizerParams::isInterleaveForced() {
   return ::VectorizationInterleave.getNumOccurrences() > 0;
@@ -1548,22 +1577,13 @@ bool llvm::isConsecutiveAccess(Value *A, Value *B, const DataLayout &DL,
   return Diff && *Diff == 1;
 }
 
-void MemoryDepChecker::addAccess(StoreInst *SI) {
-  visitPointers(SI->getPointerOperand(), *InnermostLoop,
-                [this, SI](Value *Ptr) {
-                  Accesses[MemAccessInfo(Ptr, true)].push_back(AccessIdx);
-                  InstMap.push_back(SI);
-                  ++AccessIdx;
-                });
-}
-
-void MemoryDepChecker::addAccess(LoadInst *LI) {
-  visitPointers(LI->getPointerOperand(), *InnermostLoop,
-                [this, LI](Value *Ptr) {
-                  Accesses[MemAccessInfo(Ptr, false)].push_back(AccessIdx);
-                  InstMap.push_back(LI);
-                  ++AccessIdx;
-                });
+void MemoryDepChecker::addAccess(Instruction *I) {
+  visitPointers(
+      getLoadStorePointerOperand(I), *InnermostLoop, [this, I](Value *Ptr) {
+        Accesses[MemAccessInfo(Ptr, !isa<LoadInst>(I))].push_back(AccessIdx);
+        InstMap.push_back(I);
+        ++AccessIdx;
+      });
 }
 
 MemoryDepChecker::VectorizationSafetyStatus
@@ -2108,7 +2128,7 @@ void LoopAccessInfo::analyzeLoop(AAResults *AA, LoopInfo *LI,
                                  DominatorTree *DT) {
   // Holds the Load and Store instructions.
   SmallVector<LoadInst *, 16> Loads;
-  SmallVector<StoreInst *, 16> Stores;
+  SmallVector<Instruction *, 16> Stores;
 
   // Holds all the different accesses in the loop.
   unsigned NumReads = 0;
@@ -2126,7 +2146,8 @@ void LoopAccessInfo::analyzeLoop(AAResults *AA, LoopInfo *LI,
 
   const bool EnableMemAccessVersioningOfLoop =
       EnableMemAccessVersioning &&
-      !TheLoop->getHeader()->getParent()->hasOptSize();
+      !TheLoop->getHeader()->getParent()->hasOptSize() &&
+      !TheLoop->HasGCWriteInLoop;
 
   // For each block.
   for (BasicBlock *BB : TheLoop->blocks()) {
@@ -2149,10 +2170,13 @@ void LoopAccessInfo::analyzeLoop(AAResults *AA, LoopInfo *LI,
       if (HasComplexMemInst)
         continue;
 
+      bool IsCJGCWrite =
+          TheLoop->IsInVectorizedProcess && isVectorizableCJGCWrite(&I);
+
       // If this is a load, save it. If this instruction can read from memory
       // but is not a load, then we quit. Notice that we don't handle function
       // calls that read or write.
-      if (I.mayReadFromMemory()) {
+      if (!IsCJGCWrite && I.mayReadFromMemory()) {
         // Many math library functions read the rounding mode. We will only
         // vectorize a loop if it contains known function calls that don't set
         // the flag. Therefore, it is safe to ignore this read from memory.
@@ -2189,7 +2213,7 @@ void LoopAccessInfo::analyzeLoop(AAResults *AA, LoopInfo *LI,
       }
 
       // Save 'store' instructions. Abort if other instructions write to memory.
-      if (I.mayWriteToMemory()) {
+      if (!IsCJGCWrite && I.mayWriteToMemory()) {
         auto *St = dyn_cast<StoreInst>(&I);
         if (!St) {
           recordAnalysis("CantVectorizeInstruction", St)
@@ -2209,6 +2233,12 @@ void LoopAccessInfo::analyzeLoop(AAResults *AA, LoopInfo *LI,
         DepChecker->addAccess(St);
         if (EnableMemAccessVersioningOfLoop)
           collectStridedAccess(St);
+      }
+
+      if (IsCJGCWrite) {
+        NumStores++;
+        Stores.push_back(&I);
+        DepChecker->addAccess(&I);
       }
     } // Next instr.
   } // Next block.
@@ -2243,27 +2273,29 @@ void LoopAccessInfo::analyzeLoop(AAResults *AA, LoopInfo *LI,
   // to the same address.
   SmallPtrSet<Value *, 16> UniformStores;
 
-  for (StoreInst *ST : Stores) {
-    Value *Ptr = ST->getPointerOperand();
+  for (Instruction *CurInst : Stores) {
+    Value *Ptr = getLoadStorePointerOperand(CurInst);
 
     if (isUniform(Ptr)) {
       // Record store instructions to loop invariant addresses
-      StoresToInvariantAddresses.push_back(ST);
+      StoresToInvariantAddresses.push_back(CurInst);
       HasDependenceInvolvingLoopInvariantAddress |=
           !UniformStores.insert(Ptr).second;
     }
-
     // If we did *not* see this pointer before, insert it to  the read-write
     // list. At this phase it is only a 'write' list.
-    Type *AccessTy = getLoadStoreType(ST);
+    Type *AccessTy = getLoadStoreType(CurInst);
     if (Seen.insert({Ptr, AccessTy}).second) {
       ++NumReadWrites;
 
-      MemoryLocation Loc = MemoryLocation::get(ST);
+      MemoryLocation Loc =
+          isa<StoreInst>(CurInst)
+              ? MemoryLocation::get(dyn_cast<StoreInst>(CurInst))
+              : MemoryLocation::get(dyn_cast<CallBase>(CurInst));
       // The TBAA metadata could have a control dependency on the predication
       // condition, so we cannot rely on it when determining whether or not we
       // need runtime pointer checks.
-      if (blockNeedsPredication(ST->getParent(), TheLoop, DT))
+      if (blockNeedsPredication(CurInst->getParent(), TheLoop, DT))
         Loc.AATags.TBAA = nullptr;
 
       visitPointers(const_cast<Value *>(Loc.Ptr), *TheLoop,
@@ -2502,6 +2534,7 @@ bool LoopAccessInfo::isUniform(Value *V) const {
 
 void LoopAccessInfo::collectStridedAccess(Value *MemAccess) {
   Value *Ptr = getLoadStorePointerOperand(MemAccess);
+
   if (!Ptr)
     return;
 

@@ -370,6 +370,9 @@ public:
 
   FunctionCallee getOrInsertFunction(StringRef Name, FunctionType *T);
 
+  Function *declareCJRuntimeFunc(StringRef Name, FunctionType *T,
+                                 bool GCLeafFunc, bool GCMalloc = false);
+
   /// Look up the specified function in the module symbol table. If it does not
   /// exist, add a prototype for the function and return it. This function
   /// guarantees to return a constant of pointer to the specified function type

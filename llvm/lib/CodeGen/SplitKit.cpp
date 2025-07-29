@@ -174,8 +174,12 @@ void SplitAnalysis::analyzeUses() {
   // Get use slots form the use-def chain.
   const MachineRegisterInfo &MRI = MF.getRegInfo();
   for (MachineOperand &MO : MRI.use_nodbg_operands(CurLI->reg()))
-    if (!MO.isUndef())
+    // We don't want to split in the statepiont instruction point,
+    // so we don't put it in the UseSlots here.
+    if (!MO.isUndef() &&
+        MO.getParent()->getOpcode() != TargetOpcode::STATEPOINT) {
       UseSlots.push_back(LIS.getInstructionIndex(*MO.getParent()).getRegSlot());
+    }
 
   array_pod_sort(UseSlots.begin(), UseSlots.end());
 
@@ -223,9 +227,34 @@ void SplitAnalysis::calcLiveBlockInfo() {
     if (UseI == UseE || *UseI >= Stop) {
       ++NumThroughBlocks;
       ThroughBlocks.set(BI.MBB->getNumber());
-      // The range shouldn't end mid-block if there are no uses. This shouldn't
-      // happen.
-      assert(LVI->end >= Stop && "range ends mid block with no uses");
+      if (LVI->end < Stop) {
+        // The range shouldn't end mid-block if there are no uses and don`t
+        // end in statepoint. This shouldn't happen.
+        if (LIS.getInstructionFromIndex(LVI->end)->getOpcode() !=
+            TargetOpcode::STATEPOINT) {
+          llvm_unreachable("range ends mid block with no uses");
+          return;
+        }
+        // When the LVI ends with a statepoint, it may occur in mid-block.
+        // We do not want to split the LVI at the statepoint. In this case,
+        // the current LVI search ends, and the next LVI continues.
+        // 7200B bb1.start
+        // 7344B STATEPOINT %3 ...  # LVI->end
+        // 7584B bb1.end            # Stop
+        // 7952B bb2.start
+        // 7968B MOV64rm %3...      # UseI
+        // 8176B bb2.end
+        if (++LVI == LVE) {
+          break;
+        }
+        // Pick the next basic block.
+        if (LVI->start < Stop) {
+          ++MFI;
+        } else {
+          MFI = LIS.getMBBFromIndex(LVI->start)->getIterator();
+        }
+        continue;
+      }
     } else {
       // This block has uses. Find the first and last uses in the block.
       BI.FirstInstr = *UseI;

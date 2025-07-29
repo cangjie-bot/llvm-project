@@ -57,7 +57,7 @@ static void StackStripMain(SymbolizedStack *frames) {
 
   if (last_frame2 == 0)
     return;
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   const char *last = last_frame->info.function;
   const char *last2 = last_frame2->info.function;
   // Strip frame above 'main'
@@ -141,7 +141,7 @@ bool ShouldReport(ThreadState *thr, ReportType typ) {
     case ReportTypeSignalUnsafe:
       return flags()->report_signal_unsafe;
     case ReportTypeThreadLeak:
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
       // It's impossible to join phantom threads
       // in the child after fork.
       if (ctx->after_multithreaded_fork)
@@ -277,7 +277,7 @@ int ScopedReportBase::AddMutex(uptr addr, StackID creation_stack_id) {
 void ScopedReportBase::AddLocation(uptr addr, uptr size) {
   if (addr == 0)
     return;
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
   int fd = -1;
   Tid creat_tid = kInvalidTid;
   StackID creat_stack = 0;

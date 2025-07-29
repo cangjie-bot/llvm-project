@@ -56,6 +56,12 @@ static cl::opt<unsigned> MaxStatepointsWithRegs(
     "fixup-max-csr-statepoints", cl::Hidden,
     cl::desc("Max number of statepoints allowed to pass GC Ptrs in registers"));
 
+cl::opt<bool>
+    EnableCalledSaveForStackMap("enable-callee-saved-stackmap", cl::init(true),
+                                cl::ReallyHidden,
+                                cl::desc("enable called saved for stackmap."
+                                         " ALWAYS disable if optlevel=-O0"));
+
 namespace {
 
 class FixupStatepointCallerSaved : public MachineFunctionPass {
@@ -597,6 +603,9 @@ public:
 } // namespace
 
 bool FixupStatepointCallerSaved::runOnMachineFunction(MachineFunction &MF) {
+  if (EnableCalledSaveForStackMap) {
+    PassGCPtrInCSR = true;
+  }
   if (skipFunction(MF.getFunction()))
     return false;
 
@@ -605,10 +614,15 @@ bool FixupStatepointCallerSaved::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   SmallVector<MachineInstr *, 16> Statepoints;
-  for (MachineBasicBlock &BB : MF)
-    for (MachineInstr &I : BB)
-      if (I.getOpcode() == TargetOpcode::STATEPOINT)
-        Statepoints.push_back(&I);
+  for (MachineBasicBlock &BB : MF) {
+    for (MachineInstr &I : BB) {
+      if (I.getOpcode() == TargetOpcode::STATEPOINT) {
+        StatepointOpers SO(&I);
+        if (!SO.isCJStackCheck())
+          Statepoints.push_back(&I);
+      }
+    }
+  }
 
   if (Statepoints.empty())
     return false;

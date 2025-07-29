@@ -92,6 +92,8 @@ public:
 
   void SetLanguageFlags(uint64_t flags) override;
 
+  void UpdateDynamicType();
+
 protected:
   bool UpdateValue() override;
 

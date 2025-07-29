@@ -584,6 +584,11 @@ public:
                                MDNode *ScopeTag = nullptr,
                                MDNode *NoAliasTag = nullptr);
 
+  CallInst *CreateCJMemSet(Value *Ptr, Value *Val, Value *Size, MaybeAlign Align,
+                           bool isVolatile = false, MDNode *TBAATag = nullptr,
+                           MDNode *ScopeTag = nullptr,
+                           MDNode *NoAliasTag = nullptr);
+
   /// Create and insert an element unordered-atomic memset of the region of
   /// memory starting at the given pointer to the given value.
   ///
@@ -810,6 +815,15 @@ public:
                                    ArrayRef<Value *> GCArgs,
                                    const Twine &Name = "");
 
+  /// Create a call to the experimental.gc.statepoint intrinsic to
+  /// start a new statepoint sequence.
+  CallInst *CreateCJGCStatepointCall(uint64_t ID, uint32_t NumPatchBytes,
+                                     FunctionCallee ActualCallee,
+                                     uint32_t Flags, ArrayRef<Value *> CallArgs,
+                                     ArrayRef<Value *> GCArgs,
+                                     ArrayRef<Value *> StructArgs,
+                                     const Twine &Name = "");
+
   /// Create an invoke to the experimental.gc.statepoint intrinsic to
   /// start a new statepoint sequence.
   InvokeInst *
@@ -817,7 +831,8 @@ public:
                            FunctionCallee ActualInvokee, BasicBlock *NormalDest,
                            BasicBlock *UnwindDest, ArrayRef<Value *> InvokeArgs,
                            Optional<ArrayRef<Value *>> DeoptArgs,
-                           ArrayRef<Value *> GCArgs, const Twine &Name = "");
+                           ArrayRef<Value *> GCArgs,
+                           const Twine &Name = "");
 
   /// Create an invoke to the experimental.gc.statepoint intrinsic to
   /// start a new statepoint sequence.
@@ -836,13 +851,28 @@ public:
                            FunctionCallee ActualInvokee, BasicBlock *NormalDest,
                            BasicBlock *UnwindDest, ArrayRef<Use> InvokeArgs,
                            Optional<ArrayRef<Value *>> DeoptArgs,
-                           ArrayRef<Value *> GCArgs, const Twine &Name = "");
+                           ArrayRef<Value *> GCArgs,
+                           const Twine &Name = "");
+
+  /// Create an invoke to the cj.gc.statepoint intrinsic to
+  /// start a new statepoint sequence.
+  InvokeInst *CreateCJGCStatepointInvoke(
+      uint64_t ID, uint32_t NumPatchBytes, FunctionCallee ActualInvokee,
+      BasicBlock *NormalDest, BasicBlock *UnwindDest, uint32_t Flags,
+      ArrayRef<Value *> InvokeArgs, ArrayRef<Value *> GCArgs,
+      ArrayRef<Value *> StructArgs, const Twine &Name = "");
 
   /// Create a call to the experimental.gc.result intrinsic to extract
   /// the result from a call wrapped in a statepoint.
   CallInst *CreateGCResult(Instruction *Statepoint,
                            Type *ResultType,
                            const Twine &Name = "");
+
+  /// Create a call to the cj.gc.result intrinsic to extract
+  /// the result from a call wrapped in a statepoint.
+  CallInst *CreateCJGCResult(Instruction *Statepoint,
+                             Type *ResultType,
+                             const Twine &Name = "");
 
   /// Create a call to the experimental.gc.relocate intrinsics to
   /// project the relocated value of one pointer from the statepoint.
@@ -851,6 +881,14 @@ public:
                              int DerivedOffset,
                              Type *ResultType,
                              const Twine &Name = "");
+
+  /// Create a call to the cj.gc.relocate intrinsics to
+  /// project the relocated value of one pointer from the statepoint.
+  CallInst *CreateCJGCRelocate(Instruction *Statepoint,
+                               int BaseOffset,
+                               int DerivedOffset,
+                               Type *ResultType,
+                               const Twine &Name = "");
 
   /// Create a call to the experimental.gc.pointer.base intrinsic to get the
   /// base pointer for the specified derived pointer.

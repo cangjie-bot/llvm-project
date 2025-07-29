@@ -675,9 +675,10 @@ Status Scalar::SetValueFromCString(const char *value_str, Encoding encoding,
     // point type. This function should be refactored to take an explicit
     // semantics argument.
     const llvm::fltSemantics &sem =
-        byte_size <= 4 ? APFloat::IEEEsingle()
-                       : byte_size <= 8 ? APFloat::IEEEdouble()
-                                        : APFloat::x87DoubleExtended();
+        byte_size <= 2 ? APFloat::IEEEhalf()
+                       : byte_size <= 4 ? APFloat::IEEEsingle()
+                                        : byte_size <= 8 ? APFloat::IEEEdouble()
+                                                         : APFloat::x87DoubleExtended();
     APFloat f(sem);
     if (llvm::Expected<APFloat::opStatus> op =
             f.convertFromString(value_str, APFloat::rmNearestTiesToEven)) {

@@ -29,6 +29,8 @@ tablegen(LLVM AArch64GenExegesis.inc -gen-exegesis)
 
 add_public_tablegen_target(AArch64CommonTableGen)
 
+include_directories(${CANGJIE_DEMANGLE_DIR})
+
 add_llvm_target(AArch64CodeGen
   GISel/AArch64CallLowering.cpp
   GISel/AArch64GlobalISelUtils.cpp
@@ -84,6 +86,9 @@ add_llvm_target(AArch64CodeGen
   AArch64TargetTransformInfo.cpp
   SVEIntrinsicOpts.cpp
   AArch64SIMDInstrOpt.cpp
+
+  ADDITIONAL_HEADER_DIRS
+  ${CANGJIE_DEMANGLE_DIR}
 
   DEPENDS
   intrinsics_gen

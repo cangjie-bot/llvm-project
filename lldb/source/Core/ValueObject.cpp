@@ -48,6 +48,8 @@
 #include "lldb/Utility/Stream.h"
 #include "lldb/Utility/StreamString.h"
 #include "lldb/lldb-private-types.h"
+#include "lldb/Target/SectionLoadList.h"
+#include "lldb/Symbol/TypeList.h"
 
 #include "llvm/Support/Compiler.h"
 
@@ -217,13 +219,17 @@ bool ValueObject::UpdateFormatsIfNeeded() {
     SetValueFormat(DataVisualization::GetFormat(*this, eNoDynamicValues));
     SetSummaryFormat(
         DataVisualization::GetSummaryFormat(*this, GetDynamicValueType()));
-#if LLDB_ENABLE_PYTHON
     SetSyntheticChildren(
         DataVisualization::GetSyntheticChildren(*this, GetDynamicValueType()));
-#endif
   }
 
   return any_change;
+}
+
+CompilerType ValueObject::GetDynamicType() {
+  auto dynamic_value = new ValueObjectDynamicValue(*this, eNoDynamicValues);
+  dynamic_value->UpdateDynamicType();
+  return dynamic_value->GetCompilerType();
 }
 
 void ValueObject::SetNeedsUpdate() {
@@ -245,7 +251,6 @@ void ValueObject::ClearDynamicTypeInformation() {
 
 CompilerType ValueObject::MaybeCalculateCompleteType() {
   CompilerType compiler_type(GetCompilerTypeImpl());
-
   if (m_flags.m_did_calculate_complete_objc_class_type) {
     if (m_override_type.IsValid())
       return m_override_type;
@@ -386,6 +391,10 @@ ValueObjectSP ValueObject::GetChildAtIndex(size_t idx, bool can_create) {
     }
 
     ValueObject *child = m_children.GetChildAtIndex(idx);
+    if (child && (child->GetName() == "$ti*" || child->GetName() == "$ti")) {
+      // Filter typeinfo of generic variable.
+      return child_sp;
+    }
     if (child != nullptr)
       return child->GetSP();
   }
@@ -494,7 +503,8 @@ ValueObjectSP ValueObject::GetChildMemberWithName(ConstString name,
 }
 
 size_t ValueObject::GetNumChildren(uint32_t max) {
-  UpdateValueIfNeeded();
+  if (IsPossibleDynamicType())
+    UpdateValueIfNeeded(false);
 
   if (max < UINT32_MAX) {
     if (m_flags.m_children_count_valid) {
@@ -1354,7 +1364,7 @@ bool ValueObject::DumpPrintableRepresentation(
         str = GetSummaryAsCString();
       else if (val_obj_display == eValueObjectRepresentationStyleSummary) {
         if (!CanProvideValue()) {
-          strm.Printf("%s @ %s", GetTypeName().AsCString(),
+          strm.Printf("%s @ %s", GetDisplayTypeName().AsCString(),
                       GetLocationAsCString());
           str = strm.GetString();
         } else
@@ -1463,6 +1473,11 @@ addr_t ValueObject::GetPointerValue(AddressType *address_type) {
 }
 
 bool ValueObject::SetValueFromCString(const char *value_str, Status &error) {
+  if (GetCompilerType().GetTypeName().GetStringRef().contains("$G")) {
+    auto dynamic_value = new ValueObjectDynamicValue(*this, eNoDynamicValues);
+    dynamic_value->UpdateDynamicType();
+  }
+
   error.Clear();
   // Make sure our value is up to date first so that our location and location
   // type is valid.
@@ -1593,6 +1608,11 @@ bool ValueObject::IsRuntimeSupportValue() {
 }
 
 bool ValueObject::IsNilReference() {
+  ConstString match("^std[.]core::Enum\\$Option<.+>( \\*)?$");
+  RegularExpression regex(match.GetStringRef());
+  if (regex.Execute(GetTypeName().AsCString())) {
+    return false;
+  }
   if (Language *language = Language::FindPlugin(GetObjectRuntimeLanguage())) {
     return language->IsNilReference(*this);
   }
@@ -2066,6 +2086,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
   llvm::StringRef remainder = expression;
 
   while (true) {
+    remainder = remainder.trim();
     llvm::StringRef temp_expression = remainder;
 
     CompilerType root_compiler_type = root->GetCompilerType();
@@ -2139,7 +2160,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
         ValueObjectSP child_valobj_sp =
             root->GetChildMemberWithName(child_name, true);
 
-        if (child_valobj_sp.get()) // we know we are done, so just return
+        if (!root->HasSyntheticValue() && child_valobj_sp.get()) // we know we are done, so just return
         {
           *reason_to_stop =
               ValueObject::eExpressionPathScanEndReasonEndOfString;
@@ -2208,7 +2229,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
 
         ValueObjectSP child_valobj_sp =
             root->GetChildMemberWithName(child_name, true);
-        if (child_valobj_sp.get()) // store the new root and move on
+        if (!root->HasSyntheticValue() && child_valobj_sp.get()) // store the new root and move on
         {
           root = child_valobj_sp;
           remainder = next_separator;
@@ -2335,6 +2356,56 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
       // If this was an empty expression it would have been caught by the if
       // above.
       assert(!bracket_expr.empty());
+
+      bracket_expr = bracket_expr.trim();
+
+      if (bracket_expr.contains("..")) {
+        // handling Cangjie Array slice and except VArray.
+        ConstString match("(.+[.]|^)(VArray)<.+>$");
+        RegularExpression regex(match.GetStringRef());
+        if (regex.Execute(root->GetTypeName().AsCString())) {
+          return nullptr;
+        }
+        llvm::StringRef sleft, sright;
+        uint32_t low_index, high_index;
+        std::tie(sleft, sright) = bracket_expr.split("..");
+        if (sleft.getAsInteger(0, low_index)) {
+          if (sleft.empty()) {
+            low_index = 0;
+          } else {
+            low_index = UINT32_MAX;
+          }
+        }
+
+        if (sright.getAsInteger(0, high_index)) {
+          if (sright.empty()) {
+            high_index = UINT32_MAX;
+          } else {
+            high_index = 0;
+          }
+        }
+
+        if (low_index > high_index) {
+          low_index = UINT32_MAX;
+          high_index = UINT32_MAX;
+        }
+
+        if (low_index == 0 && high_index == 0) {
+          low_index = UINT32_MAX - 1;
+        }
+
+        if (root->HasSyntheticValue()) {
+            root = root->GetSyntheticValue();
+        }
+
+        root = root->GetChildAtIndex(high_index * (UINT32_MAX + 1ULL) + low_index, true);
+        if (!root) {
+          return nullptr;
+        } else {
+          remainder = temp_expression.substr(close_bracket_position + 1); // skip ]
+          continue;
+        }
+      }
 
       if (!bracket_expr.contains('-')) {
         // if no separator, this is of the form [N].  Note that this cannot be
@@ -3136,4 +3207,113 @@ ValueObjectSP ValueObject::Persist() {
   persistent_var_sp->m_flags |= ExpressionVariable::EVIsProgramReference;
 
   return persistent_var_sp->GetValueObject();
+}
+
+bool ValueObject::GetCangjieDynamicType(
+  TypeAndOrName &class_type_or_name, bool should_update, bool should_check_parent) {
+  if (IsCangjieGenericType()) {
+    return true;
+  }
+  auto size = GetCompilerType().GetByteSize(nullptr);
+  // do not find dynamicType if compilerType's size less than 8 byte.
+  // for interfaces, dynamic type lookup is mandatory, regardless of size.
+  if (!size || *size < 8) {
+    return false;
+  }
+  Log *log = GetLog(LLDBLog::Expressions);
+  ConstString match("^std[.]core::(Enum\\$)?Option<.+>( \\*)?$|(.+)?E2\\$");
+  RegularExpression regex(match.GetStringRef());
+  if (regex.Execute(GetTypeName().AsCString())) {
+    return false;
+  }
+  auto type_class = GetCompilerType().GetTypeClass() == lldb::eTypeClassTypedef ?
+                    GetCompilerType().GetTypedefedType().GetTypeClass() :
+                    GetCompilerType().GetTypeClass();
+  if (type_class == lldb::eTypeClassBuiltin) {
+    return false;
+  }
+
+  if (should_check_parent) {
+    if (GetParent() && GetParent()->GetAddressOf() == GetAddressOf()) {
+      return false;
+    }
+  }
+  Status error;
+  uint64_t type_addr = 0;
+  class_type_or_name.Clear();
+  auto target = GetTargetSP();
+  target->ReadMemory(Address(this->GetAddressOf()), &type_addr, sizeof(uint64_t), error);
+  if (error.Fail()) {
+    return false;
+  }
+  target->ReadMemory(Address(type_addr), &type_addr, sizeof(uint64_t), error);
+  if (error.Fail()) {
+    return false;
+  }
+  // max type_name length is 128.
+  char type_name[128];
+  target->ReadMemory(Address(type_addr), &type_name, 128, error);
+  if (error.Fail()) {
+    return false;
+  }
+
+  std::string dynamic_name(type_name);
+  auto pos = dynamic_name.find(":");
+  while (pos != std::string::npos) {
+    dynamic_name.replace(pos, 1, "::");
+    // "::" size is 2.
+    pos = dynamic_name.find(":", pos + 2);
+  }
+  lldb_private::TypeList types;
+  llvm::DenseSet<SymbolFile *> searched_symbol_files;
+  pos = dynamic_name.rfind(".ti");
+  bool is_ti_type = false;
+  if (!GetTypeName().GetStringRef().contains("E1$") && pos == dynamic_name.length() - std::string(".ti").length()) {
+    dynamic_name = dynamic_name.substr(0, pos);
+    if (dynamic_name != GetTypeName().AsCString()) {
+      is_ti_type = true;
+    }
+  }
+  target->GetImages().FindTypes(nullptr, ConstString(dynamic_name), true, UINT32_MAX,
+                                searched_symbol_files, types);
+  TypeSP type_sp = types.GetSize() == 0 ? TypeSP() : types.GetTypeAtIndex(0);
+  if (type_sp != nullptr) {
+    class_type_or_name.SetTypeSP(type_sp);
+    class_type_or_name.SetName(type_sp->GetFullCompilerType().GetTypeName().AsCString());
+    if (should_update) {
+      m_override_type = type_sp->GetFullCompilerType();
+      LLDB_LOGF(log, "Found dynamic type with name %s", type_sp->GetFullCompilerType().GetTypeName().AsCString());
+    }
+    return true;
+  }
+  if (is_ti_type) {
+    has_typeinfo = true;
+    return true;
+  }
+  LLDB_LOGF(log, "Can not found dynamic type with variable name %s", this->GetName().AsCString());
+  return false;
+}
+
+bool ValueObject::IsCangjieGenericType() {
+  if (GetCompilerType().GetTypeName().GetStringRef().contains("$G") ||
+    GetCompilerType().GetTypeName().GetStringRef().contains("Interface$")) {
+    return true;
+  }
+  if (GetCompilerType().GetTypeClass() ==lldb::eTypeClassTypedef) {
+    return GetCompilerType().GetTypedefedType().GetTypeName().GetStringRef().contains("Interface$");
+  }
+  return has_typeinfo;
+}
+
+bool ValueObject::IsCangjieDynamicType() {
+  TypeAndOrName class_type_or_name;
+  return GetCangjieDynamicType(class_type_or_name, false);
+}
+
+bool ValueObject::IsGenericValueType() {
+  if (IsCangjieGenericType()) {
+    GetDynamicType();
+    return is_generic_value_type;
+  }
+  return false;
 }

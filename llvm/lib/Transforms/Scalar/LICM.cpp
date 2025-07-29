@@ -65,13 +65,19 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/PredIteratorCache.h"
+#include "llvm/IR/SafepointIRVerifier.h"
+#include "llvm/IR/Type.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -88,6 +94,9 @@ using namespace llvm;
 namespace llvm {
 class BlockFrequencyInfo;
 class LPMUpdater;
+
+extern cl::opt<bool> LICMDisableBarrier;
+extern cl::opt<bool> CJPipeline;
 } // namespace llvm
 
 #define DEBUG_TYPE "licm"
@@ -154,7 +163,7 @@ static bool isSafeToExecuteUnconditionally(
     Instruction &Inst, const DominatorTree *DT, const TargetLibraryInfo *TLI,
     const Loop *CurLoop, const LoopSafetyInfo *SafetyInfo,
     OptimizationRemarkEmitter *ORE, const Instruction *CtxI,
-    bool AllowSpeculation);
+    bool AllowSpeculation, MemorySSA *MSSA, AAResults *AA);
 static bool pointerInvalidatedByLoop(MemorySSA *MSSA, MemoryUse *MU,
                                      Loop *CurLoop, Instruction &I,
                                      SinkAndHoistLICMFlags &Flags);
@@ -173,7 +182,7 @@ static void moveInstructionBefore(Instruction &I, Instruction &Dest,
 
 static void foreachMemoryAccess(MemorySSA *MSSA, Loop *L,
                                 function_ref<void(Instruction *)> Fn);
-static SmallVector<SmallSetVector<Value *, 8>, 0>
+static SmallVector<MustAliasPair, 0>
 collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L);
 
 namespace {
@@ -379,6 +388,62 @@ llvm::SinkAndHoistLICMFlags::SinkAndHoistLICMFlags(
       }
 }
 
+// Get all load instructions's base pointer in br pred for jumps to implicit
+// exception BB. Currently, only IndexOutOfBoundsException and OverflowException
+// are considered.
+static void
+collectBBBasePointers(SmallPtrSet<BasicBlock *, 4> &BBS,
+                      DenseMap<BasicBlock *, DenseSet<Value *>> &BaseInsts) {
+  for (BasicBlock *BB : BBS) {
+    if (!isa<BranchInst>(BB->getTerminator()))
+      continue;
+    auto *BI = cast<BranchInst>(BB->getTerminator());
+    if (BI->isUnconditional())
+      continue;
+    BasicBlock *BB0 = BI->getSuccessor(0), *BB1 = BI->getSuccessor(1);
+    // A normal br, skip it
+    if (!isa<UnreachableInst>(BB0->getTerminator()) &&
+        !isa<UnreachableInst>(BB1->getTerminator()))
+      continue;
+    if (isa<UnreachableInst>(BB0->getTerminator()))
+      std::swap(BB0, BB1);
+
+    // For exception BBs of IndexOutOfBounds and OverflowException, record
+    // their base pointers.
+    bool IsValidUnreachableBB = false;
+    for (Instruction &I : *BB1) {
+      if (auto *CI = dyn_cast<CallInst>(&I)) {
+        Function *F = CI->getCalledFunction();
+        if (!F)
+          continue;
+        const auto &FuncName = F->getName();
+        if (FuncName.contains("IndexOutOfBoundsException") ||
+            FuncName.contains("OverflowException") ||
+            FuncName.contains("NoneValueException")) {
+          IsValidUnreachableBB = true;
+          break;
+        }
+      }
+    }
+    if (IsValidUnreachableBB) {
+      CmpInst::Predicate Pred;
+      Value *LV;
+      Value *RV;
+      using namespace PatternMatch;
+      if (match(BI->getCondition(), m_Cmp(Pred, m_Value(LV), m_Value(RV)))) {
+        if (auto *Load = dyn_cast<LoadInst>(LV))
+          BaseInsts[BB].insert(Load);
+        if (auto *Load = dyn_cast<LoadInst>(RV))
+          BaseInsts[BB].insert(Load);
+      } else if (auto *LI = dyn_cast<LoadInst>(BI->getCondition())) {
+        BaseInsts[BB].insert(LI);
+      } else if (auto *Phi = dyn_cast<PHINode>(BI->getCondition())) {
+        BaseInsts[BB].insert(Phi);
+      }
+    }
+  }
+}
+
 /// Hoist expressions out of the specified loop. Note, alias info for inner
 /// loop is not preserved so it is not a good idea to run LICM multiple
 /// times on one loop.
@@ -483,11 +548,12 @@ bool LoopInvariantCodeMotion::runOnLoop(
       bool LocalPromoted;
       do {
         LocalPromoted = false;
-        for (const SmallSetVector<Value *, 8> &PointerMustAliases :
+        for (const MustAliasPair &PointerMustAliasesPair :
              collectPromotionCandidates(MSSA, AA, L)) {
           LocalPromoted |= promoteLoopAccessesToScalars(
-              PointerMustAliases, ExitBlocks, InsertPts, MSSAInsertPts, PIC, LI,
-              DT, TLI, L, MSSAU, &SafetyInfo, ORE, LicmAllowSpeculation);
+              PointerMustAliasesPair, ExitBlocks, InsertPts, MSSAInsertPts, PIC,
+              LI, DT, TLI, L, MSSAU, &SafetyInfo, ORE, LicmAllowSpeculation,
+              AA);
         }
         Promoted |= LocalPromoted;
       } while (LocalPromoted);
@@ -902,7 +968,8 @@ bool llvm::hoistRegion(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
           canSinkOrHoistInst(I, AA, DT, CurLoop, MSSAU, true, Flags, ORE) &&
           isSafeToExecuteUnconditionally(
               I, DT, TLI, CurLoop, SafetyInfo, ORE,
-              CurLoop->getLoopPreheader()->getTerminator(), AllowSpeculation)) {
+              CurLoop->getLoopPreheader()->getTerminator(), AllowSpeculation,
+              MSSAU.getMemorySSA(), AA)) {
         hoist(I, DT, CurLoop, CFH.getOrCreateHoistedBlock(BB), SafetyInfo,
               MSSAU, SE, ORE);
         HoistedInstructions.push_back(&I);
@@ -1715,8 +1782,14 @@ static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
       // The check on hasMetadataOtherThanDebugLoc is to prevent us from burning
       // time in isGuaranteedToExecute if we don't actually have anything to
       // drop.  It is a compile time optimization, not required for correctness.
-      !SafetyInfo->isGuaranteedToExecute(I, DT, CurLoop))
-    I.dropUndefImplyingAttrsAndUnknownMetadata();
+      !SafetyInfo->isGuaranteedToExecute(I, DT, CurLoop)) {
+    if (CJPipeline) {
+      I.dropUndefImplyingAttrsAndUnknownMetadata(
+          {LLVMContext::MD_tbaa, LLVMContext::MD_untrusted_ref});
+    } else {
+      I.dropUndefImplyingAttrsAndUnknownMetadata();
+    }
+  }
 
   if (isa<PHINode>(I))
     // Move the new node to the end of the phi list in the destination block.
@@ -1734,6 +1807,149 @@ static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
   ++NumHoisted;
 }
 
+// bb0:
+//  %0 = load (gep %ptr, 0, 0)
+//  store %0, %1
+//  ...
+//  %2 = load %0
+//  %3 = icmp %2, 0
+//  br %3, label unreachable_bb, bb1
+// bb1:
+//  %4 = load (gep %ptr, 0, 1)
+//  %5 = gep %4, ...
+//  %6 = load %5
+// Now, we want to hoist %6. AI is %1, I is %2, HoistLoadPtr is %6.
+static bool isNoAliasAllocaValue(AllocaInst *AI, Instruction *I,
+                                 MemorySSA *MSSA, AAResults *AA,
+                                 Value *HoistLoadPtr) {
+  assert(AI != nullptr);
+  // For alloca of struct type, finding the exact define for a given offset is a
+  // complex and time-consuming task. We don't add any extra complexity here.
+  if (isa<StructType>(AI->getAllocatedType()))
+    return false;
+  auto IsTopmostMA = [&MSSA](MemoryAccess *MA) {
+    auto *Def = dyn_cast<MemoryDef>(MA);
+    return !Def || MSSA->isLiveOnEntryDef(Def);
+  };
+
+  MemoryAccess *LoadMA = MSSA->getMemoryAccess(I);
+  auto *LoadMD = cast<MemoryUseOrDef>(LoadMA)->getDefiningAccess();
+  // The I memory location has no clobber memory def before it.
+  if (IsTopmostMA(LoadMD))
+    return true;
+  if (isa<MemoryPhi>(LoadMD))
+    return false;
+  auto &DL = AI->getModule()->getDataLayout();
+  auto Loc = MemoryLocation(
+      AI, LocationSize::precise(DL.getTypeAllocSize(AI->getAllocatedType())));
+  auto *ClobberMA = MSSA->getWalker()->getClobberingMemoryAccess(LoadMD, Loc);
+  // The alloca memory location has no clobber memory def before LoadMD.
+  if (IsTopmostMA(ClobberMA))
+    return true;
+  if (isa<MemoryPhi>(ClobberMA))
+    return false;
+  auto *ClobberMD = cast<MemoryDef>(ClobberMA);
+
+  // AI is a alloca inst, and the clobber inst must be store or call, for call,
+  // it is difficult to analyze.
+  auto *SI = dyn_cast<StoreInst>(ClobberMD->getMemoryInst());
+  if (!SI)
+    return false;
+  auto *Base = getUnderlyingObject(SI->getValueOperand());
+  if (auto *NewAI = dyn_cast<AllocaInst>(Base))
+    return isNoAliasAllocaValue(NewAI, SI, MSSA, AA, HoistLoadPtr);
+  AliasResult AR = AliasResult::MayAlias;
+  // Check whether the base memory location corresponding to the pointer operand
+  // of load that we want to LICM is aliased with the base memory location
+  // corresponding to the store value.
+  if (auto *LI = dyn_cast<LoadInst>(Base)) {
+    AR = AA->alias(LI->getPointerOperand(), HoistLoadPtr);
+  } else if (auto *II = dyn_cast<IntrinsicInst>(Base);
+             II && II->isCJRefGCRead()) {
+    AR = AA->alias(II->getOperand(0), HoistLoadPtr);
+  } else {
+    return false;
+  }
+  return AR == AliasResult::NoAlias;
+}
+
+// Based on all the Terminators in the BBs in the loop that can reach LI, we
+// can't move LI to the preheader if br pred contains a LI's pointer, or if the
+// Terminator is a normal if-else branch.
+static bool
+cjPartialSpeculativeExecute(Instruction *I, const Loop *L, MemorySSA *MSSA, AAResults *AA) {
+  Value *LoadPtr = nullptr;
+  if (auto *LI = dyn_cast<LoadInst>(I))
+    LoadPtr = LI->getPointerOperand();
+  else if (auto *II = dyn_cast<IntrinsicInst>(I))
+    LoadPtr = II->getCJRefGCReadPtr();
+
+  if (!LoadPtr)
+    return false;
+
+  BasicBlock *BB = I->getParent();
+  if (BB == L->getHeader())
+    return true;
+  // Collect all BasicBlocks that can reach CurrentBB from PreHeader.
+  SmallPtrSet<BasicBlock *, 4> Predecessors;
+  SmallVector<BasicBlock *, 4> WorkList;
+  for (auto *Pred : predecessors(BB)) {
+    Predecessors.insert(Pred);
+    WorkList.push_back(Pred);
+  }
+  while (!WorkList.empty()) {
+    auto *Pred = WorkList.pop_back_val();
+    if (Pred == L->getHeader())
+      continue;
+    for (auto *PPred : predecessors(Pred)) {
+      if (Predecessors.insert(PPred).second)
+        WorkList.push_back(PPred);
+    }
+  }
+  // Traverse all Predecessors and speculatively execute the BasicBlock that
+  // contains the implicit exception.
+  DenseMap<BasicBlock *, DenseSet<Value *>> BaseInsts;
+  collectBBBasePointers(Predecessors, BaseInsts);
+  for (auto *Pred : Predecessors) {
+    if (BaseInsts.count(Pred)) {
+      for (auto *V : BaseInsts[Pred]) {
+        if (isa<LoadInst>(V)) {
+          auto *Ptr =
+              getUnderlyingObject(cast<LoadInst>(V)->getPointerOperand());
+          auto *LoadBase = getUnderlyingObject(LoadPtr);
+          if (Ptr == LoadBase)
+            return false;
+          // If LoadPtr is a load/read inst, check whether the define load ptr
+          // of predecessor's condition, if it exits, and the load ptr of
+          // LoadPtr are related.
+          auto *II = dyn_cast<IntrinsicInst>(LoadBase);
+          if (II && II->isCJRefGCRead() &&
+              Ptr == getUnderlyingObject(II->getArgOperand(0), 0))
+            return false;
+          auto *AI = dyn_cast<AllocaInst>(Ptr);
+          if (II && II->isCJRefGCRead() && AI &&
+              !isNoAliasAllocaValue(AI, cast<LoadInst>(V), MSSA, AA,
+                                    II->getArgOperand(0)))
+            return false;
+          auto *LI = dyn_cast<LoadInst>(LoadBase);
+          if (LI && Ptr == getUnderlyingObject(LI->getPointerOperand(), 0))
+            return false;
+          if (LI && AI &&
+              !isNoAliasAllocaValue(AI, cast<LoadInst>(V), MSSA, AA,
+                                    LI->getPointerOperand()))
+            return false;
+        } else {
+          return false;
+        }
+      }
+    } else {
+      if (!Pred->getSingleSuccessor())
+        return false;
+    }
+  }
+  return true;
+}
+
 /// Only sink or hoist an instruction if it is not a trapping instruction,
 /// or if the instruction is known not to trap when moved to the preheader.
 /// or if it is a trapping instruction and is guaranteed to execute.
@@ -1741,8 +1957,12 @@ static bool isSafeToExecuteUnconditionally(
     Instruction &Inst, const DominatorTree *DT, const TargetLibraryInfo *TLI,
     const Loop *CurLoop, const LoopSafetyInfo *SafetyInfo,
     OptimizationRemarkEmitter *ORE, const Instruction *CtxI,
-    bool AllowSpeculation) {
+    bool AllowSpeculation, MemorySSA *MSSA, AAResults *AA) {
   if (AllowSpeculation && isSafeToSpeculativelyExecute(&Inst, CtxI, DT, TLI))
+    return true;
+  // Partial speculative execution, out-of-order execution loads, and implicit
+  // exceptions.
+  if (CJPipeline && cjPartialSpeculativeExecute(&Inst, CurLoop, MSSA, AA))
     return true;
 
   bool GuaranteedToExecute =
@@ -1765,6 +1985,7 @@ static bool isSafeToExecuteUnconditionally(
 namespace {
 class LoopPromoter : public LoadAndStorePromoter {
   Value *SomePtr; // Designated pointer to store to.
+  Value* BasePtr = nullptr;
   const SmallSetVector<Value *, 8> &PointerMustAliases;
   SmallVectorImpl<BasicBlock *> &LoopExitBlocks;
   SmallVectorImpl<Instruction *> &LoopInsertPts;
@@ -1804,11 +2025,13 @@ public:
                SmallVectorImpl<MemoryAccess *> &MSSAIP, PredIteratorCache &PIC,
                MemorySSAUpdater &MSSAU, LoopInfo &li, DebugLoc dl,
                Align Alignment, bool UnorderedAtomic, const AAMDNodes &AATags,
-               ICFLoopSafetyInfo &SafetyInfo, bool CanInsertStoresInExitBlocks)
-      : LoadAndStorePromoter(Insts, S), SomePtr(SP), PointerMustAliases(PMA),
-        LoopExitBlocks(LEB), LoopInsertPts(LIP), MSSAInsertPts(MSSAIP),
-        PredCache(PIC), MSSAU(MSSAU), LI(li), DL(std::move(dl)),
-        Alignment(Alignment), UnorderedAtomic(UnorderedAtomic), AATags(AATags),
+               ICFLoopSafetyInfo &SafetyInfo, bool CanInsertStoresInExitBlocks,
+               Value *BP = nullptr)
+      : LoadAndStorePromoter(Insts, S), SomePtr(SP), BasePtr(BP),
+        PointerMustAliases(PMA), LoopExitBlocks(LEB), LoopInsertPts(LIP),
+        MSSAInsertPts(MSSAIP), PredCache(PIC), MSSAU(MSSAU), LI(li),
+        DL(std::move(dl)), Alignment(Alignment),
+        UnorderedAtomic(UnorderedAtomic), AATags(AATags),
         SafetyInfo(SafetyInfo),
         CanInsertStoresInExitBlocks(CanInsertStoresInExitBlocks) {}
 
@@ -1817,6 +2040,9 @@ public:
     Value *Ptr;
     if (LoadInst *LI = dyn_cast<LoadInst>(I))
       Ptr = LI->getOperand(0);
+    else if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I);
+             II && II->getIntrinsicID() == Intrinsic::cj_gcwrite_ref)
+      Ptr = II->getOperand(2);
     else
       Ptr = cast<StoreInst>(I)->getPointerOperand();
     return PointerMustAliases.count(Ptr);
@@ -1833,23 +2059,53 @@ public:
       LiveInValue = maybeInsertLCSSAPHI(LiveInValue, ExitBlock);
       Value *Ptr = maybeInsertLCSSAPHI(SomePtr, ExitBlock);
       Instruction *InsertPos = LoopInsertPts[i];
-      StoreInst *NewSI = new StoreInst(LiveInValue, Ptr, InsertPos);
-      if (UnorderedAtomic)
-        NewSI->setOrdering(AtomicOrdering::Unordered);
-      NewSI->setAlignment(Alignment);
-      NewSI->setDebugLoc(DL);
-      if (AATags)
-        NewSI->setAAMetadata(AATags);
 
       MemoryAccess *MSSAInsertPoint = MSSAInsertPts[i];
-      MemoryAccess *NewMemAcc;
-      if (!MSSAInsertPoint) {
-        NewMemAcc = MSSAU.createMemoryAccessInBB(
-            NewSI, nullptr, NewSI->getParent(), MemorySSA::Beginning);
+      MemoryAccess *NewMemAcc = nullptr;
+      if (!BasePtr) {
+        StoreInst *NewSI = new StoreInst(LiveInValue, Ptr, InsertPos);
+        if (UnorderedAtomic)
+          NewSI->setOrdering(AtomicOrdering::Unordered);
+        NewSI->setAlignment(Alignment);
+        NewSI->setDebugLoc(DL);
+        if (AATags)
+          NewSI->setAAMetadata(AATags);
+        if (!MSSAInsertPoint) {
+          NewMemAcc = MSSAU.createMemoryAccessInBB(
+              NewSI, nullptr, NewSI->getParent(), MemorySSA::Beginning);
+        } else {
+          NewMemAcc =
+              MSSAU.createMemoryAccessAfter(NewSI, nullptr, MSSAInsertPoint);
+        }
       } else {
-        NewMemAcc =
-            MSSAU.createMemoryAccessAfter(NewSI, nullptr, MSSAInsertPoint);
+        // We have only considered field pointers, but we need to ensure that
+        // base pointers also satisfy the LCSSA form.
+        Value *LCSSABase = maybeInsertLCSSAPHI(BasePtr, ExitBlock);
+
+        Function *CJGCwrite = Intrinsic::getDeclaration(
+            ExitBlock->getModule(), Intrinsic::cj_gcwrite_ref);
+        Value *AS0ToAS1Ptr = Ptr;
+        if (!isGCPointerType(Ptr->getType())) {
+          Type *HeapObjPtr = LiveInValue->getType()->getPointerTo(1);
+          AS0ToAS1Ptr = CastInst::Create(Instruction::AddrSpaceCast, Ptr,
+                                         HeapObjPtr, "", InsertPos);
+        }
+        assert(isGCPointerType(BasePtr->getType()) &&
+               "BasePtr should be gc pointer");
+        CallInst *CI = CallInst::Create(CJGCwrite->getFunctionType(), CJGCwrite,
+                                        {LiveInValue, LCSSABase, AS0ToAS1Ptr},
+                                        "", InsertPos);
+        CI->setDebugLoc(DL);
+        if (AATags)
+          CI->setAAMetadata(AATags);
+        if (!MSSAInsertPoint)
+          NewMemAcc = MSSAU.createMemoryAccessInBB(CI, nullptr, CI->getParent(),
+                                                   MemorySSA::Beginning);
+        else
+          NewMemAcc =
+              MSSAU.createMemoryAccessAfter(CI, nullptr, MSSAInsertPoint);
       }
+
       MSSAInsertPts[i] = NewMemAcc;
       MSSAU.insertDef(cast<MemoryDef>(NewMemAcc), true);
       // FIXME: true for safety, false may still be correct.
@@ -1869,6 +2125,10 @@ public:
   bool shouldDelete(Instruction *I) const override {
     if (isa<StoreInst>(I))
       return CanInsertStoresInExitBlocks;
+    if (isa<IntrinsicInst>(I)) {
+      assert(cast<IntrinsicInst>(I)->getIntrinsicID() == Intrinsic::cj_gcwrite_ref);
+      return CanInsertStoresInExitBlocks;
+    }
     return true;
   }
 };
@@ -1904,18 +2164,20 @@ bool isNotVisibleOnUnwindInLoop(const Value *Object, const Loop *L,
 /// loop invariant.
 ///
 bool llvm::promoteLoopAccessesToScalars(
-    const SmallSetVector<Value *, 8> &PointerMustAliases,
+    const std::pair<SmallSetVector<Value *, 8>, Value *>
+        &PointerMustAliasesPair,
     SmallVectorImpl<BasicBlock *> &ExitBlocks,
     SmallVectorImpl<Instruction *> &InsertPts,
     SmallVectorImpl<MemoryAccess *> &MSSAInsertPts, PredIteratorCache &PIC,
     LoopInfo *LI, DominatorTree *DT, const TargetLibraryInfo *TLI,
     Loop *CurLoop, MemorySSAUpdater &MSSAU, ICFLoopSafetyInfo *SafetyInfo,
-    OptimizationRemarkEmitter *ORE, bool AllowSpeculation) {
+    OptimizationRemarkEmitter *ORE, bool AllowSpeculation, AAResults *AA) {
   // Verify inputs.
   assert(LI != nullptr && DT != nullptr && CurLoop != nullptr &&
          SafetyInfo != nullptr &&
          "Unexpected Input to promoteLoopAccessesToScalars");
 
+  const auto &PointerMustAliases = PointerMustAliasesPair.first;
   Value *SomePtr = *PointerMustAliases.begin();
   BasicBlock *Preheader = CurLoop->getLoopPreheader();
 
@@ -2018,7 +2280,8 @@ bool llvm::promoteLoopAccessesToScalars(
         if (!DereferenceableInPH || (InstAlignment > Alignment))
           if (isSafeToExecuteUnconditionally(
                   *Load, DT, TLI, CurLoop, SafetyInfo, ORE,
-                  Preheader->getTerminator(), AllowSpeculation)) {
+                  Preheader->getTerminator(), AllowSpeculation,
+                  MSSAU.getMemorySSA(), AA)) {
             DereferenceableInPH = true;
             Alignment = std::max(Alignment, InstAlignment);
           }
@@ -2069,6 +2332,40 @@ bool llvm::promoteLoopAccessesToScalars(
               Store->getPointerOperand(), Store->getValueOperand()->getType(),
               Store->getAlign(), MDL, Preheader->getTerminator(), DT, TLI);
         }
+      } else if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(UI);
+                 II && II->getIntrinsicID() == Intrinsic::cj_gcwrite_ref &&
+                 !LICMDisableBarrier) {
+        SawUnorderedAtomic |= false;
+        SawNotAtomic |= !SawUnorderedAtomic;
+        bool GuaranteedToExecute =
+            SafetyInfo->isGuaranteedToExecute(*UI, DT, CurLoop);
+        StoreIsGuanteedToExecute |= GuaranteedToExecute;
+
+        // If Store is GuaranteedToExecute, then set DereferenceableInPH true.
+        // DereferenceableInPH indicates that it is now safe to hoist Load to
+        // Preheader. However, a Load instruction is created in Preheader only
+        // when Load requirements exist in the loop.
+        // Other Loads in the loop will be replaced by the phi instruction.
+        Align InstAlignment = MDL.getABITypeAlign(II->getOperand(0)->getType());
+        if (!DereferenceableInPH || !SafeToInsertStore ||
+            (InstAlignment > Alignment)) {
+          if (GuaranteedToExecute) {
+            DereferenceableInPH = true;
+            SafeToInsertStore = true;
+            Alignment = std::max(Alignment, InstAlignment);
+          }
+        }
+
+        // Prove that p2 is safe through p2(b).
+        if (!SafeToInsertStore)
+          SafeToInsertStore = llvm::all_of(ExitBlocks, [&](BasicBlock *Exit) {
+            return DT->dominates(II->getParent(), Exit);
+          });
+
+        if (!DereferenceableInPH)
+          DereferenceableInPH = isDereferenceableAndAlignedPointer(
+              II->getOperand(2), II->getOperand(0)->getType(), InstAlignment,
+              MDL, Preheader->getTerminator(), DT, TLI);
       } else
         return false; // Not a load or store.
 
@@ -2154,7 +2451,7 @@ bool llvm::promoteLoopAccessesToScalars(
   LoopPromoter Promoter(SomePtr, LoopUses, SSA, PointerMustAliases, ExitBlocks,
                         InsertPts, MSSAInsertPts, PIC, MSSAU, *LI, DL,
                         Alignment, SawUnorderedAtomic, AATags, *SafetyInfo,
-                        SafeToInsertStore);
+                        SafeToInsertStore, PointerMustAliasesPair.second);
 
   // Set up the preheader to have a definition of the value.  It is the live-out
   // value from the preheader that uses in the loop will use.
@@ -2203,7 +2500,7 @@ static void foreachMemoryAccess(MemorySSA *MSSA, Loop *L,
           Fn(MUD->getMemoryInst());
 }
 
-static SmallVector<SmallSetVector<Value *, 8>, 0>
+static SmallVector<MustAliasPair, 0>
 collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
   AliasSetTracker AST(*AA);
 
@@ -2212,6 +2509,9 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
       return L->isLoopInvariant(SI->getPointerOperand());
     if (const auto *LI = dyn_cast<LoadInst>(I))
       return L->isLoopInvariant(LI->getPointerOperand());
+    if (const auto *CB = dyn_cast<CallBase>(I))
+      if (!LICMDisableBarrier && CB->getIntrinsicID() == Intrinsic::cj_gcwrite_ref)
+        return L->isLoopInvariant(CB->getOperand(2));
     return false;
   };
 
@@ -2243,12 +2543,12 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
     });
   });
 
-  SmallVector<SmallSetVector<Value *, 8>, 0> Result;
+  SmallVector<MustAliasPair, 0> Result;
   for (const AliasSet *Set : Sets) {
     SmallSetVector<Value *, 8> PointerMustAliases;
     for (const auto &ASI : *Set)
       PointerMustAliases.insert(ASI.getValue());
-    Result.push_back(std::move(PointerMustAliases));
+    Result.push_back({std::move(PointerMustAliases), Set->getBasePtr()});
   }
 
   return Result;

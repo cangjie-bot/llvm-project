@@ -23,6 +23,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GraphWriter.h"
@@ -39,6 +40,10 @@
 #endif
 
 using namespace llvm;
+
+namespace llvm {
+  extern cl::opt<bool> CJPipeline;
+}
 
 #define DEBUG_TYPE "lcg"
 
@@ -1955,6 +1960,12 @@ void LazyCallGraph::visitReferences(SmallVectorImpl<Constant *> &Worklist,
                                     function_ref<void(Function &)> Callback) {
   while (!Worklist.empty()) {
     Constant *C = Worklist.pop_back_val();
+
+    if (CJPipeline) {
+      if (auto *GV = dyn_cast<GlobalVariable>(C);
+          GV && GV->hasAttribute("CFileKlass"))
+        continue;
+    }
 
     if (Function *F = dyn_cast<Function>(C)) {
       if (!F->isDeclaration())

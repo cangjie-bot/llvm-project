@@ -901,6 +901,38 @@ namespace llvm {
         return "\n\r"; // You monster!
       return "\r";     // Classic Mac
     }
+
+    bool isCJMutexLock() const { return equals("CJ_MCC_MutexLock"); }
+
+    bool isCangjieNewObjFunction() const {
+      return equals("CJ_MCC_NewObject") || equals("CJ_MCC_NewFinalizer");
+    }
+
+    bool isCangjieTypeInfo() const { return startswith("TypeInfo"); }
+
+    bool isCangjieArrayLayout() const { return startswith("ArrayLayout"); }
+
+    bool isCangjieArrayRecord() const {
+      return startswith("record.std.core:Array");
+    }
+
+    bool isCJStackCheck() const { return equals("CJ_MCC_StackCheck"); }
+
+    bool isGetGCPhase() const { return equals("GetGCPhase"); }
+
+    bool isSetDebugLocation() const { return equals("SetDebugLocation"); }
+
+    bool isExtendFromFP16Func() const {
+        return equals("__extendhfsf2") || equals("__extendhfdf2") ||
+               equals("__fixhfsi") || equals("__fixhfdi") ||
+               equals("__fixunshfsi") || equals("__fixunshfdi");
+    }
+
+    bool isTruncToFP16Func() const {
+        return equals("__truncsfhf2") || equals("__truncdfhf2") ||
+               equals("__floatsihf") || equals("__floatdihf") ||
+               equals("__floatunsihf") || equals("__floatundihf");
+    }
     /// @}
   };
 

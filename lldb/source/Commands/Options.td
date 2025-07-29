@@ -1035,6 +1035,13 @@ let Command = "thread backtrace" in {
   Arg<"Boolean">, Desc<"Show the extended backtrace, if available">;
 }
 
+let Command = "cjthread backtrace" in {
+  def cjthread_backtrace_count : Option<"count", "c">, Group<1>, Arg<"Count">,
+  Desc<"How many frames to display">;
+  def cjthread_backtrace_start : Option<"start", "s">, Group<1>,
+  Arg<"FrameIndex">, Desc<"Frame in which to start the backtrace">;
+}
+
 let Command = "thread step scope" in {
   def thread_step_scope_step_in_avoids_no_debug :
     Option<"step-in-avoids-no-debug", "a">, Group<1>, Arg<"Boolean">,

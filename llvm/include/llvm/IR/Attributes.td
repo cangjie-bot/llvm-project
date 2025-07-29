@@ -57,6 +57,10 @@ def AllocKind: IntAttr<"allockind", [FnAttr]>;
 /// Parameter is the pointer to be manipulated by the allocator function.
 def AllocatedPointer : EnumAttr<"allocptr", [ParamAttr]>;
 
+/// Parameter is the stack pointer for cangjie.
+/// Used for PartialEscapeAnalysis and memcpy opt of CJLateOpt.
+def CJStackPointer : EnumAttr<"cjstackptr", [ParamAttr]>;
+
 /// The result of the function is guaranteed to point to a number of bytes that
 /// we can determine if we know the value of the function's arguments.
 def AllocSize : IntAttr<"allocsize", [FnAttr]>;

@@ -353,6 +353,9 @@ BreakpointResolverName::SearchCallback(SearchFilter &filter,
           break_addr.SetOffset(break_addr.GetOffset() + prologue_byte_size);
       }
     } else if (sc.symbol) {
+      if (sc.symbol->GetName() == "main") {
+        continue;
+      }
       if (sc.symbol->GetType() == eSymbolTypeReExported) {
         const Symbol *actual_symbol =
             sc.symbol->ResolveReExportedSymbol(breakpoint.GetTarget());

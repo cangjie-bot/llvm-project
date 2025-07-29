@@ -21,6 +21,7 @@ if (DEFINED LLVM_HAVE_TF_AOT OR DEFINED LLVM_HAVE_TF_API)
     list(APPEND MLLinkDeps ${tensorflow_c_api} ${tensorflow_fx})
   endif()
 endif()
+include_directories(${CANGJIE_DEMANGLE_DIR})
 
 add_llvm_component_library(LLVMAnalysis
   AliasAnalysis.cpp
@@ -31,6 +32,7 @@ add_llvm_component_library(LLVMAnalysis
   AssumeBundleQueries.cpp
   AssumptionCache.cpp
   BasicAliasAnalysis.cpp
+  CJAliasAnalysis.cpp
   BlockFrequencyInfo.cpp
   BlockFrequencyInfoImpl.cpp
   BranchProbabilityInfo.cpp
@@ -106,6 +108,7 @@ add_llvm_component_library(LLVMAnalysis
   ModuleSummaryAnalysis.cpp
   MustExecute.cpp
   NoInferenceModelRunner.cpp
+  ObfConfig.cpp
   ObjCARCAliasAnalysis.cpp
   ObjCARCAnalysisUtils.cpp
   ObjCARCInstKind.cpp
@@ -145,6 +148,7 @@ add_llvm_component_library(LLVMAnalysis
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Analysis
+  ${CANGJIE_DEMANGLE_DIR}
 
   DEPENDS
   intrinsics_gen
@@ -160,3 +164,7 @@ add_llvm_component_library(LLVMAnalysis
   ProfileData
   Support
   )
+
+if(BUILD_SHARED_LIBS)
+  target_link_libraries(LLVMAnalysis PRIVATE ${CANGJIE_DEMANGLE_DIR}/libcangjie-demangle.a)
+endif()

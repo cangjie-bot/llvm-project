@@ -164,7 +164,7 @@ bool EHStreamer::callToNoUnwindFunction(const MachineInstr *MI) {
   for (const MachineOperand &MO : MI->operands()) {
     if (!MO.isGlobal()) continue;
 
-    const Function *F = dyn_cast<Function>(MO.getGlobal());
+    const Function *F = dyn_cast_or_null<Function>(MO.getGlobal());
     if (!F) continue;
 
     if (SawFunc) {
@@ -242,6 +242,9 @@ void EHStreamer::computeCallSiteTable(
 
   bool IsSJLJ = Asm->MAI->getExceptionHandlingType() == ExceptionHandling::SjLj;
 
+  // Whether generate EH tabel for Cangjie.
+  bool CangjieSrc = Asm->MF && Asm->MF->getFunction().hasCangjieGC();
+
   // Visit all instructions in order of address.
   for (const auto &MBB : *Asm->MF) {
     if (&MBB == &Asm->MF->front() || MBB.isBeginSection()) {
@@ -289,7 +292,8 @@ void EHStreamer::computeCallSiteTable(
       if (SawPotentiallyThrowing &&
           (Asm->MAI->usesCFIForEH() ||
            Asm->MAI->getExceptionHandlingType() == ExceptionHandling::AIX)) {
-        CallSites.push_back({LastLabel, BeginLabel, nullptr, 0});
+        if (!CangjieSrc)
+          CallSites.push_back({LastLabel, BeginLabel, nullptr, 0});
         PreviousIsInvoke = false;
       }
 
@@ -319,7 +323,7 @@ void EHStreamer::computeCallSiteTable(
         }
 
         // Otherwise, create a new call-site.
-        if (!IsSJLJ)
+        if (!IsSJLJ && (Site.LPad != 0 || !CangjieSrc))
           CallSites.push_back(Site);
         else {
           // SjLj EH must maintain the call sites in the order assigned
@@ -340,9 +344,11 @@ void EHStreamer::computeCallSiteTable(
       // function may throw, create a call-site entry with no landing pad for
       // the region following the try-range.
       if (SawPotentiallyThrowing && !IsSJLJ) {
-        CallSiteEntry Site = {LastLabel, CallSiteRanges.back().FragmentEndLabel,
-                              nullptr, 0};
-        CallSites.push_back(Site);
+        if (!CangjieSrc) {
+          CallSiteEntry Site = {LastLabel, CallSiteRanges.back().FragmentEndLabel,
+                                nullptr, 0};
+          CallSites.push_back(Site);
+        }
         SawPotentiallyThrowing = false;
       }
       CallSiteRanges.back().CallSiteEndIdx = CallSites.size();
@@ -413,6 +419,8 @@ MCSymbol *EHStreamer::emitExceptionTable() {
                Asm->getObjFileLowering().getCallSiteEncoding();
   bool HaveTTData = !TypeInfos.empty() || !FilterIds.empty();
 
+  bool CangjieSrc = MF->getFunction().hasCangjieGC();
+
   // Type infos.
   MCSection *LSDASection = Asm->getObjFileLowering().getSectionForLSDA(
       MF->getFunction(), *Asm->CurrentFnSym, Asm->TM);
@@ -461,10 +469,10 @@ MCSymbol *EHStreamer::emitExceptionTable() {
   Asm->emitAlignment(Align(4));
 
   // Emit the LSDA.
-  MCSymbol *GCCETSym =
-    Asm->OutContext.getOrCreateSymbol(Twine("GCC_except_table")+
-                                      Twine(Asm->getFunctionNumber()));
-  Asm->OutStreamer->emitLabel(GCCETSym);
+  MCSymbol *ETSym = Asm->OutContext.getOrCreateSymbol(
+      Twine(CangjieSrc ? "CJ_except_table" : "GCC_except_table") +
+      Twine(Asm->getFunctionNumber()));
+  Asm->OutStreamer->emitLabel(ETSym);
   MCSymbol *CstEndLabel = Asm->createTempSymbol(
       CallSiteRanges.size() > 1 ? "action_table_base" : "cst_end");
 
@@ -479,7 +487,9 @@ MCSymbol *EHStreamer::emitExceptionTable() {
   //  * For Itanium, these references will be emitted for every callsite range.
   //  * For SJLJ and Wasm, they will be emitted only once in the LSDA header.
   auto EmitTypeTableRefAndCallSiteTableEndRef = [&]() {
-    Asm->emitEncodingByte(TTypeEncoding, "@TType");
+    if (CallSites.size() || !CangjieSrc) {
+      Asm->emitEncodingByte(TTypeEncoding, "@TType");
+    }
     if (HaveTTData) {
       // N.B.: There is a dependency loop between the size of the TTBase uleb128
       // here and the amount of padding before the aligned type table. The
@@ -495,9 +505,11 @@ MCSymbol *EHStreamer::emitExceptionTable() {
     // Wasm, and start of a call-site range for Itanium) to the end of the
     // whole call-site table (end of the last call-site range for Itanium).
     MCSymbol *CstBeginLabel = Asm->createTempSymbol("cst_begin");
-    Asm->emitEncodingByte(CallSiteEncoding, "Call site");
-    Asm->emitLabelDifferenceAsULEB128(CstEndLabel, CstBeginLabel);
-    Asm->OutStreamer->emitLabel(CstBeginLabel);
+    if (CallSites.size() || !CangjieSrc) {
+      Asm->emitEncodingByte(CallSiteEncoding, "Call site");
+      Asm->emitLabelDifferenceAsULEB128(CstEndLabel, CstBeginLabel);
+      Asm->OutStreamer->emitLabel(CstBeginLabel);
+    }
   };
 
   // An alternative path to EmitTypeTableRefAndCallSiteTableEndRef.
@@ -578,8 +590,10 @@ MCSymbol *EHStreamer::emitExceptionTable() {
     Asm->OutStreamer->emitLabel(Asm->getMBBExceptionSym(Asm->MF->front()));
 
     // emit the LSDA header.
-    Asm->emitEncodingByte(dwarf::DW_EH_PE_omit, "@LPStart");
-    EmitTypeTableRefAndCallSiteTableEndRef();
+    if (CallSites.size() || !CangjieSrc) {
+      Asm->emitEncodingByte(dwarf::DW_EH_PE_omit, "@LPStart");
+      EmitTypeTableRefAndCallSiteTableEndRef();
+    }
 
     unsigned idx = 0;
     for (SmallVectorImpl<CallSiteEntry>::const_iterator
@@ -666,7 +680,11 @@ MCSymbol *EHStreamer::emitExceptionTable() {
       // If only one call-site range exists, LPStart is omitted as it is the
       // same as the function entry.
       if (CallSiteRanges.size() == 1) {
-        Asm->emitEncodingByte(dwarf::DW_EH_PE_omit, "@LPStart");
+        if (CallSites.size() || !CangjieSrc) {
+          Asm->emitEncodingByte(dwarf::DW_EH_PE_omit, "@LPStart");
+        } else {
+          Asm->EmitNoCallsiteEHHeader();
+        }
       } else if (!Asm->isPositionIndependent()) {
         // For more than one call-site ranges, LPStart must be explicitly
         // specified.
@@ -746,7 +764,8 @@ MCSymbol *EHStreamer::emitExceptionTable() {
         Asm->emitULEB128(S.Action);
       }
     }
-    Asm->OutStreamer->emitLabel(CstEndLabel);
+    if (CallSites.size() || !CangjieSrc)
+      Asm->OutStreamer->emitLabel(CstEndLabel);
   }
 
   // Emit the Action Table.
@@ -790,8 +809,9 @@ MCSymbol *EHStreamer::emitExceptionTable() {
     emitTypeInfos(TTypeEncoding, TTBaseLabel);
   }
 
-  Asm->emitAlignment(Align(4));
-  return GCCETSym;
+  if (CallSites.size() || !CangjieSrc)
+    Asm->emitAlignment(Align(4));
+  return ETSym;
 }
 
 void EHStreamer::emitTypeInfos(unsigned TTypeEncoding, MCSymbol *TTBaseLabel) {

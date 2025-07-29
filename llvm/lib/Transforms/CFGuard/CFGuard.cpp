@@ -61,7 +61,7 @@ public:
   /// symbol. This checks that the target address is a valid address-taken
   /// function. The address of the target function is passed to the guard check
   /// function in an architecture-specific register (e.g. ECX on 32-bit X86,
-  /// X15 on Aarch64, and R0 on ARM). The guard check function has no return
+  /// X15 on AArch64, and R0 on ARM). The guard check function has no return
   /// value (if the target is invalid, the guard check funtion will raise an
   /// error).
   ///

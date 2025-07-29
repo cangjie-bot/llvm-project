@@ -382,6 +382,21 @@ public:
     return GetStaticBroadcasterClass();
   }
 
+  void SetCJThreadRegContext(std::map<lldb_private::ConstString, uint64_t> reg)
+  {
+    m_cjthreadRegCtx = reg;
+  };
+
+  std::map<lldb_private::ConstString, uint64_t> GetCJThreadRegContext()
+  {
+    return m_cjthreadRegCtx;
+  };
+
+  void CJThreadRegContextClear()
+  {
+    m_cjthreadRegCtx.clear();
+  }
+
 /// A notification structure that can be used by clients to listen
 /// for changes in a process's lifetime.
 ///
@@ -3034,6 +3049,7 @@ private:
 
   Process(const Process &) = delete;
   const Process &operator=(const Process &) = delete;
+  std::map <lldb_private::ConstString, uint64_t> m_cjthreadRegCtx;
 };
 
 /// RAII guard that should be acquired when an utility function is called within

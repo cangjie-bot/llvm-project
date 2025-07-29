@@ -169,6 +169,25 @@ FunctionCallee Module::getOrInsertFunction(StringRef Name, FunctionType *Ty) {
   return getOrInsertFunction(Name, Ty, AttributeList());
 }
 
+Function *Module::declareCJRuntimeFunc(StringRef Name, FunctionType *FT,
+                                       bool GCLeafFunc, bool GCMalloc) {
+  Function *Func = getFunction(Name);
+  if (Func)
+    return Func;
+
+  Func = cast<Function>(getOrInsertFunction(Name, FT).getCallee());
+  Func->addFnAttr(Attribute::get(Context, "cj-runtime"));
+  if (GCMalloc) {
+    Func->addFnAttr(Attribute::get(Context, "cj-heapmalloc"));
+    Func->addFnAttr(Attribute::ArgMemOnly);
+    Func->addRetAttr(Attribute::NoAlias);
+  }
+  if (GCLeafFunc)
+    Func->addFnAttr(Attribute::get(Context, "gc-leaf-function"));
+
+  return Func;
+}
+
 // getFunction - Look up the specified function in the module symbol table.
 // If it does not exist, return null.
 //

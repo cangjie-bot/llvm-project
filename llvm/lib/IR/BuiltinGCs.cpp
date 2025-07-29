@@ -112,6 +112,30 @@ public:
   }
 };
 
+/// A GCStrategy which is specific to the default of the Cangjie backend.
+/// This GCStrategy is intended to implementation customised collector which
+/// can consume the customised stackmap format, uses the default addrespace to
+/// distinguish between gc managed and non-gc managed pointers, and has
+/// reasonable relocation semantics.
+class CangjieGC : public GCStrategy {
+public:
+  CangjieGC() {
+    UseStatepoints = true;
+    // These options are all gc.root specific, we specify them so that the
+    // gc.root lowering code doesn't run.
+    NeededSafePoints = false;
+    UsesMetadata = false;
+  }
+  ~CangjieGC() = default;
+
+  Optional<bool> isGCManagedPointer(const Type *Ty) const override {
+    // Method is only valid on pointer typed values.
+    const PointerType *PT = cast<PointerType>(Ty);
+    // We pick addrspace(1) as our GC managed heap.
+    return (1 == PT->getAddressSpace());
+  }
+};
+
 } // end anonymous namespace
 
 // Register all the above so that they can be found at runtime.  Note that
@@ -125,6 +149,7 @@ static GCRegistry::Add<ShadowStackGC>
 static GCRegistry::Add<StatepointGC> D("statepoint-example",
                                        "an example strategy for statepoint");
 static GCRegistry::Add<CoreCLRGC> E("coreclr", "CoreCLR-compatible GC");
+static GCRegistry::Add<CangjieGC> F("cangjie", "Cangjie GC strategy");
 
 // Provide hook to ensure the containing library is fully loaded.
 void llvm::linkAllBuiltinGCs() {}

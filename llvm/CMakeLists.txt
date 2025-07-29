@@ -659,7 +659,7 @@ option (LLVM_BUILD_DOCS "Build the llvm documentation." OFF)
 option (LLVM_INCLUDE_DOCS "Generate build targets for llvm documentation." ON)
 option (LLVM_ENABLE_DOXYGEN "Use doxygen to generate llvm API documentation." OFF)
 option (LLVM_ENABLE_SPHINX "Use Sphinx to generate llvm documentation." OFF)
-option (LLVM_ENABLE_OCAMLDOC "Build OCaml bindings documentation." ON)
+option (LLVM_ENABLE_OCAMLDOC "Build OCaml bindings documentation." OFF)
 option (LLVM_ENABLE_BINDINGS "Build bindings." ON)
 
 set(LLVM_INSTALL_DOXYGEN_HTML_DIR "${CMAKE_INSTALL_DOCDIR}/llvm/doxygen-html"
@@ -1058,6 +1058,58 @@ endif()
 # Build with _FILE_OFFSET_BITS=64 on Solaris to match g++ >= 9.
 if (UNIX AND ${CMAKE_SYSTEM_NAME} MATCHES "SunOS")
           add_definitions("-D_FILE_OFFSET_BITS=64")
+endif()
+
+if (NOT COV_FLAG)
+  set(COV_FLAG 0 CACHE STRING "cover default is false" FORCE)
+endif ()
+message(STATUS "COV_FLAG : ${COV_FLAG}")
+
+if (COV_FLAG MATCHES 1)
+  set(CMAKE_COV_FLAGS "-fprofile-arcs -ftest-coverage -Xclang -coverage-cfg-checksum -Xclang -coverage-no-function-names-in-data -Xclang -coverage-version=A75*")
+endif()
+
+# Used for security compilation options
+if (UNIX AND NOT APPLE
+        AND uppercase_CMAKE_BUILD_TYPE STREQUAL "RELEASE")
+  set(CMAKE_EXE_LINKER_FLAGS
+          "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack -Wl,-s")
+  set(CMAKE_SHARED_LINKER_FLAGS
+          "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack -Wl,-s")
+  set(CMAKE_MODULE_LINKER_FLAGS
+          "${CMAKE_MODULE_LINKER_FLAGS} -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack -Wl,-s")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pie -fstack-protector-all -D_FORTIFY_SOURCE=2 -O3")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pie -fstack-protector-all -D_FORTIFY_SOURCE=2 -O3")
+  if (NOT MINGW)
+    # MinGW gcc does not support -Qunused-arguments option.
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Qunused-arguments")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Qunused-arguments")
+  endif()
+elseif(MINGW AND uppercase_CMAKE_BUILD_TYPE STREQUAL "RELEASE")
+  set(CMAKE_EXE_LINKER_FLAGS
+    "${CMAKE_EXE_LINKER_FLAGS} -Wl,-s")
+  set(CMAKE_SHARED_LINKER_FLAGS
+    "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-s")
+  set(CMAKE_MODULE_LINKER_FLAGS
+    "${CMAKE_MODULE_LINKER_FLAGS} -Wl,-s")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-all -D_FORTIFY_SOURCE=2 -O3")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fstack-protector-all -D_FORTIFY_SOURCE=2 -O3")
+endif()
+
+# Add gc-sections
+if (UNIX AND NOT APPLE)
+  set(CMAKE_EXE_LINKER_FLAGS
+          "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections ${CMAKE_COV_FLAGS}")
+  set(CMAKE_SHARED_LINKER_FLAGS
+          "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--gc-sections ${CMAKE_COV_FLAGS}")
+  set(CMAKE_MODULE_LINKER_FLAGS
+          "${CMAKE_MODULE_LINKER_FLAGS} -Wl,--gc-sections ${CMAKE_COV_FLAGS}")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffunction-sections -fdata-sections ${CMAKE_COV_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffunction-sections -fdata-sections ${CMAKE_COV_FLAGS}")
+endif()
+
+if (COV_FLAG MATCHES 1)
+  list(APPEND LINK_LIBS "gcov")
 endif()
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)

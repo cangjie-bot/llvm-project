@@ -26,22 +26,22 @@ entry:
 }
 
 ; CHECK-LABEL: b:
-; CHECK:       str     d8, [sp, #-32]!
+; CHECK:       stp	x29, x30, [sp, #-32]!           // 16-byte Folded Spill
 ; CHECK-NEXT:  .cfi_def_cfa_offset 32
-; CHECK-NEXT:  stp     x29, x30, [sp, #8]
+; CHECK-NEXT:  str	d8, [sp, #16]                   // 8-byte Folded Spill
 ; CHECK-NEXT:  str     x19, [sp, #24]
-; CHECK-NEXT:  add     x29, sp, #8
+; CHECK-NEXT:  mov	x29, sp
 
-; CHECK:       sub     sp, x29, #8
+; CHECK:       mov	sp, x29
 ; CHECK-NEXT:  .cfi_def_cfa wsp, 32
-; CHECK-NEXT:  ldp     x29, x30, [sp, #8]
-; CHECK-NEXT:  ldr     x19, [sp, #24]
-; CHECK-NEXT:  ldr     d8, [sp], #32
+; CHECK-NEXT:   ldr x19, [sp, #24]                  // 8-byte Folded Reload
+; CHECK-NEXT:	ldr	d8, [sp, #16]                   // 8-byte Folded Reload
+; CHECK-NEXT:	ldp	x29, x30, [sp], #32             // 16-byte Folded Reload
 ; CHECK-NEXT: .cfi_def_cfa_offset 0
 ; CHECK-NEXT: .cfi_restore w19
+; CHECK-NEXT: .cfi_restore b8
 ; CHECK-NEXT: .cfi_restore w30
 ; CHECK-NEXT: .cfi_restore w29
-; CHECK-NEXT: .cfi_restore b8
 ; CHECK-NEXT:  ret
 
 declare i64 @d()

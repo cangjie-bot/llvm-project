@@ -49,15 +49,18 @@
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/Value.h"
@@ -100,6 +103,11 @@ STATISTIC(IsValueFullyAvailableInBlockNumSpeculationsMax,
 STATISTIC(MaxBBSpeculationCutoffReachedTimes,
           "Number of times we we reached gvn-max-block-speculations cut-off "
           "preventing further exploration");
+
+namespace llvm {
+extern cl::opt<bool> GVNDisableBarrier;
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
 
 static cl::opt<bool> GVNEnablePRE("enable-pre", cl::init(true), cl::Hidden);
 static cl::opt<bool> GVNEnableLoadPRE("enable-load-pre", cl::init(true));
@@ -1213,6 +1221,19 @@ bool GVNPass::AnalyzeLoadAvailability(LoadInst *Load, MemDepResult DepInfo,
       }
     }
 
+    // if the clobbering value is a gcwrite that writes to a superset of load
+    // value, see if we can extract the value from gcwrite value.
+    if (IntrinsicInst *DepII = dyn_cast<IntrinsicInst>(DepInst)) {
+      if (GVNDisableBarrier || DepII->getIntrinsicID() != Intrinsic::cj_gcwrite_ref)
+        return false;
+      int Offset =
+          anaLyzeLoadFromClobberingGCWrite(Load->getType(), Address, DepII, DL);
+      if (Offset != -1) {
+        Res = AvailableValue::get(DepII->getOperand(0), Offset);
+        return true;
+      }
+    }
+
     // Nothing known about this clobber, have to be conservative
     LLVM_DEBUG(
         // fast print dep, using operator<< on instruction is too slow.
@@ -1266,6 +1287,16 @@ bool GVNPass::AnalyzeLoadAvailability(LoadInst *Load, MemDepResult DepInfo,
       return false;
 
     Res = AvailableValue::getLoad(LD);
+    return true;
+  }
+
+  if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(DepInst);
+      II && II->getIntrinsicID() == Intrinsic::cj_gcwrite_ref &&
+      !GVNDisableBarrier) {
+    if (!canCoerceMustAliasedValueToLoad(II->getOperand(0), Load->getType(),
+                                         DL))
+      return false;
+    Res = AvailableValue::get(II->getOperand(0));
     return true;
   }
 
@@ -2023,6 +2054,10 @@ static void patchAndReplaceAllUsesWith(Instruction *I, Value *Repl) {
 /// Attempt to eliminate a load, first by eliminating it
 /// locally, and then attempting non-local elimination if that fails.
 bool GVNPass::processLoad(LoadInst *L) {
+  if (CJPipeline) {
+    if (maybeCJFinalizerObj(L->getPointerOperand()))
+      return false;
+  }
   if (!MD)
     return false;
 

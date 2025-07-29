@@ -50,6 +50,7 @@
 #include "Plugins/ExpressionParser/Clang/ClangUserExpression.h"
 #include "Plugins/ExpressionParser/Clang/ClangUtil.h"
 #include "Plugins/ExpressionParser/Clang/ClangUtilityFunction.h"
+#include "Plugins/ExpressionParser/Cangjie/CangjieUserExpression.h"
 #include "lldb/Core/DumpDataExtractor.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
@@ -906,6 +907,8 @@ TypeSystemClang::GetBasicTypeEnumeration(ConstString name) {
       g_type_map.Append(ConstString("bool"), eBasicTypeBool);
       g_type_map.Append(ConstString("float"), eBasicTypeFloat);
       g_type_map.Append(ConstString("double"), eBasicTypeDouble);
+      g_type_map.Append(ConstString("__fp16"), eBasicTypeHalf);
+      g_type_map.Append(ConstString("char32_t"), eBasicTypeChar32);
       g_type_map.Append(ConstString("long double"), eBasicTypeLongDouble);
       g_type_map.Append(ConstString("id"), eBasicTypeObjCID);
       g_type_map.Append(ConstString("SEL"), eBasicTypeObjCSel);
@@ -1044,6 +1047,9 @@ CompilerType TypeSystemClang::GetBuiltinTypeForDWARFEncodingAndBitSize(
           return GetType(ast.IntTy);
         if (QualTypeMatchesBitSize(bit_size, ast, ast.Int128Ty))
           return GetType(ast.Int128Ty);
+      }
+      if (type_name.contains("Int8")) {
+        return GetType(ast.SignedCharTy);
       }
     }
     // We weren't able to match up a type name, just search by size
@@ -3787,7 +3793,11 @@ ConstString TypeSystemClang::GetTypeName(lldb::opaque_compiler_type_t type) {
     return ConstString(GetTypeNameForDecl(typedef_decl));
   }
 
-  return ConstString(qual_type.getAsString(GetTypePrintingPolicy()));
+  std::string type_name = qual_type.getAsString(GetTypePrintingPolicy());
+  if (type_name.find("const ") == 0) {
+    type_name.erase(0, strlen("const "));
+  }
+  return ConstString(type_name);
 }
 
 ConstString
@@ -3801,7 +3811,17 @@ TypeSystemClang::GetDisplayTypeName(lldb::opaque_compiler_type_t type) {
   printing_policy.SuppressScope = false;
   printing_policy.SuppressUnwrittenScope = true;
   printing_policy.SuppressInlineNamespace = true;
-  return ConstString(qual_type.getAsString(printing_policy));
+  std::string type_name(qual_type.getAsString(printing_policy));
+  if (type_name.find("const ") == 0) {
+    type_name.erase(0, strlen("const "));
+  }
+  size_t pos = type_name.find("::");
+  while (pos != std::string::npos) {
+    type_name.replace(pos, strlen("::"), ".");
+    pos = type_name.find("::", pos);
+  }
+
+  return ConstString(type_name);
 }
 
 uint32_t
@@ -9895,6 +9915,10 @@ UserExpression *ScratchTypeSystemClang::GetUserExpression(
   TargetSP target_sp = m_target_wp.lock();
   if (!target_sp)
     return nullptr;
+  if (options.IsCangjieUserExpr()) {
+    return new CangjieUserExpression(*target_sp.get(), expr, prefix, language,
+                                  desired_type, options, ctx_obj);
+  }
 
   return new ClangUserExpression(*target_sp.get(), expr, prefix, language,
                                  desired_type, options, ctx_obj);

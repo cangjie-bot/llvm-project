@@ -1218,6 +1218,7 @@ TargetLoweringBase::emitPatchPoint(MachineInstr &InitialMI,
       MIB.addImm(StackMaps::DirectMemRefOp);
       MIB.add(MO);
       MIB.addImm(0);
+      MIB.addImm(FI);
     }
 
     assert(MIB->mayLoad() && "Folded a stackmap use to a non-load!");

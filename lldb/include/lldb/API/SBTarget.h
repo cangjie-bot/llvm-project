@@ -21,6 +21,8 @@
 #include "lldb/API/SBType.h"
 #include "lldb/API/SBValue.h"
 #include "lldb/API/SBWatchpoint.h"
+#include <string>
+#include <vector>
 
 namespace lldb {
 

@@ -159,6 +159,51 @@ public:
     isExternallyInitializedConstant = Val;
   }
 
+  bool isCJMeta() const {
+    return hasAttribute("CFileKlass") || hasAttribute("CFileGCTib") ||
+           hasAttribute("CFileReflect") || hasAttribute("cj_generic_ti") ||
+           hasAttribute("CFileMTable") || hasAttribute("CJGlobalValue") ||
+           hasAttribute("CFileStaticGenericTI") ||
+           hasAttribute("InnerTypeExtensions") ||
+           hasAttribute("OuterTypeExtensions") || hasAttribute("cj_tt") ||
+           hasAttribute("CJTypeName") || hasAttribute("CJTIOffsets") ||
+           hasAttribute("CJTITypeArgs") || hasAttribute("CJTIFields") ||
+           hasAttribute("CJTTFieldsFns") || hasAttribute("CJTIUpperBounds") ||
+           hasAttribute("CJFuncTable") || getName().equals("cj.sdk.version");
+  }
+
+  bool isCJSDKVersion() const { return getName().equals("cj.sdk.version"); }
+  bool isCJTypeInfo() const { return hasAttribute("CFileKlass"); }
+  bool isCJTypeTemplate() const { return hasAttribute("cj_tt"); }
+  bool isCJTypeName() const { return hasAttribute("CJTypeName"); }
+  bool isCJTIOffsets() const { return hasAttribute("CJTIOffsets"); }
+  bool isCJTITypeArgs() const { return hasAttribute("CJTITypeArgs"); }
+  bool isCJTIFields() const { return hasAttribute("CJTIFields"); }
+  bool isCJTTFieldsFns() const { return hasAttribute("CJTTFieldsFns"); }
+  bool isCJFunctableTable() const { return hasAttribute("CJFuncTable"); }
+  bool isCJGlobalValue() const { return hasAttribute("CJGlobalValue"); }
+  bool isCJGCTib() const { return hasAttribute("CFileGCTib"); }
+  bool isCJMTable() const { return hasAttribute("CFileMTable"); }
+  bool isCJInnerTypeExtensions() const {
+    return hasAttribute("InnerTypeExtensions");
+  }
+  bool isCJOuterTypeExtensions() const {
+    return hasAttribute("OuterTypeExtensions");
+  }
+  bool isCJReflectPkgInfo() const {
+    return hasAttribute("CFileReflect") && getName().endswith(".packageInfo");
+  }
+  bool isCJReflectGV() const {
+    return hasAttribute("CFileReflect") && !getName().endswith(".packageInfo");
+  }
+  bool isCJReflectGeneticTI() const { return hasAttribute("cj_generic_ti"); }
+  bool isCJStaticGenericTI() const {
+    return hasAttribute("CFileStaticGenericTI");
+  }
+  bool isCJReflectUpperBounds() const {
+    return hasAttribute("CJTIUpperBounds");
+  }
+
   /// copyAttributesFrom - copy all additional attributes (those not needed to
   /// create a GlobalVariable) from the GlobalVariable Src to this one.
   void copyAttributesFrom(const GlobalVariable *Src);

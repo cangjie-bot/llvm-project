@@ -459,6 +459,19 @@ void StructType::setBody(ArrayRef<Type*> Elements, bool isPacked) {
   ContainedTys = Elements.copy(getContext().pImpl->Alloc).data();
 }
 
+void StructType::setBodyForCJ(ArrayRef<Type*> Elements) {
+  setSubclassData(getSubclassData() | SCDB_HasBody);
+
+  NumContainedTys = Elements.size();
+
+  if (Elements.empty()) {
+    ContainedTys = nullptr;
+    return;
+  }
+
+  ContainedTys = Elements.copy(getContext().pImpl->Alloc).data();
+}
+
 void StructType::setName(StringRef Name) {
   if (Name == getName()) return;
 

@@ -15,6 +15,7 @@
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 using namespace llvm;
@@ -95,6 +96,10 @@ Instruction *InstCombinerImpl::PromoteCastOfAllocation(BitCastInst &CI,
   Type *AllocElTy = AI.getAllocatedType();
   Type *CastElTy = PTy->getNonOpaquePointerElementType();
   if (!AllocElTy->isSized() || !CastElTy->isSized()) return nullptr;
+
+  // If the type of alloca contains gcptr, its type cannot be changed.
+  // Otherwise, we cannot identify gcptr in rewrite-statepoint-for-gc.
+  if (containsGCPtrType(AllocElTy)) return nullptr;
 
   // This optimisation does not work for cases where the cast type
   // is scalable and the allocated type is not. This because we need to

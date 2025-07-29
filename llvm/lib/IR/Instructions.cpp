@@ -2627,6 +2627,28 @@ Type *ExtractValueInst::getIndexedType(Type *Agg,
   return const_cast<Type*>(Agg);
 }
 
+int ExtractValueInst::getIndexOffset(const DataLayout &DL) {
+  Type *Agg = getAggregateOperand()->getType();
+  int Offset = 0;
+  for (unsigned Index : Indices) {
+    if (ArrayType *AT = dyn_cast<ArrayType>(Agg)) {
+      if (Index >= AT->getNumElements())
+        return -1;
+      Offset += DL.getTypeSizeInBits(Agg) * Index;
+      Agg = AT->getElementType();
+    } else if (StructType *ST = dyn_cast<StructType>(Agg)) {
+      if (Index >= ST->getNumElements())
+        return -1;
+      Offset += DL.getStructLayout(ST)->getElementOffset(Index);
+      Agg = ST->getElementType(Index);
+    } else {
+      // Not a valid type to index into.
+      return -1;
+    }
+  }
+  return Offset;
+}
+
 //===----------------------------------------------------------------------===//
 //                             UnaryOperator Class
 //===----------------------------------------------------------------------===//

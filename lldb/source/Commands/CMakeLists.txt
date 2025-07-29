@@ -40,6 +40,8 @@ add_lldb_library(lldbCommands
   CommandObjectWatchpointCommand.cpp
   CommandOptionArgumentTable.cpp
   CommandOptionsProcessLaunch.cpp
+  CommandObjectCJThread.cpp
+  CommandObjCJThreadCommon.cpp
 
   LINK_LIBS
     lldbBreakpoint

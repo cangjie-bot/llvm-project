@@ -199,6 +199,9 @@ bool ThreadPlanStepThrough::ShouldStop(Event *event_ptr) {
   // might chain, for instance stepping through a dylib trampoline to the objc
   // dispatch function...)
   LookForPlanToStepThroughFromCurrentPC();
+  if (!m_sub_plan_sp) {
+    m_sub_plan_sp = CFFILookForPlanToStepThroughFromCurrentPC();
+  }
   if (m_sub_plan_sp) {
     PushPlan(m_sub_plan_sp);
     return false;

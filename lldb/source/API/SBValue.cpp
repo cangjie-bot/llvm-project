@@ -957,8 +957,15 @@ uint32_t SBValue::GetNumChildren(uint32_t max) {
 
   ValueLocker locker;
   lldb::ValueObjectSP value_sp(GetSP(locker));
-  if (value_sp)
-    num_children = value_sp->GetNumChildren(max);
+  if (value_sp) {
+    ConstString match("^std[.]core::Range<.+>$");
+    RegularExpression regex(match.GetStringRef());
+    if (regex.Execute(value_sp->GetQualifiedTypeName().AsCString())) {
+      num_children = 0;
+    } else {
+      num_children = value_sp->GetNumChildren(max);
+    }
+  }
 
   return num_children;
 }

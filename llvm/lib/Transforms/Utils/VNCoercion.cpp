@@ -223,6 +223,22 @@ int analyzeLoadFromClobberingStore(Type *LoadTy, Value *LoadPtr,
                                         DL);
 }
 
+int anaLyzeLoadFromClobberingGCWrite(Type *LoadTy, Value *LoadPtr,
+                                     IntrinsicInst *DepII,
+                                     const DataLayout &DL) {
+  auto *StoredVal = DepII->getOperand(0);
+
+  // check whether StoredVal type can be converted to LoadTy.
+  if (!canCoerceMustAliasedValueToLoad(StoredVal, LoadTy, DL))
+    return -1;
+
+  // if we can get load value from gcwrite value, return the offset of LoadPtr
+  // relative to StorePtr.
+  return analyzeLoadFromClobberingWrite(
+      LoadTy, LoadPtr, DepII->getOperand(2),
+      DL.getTypeSizeInBits(StoredVal->getType()).getFixedSize(), DL);
+}
+
 /// Looks at a memory location for a load (specified by MemLocBase, Offs, and
 /// Size) and compares it against a load.
 ///

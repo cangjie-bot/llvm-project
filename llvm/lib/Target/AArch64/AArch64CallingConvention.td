@@ -304,6 +304,12 @@ def RetCC_AArch64_WebKit_JS : CallingConv<[
   CCIfType<[f64], CCAssignToReg<[D0, D1, D2, D3, D4, D5, D6, D7]>>
 ]>;
 
+let Entry = 1 in
+def RetCC_AArch64_Cangjie_GCCheck : CallingConv<[
+  CCIfType<[i32], CCAssignToReg<[W9]>>,
+  CCIfType<[i64], CCAssignToReg<[X9]>>
+]>;
+
 //===----------------------------------------------------------------------===//
 // ARM64 Calling Convention for GHC
 //===----------------------------------------------------------------------===//
@@ -360,9 +366,10 @@ def CC_AArch64_GHC : CallingConv<[
 // vreg on entry, use it in RET & tail call generation; make that vreg def if we
 // end up saving LR as part of a call frame). Watch this space...
 def CSR_AArch64_AAPCS : CalleeSavedRegs<(add X19, X20, X21, X22, X23, X24,
-                                           X25, X26, X27, X28, LR, FP,
+                                           X25, X26, X27, X28,
                                            D8,  D9,  D10, D11,
-                                           D12, D13, D14, D15)>;
+                                           D12, D13, D14, D15, LR, FP)>;
+
 
 // A variant for treating X18 as callee saved, when interfacing with
 // code that needs X18 to be preserved.
@@ -422,6 +429,11 @@ def CSR_AArch64_AllRegs
                            (sequence "X%u", 0, 28), FP, LR, SP,
                            (sequence "B%u", 0, 31), (sequence "H%u", 0, 31),
                            (sequence "S%u", 0, 31), (sequence "D%u", 0, 31),
+                           (sequence "Q%u", 0, 31))>;
+
+def CSR_AArch64_CangjieGC
+    : CalleeSavedRegs<(add (sequence "X%u", 0, 8),
+                           (sequence "X%u", 10, 28), FP, LR, SP,
                            (sequence "Q%u", 0, 31))>;
 
 def CSR_AArch64_NoRegs : CalleeSavedRegs<(add)>;

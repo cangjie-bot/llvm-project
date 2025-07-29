@@ -216,6 +216,8 @@ extern cl::opt<GVDAGType> ViewBlockLayoutWithBFI;
 // Command line option to specify the name of the function for CFG dump
 // Defined in Analysis/BlockFrequencyInfo.cpp:  -view-bfi-func-name=
 extern cl::opt<std::string> ViewBlockFreqFuncName;
+
+extern cl::opt<bool> CJPipeline;
 } // namespace llvm
 
 namespace {
@@ -1827,8 +1829,15 @@ void MachineBlockPlacement::buildChain(
     // Look for the best viable successor if there is one to place immediately
     // after this block.
     auto Result = selectBestSuccessor(BB, Chain, BlockFilter);
-    MachineBasicBlock* BestSucc = Result.BB;
-    bool ShouldTailDup = Result.ShouldTailDup;
+    MachineBasicBlock* BestSucc;
+    bool ShouldTailDup = false;
+    if (CJPipeline && Result.BB && Result.BB->succ_empty() &&
+        !Result.BB->isReturnBlock()) {
+      BestSucc = nullptr;
+    } else {
+      BestSucc = Result.BB;
+      ShouldTailDup = Result.ShouldTailDup;
+    }
     if (allowTailDupPlacement())
       ShouldTailDup |= (BestSucc && canTailDuplicateUnplacedPreds(BB, BestSucc,
                                                                   Chain,
@@ -1855,7 +1864,7 @@ void MachineBlockPlacement::buildChain(
     // Check for that now.
     if (allowTailDupPlacement() && BestSucc && ShouldTailDup) {
       repeatedlyTailDuplicateBlock(BestSucc, BB, LoopHeaderBB, Chain,
-                                       BlockFilter, PrevUnplacedBlockIt);
+                                   BlockFilter, PrevUnplacedBlockIt);
       // If the chosen successor was duplicated into BB, don't bother laying
       // it out, just go round the loop again with BB as the chain end.
       if (!BB->isSuccessor(BestSucc))

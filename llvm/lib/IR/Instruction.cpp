@@ -683,8 +683,12 @@ bool Instruction::isVolatile() const {
 }
 
 bool Instruction::mayThrow() const {
-  if (const CallInst *CI = dyn_cast<CallInst>(this))
+  if (const CallInst *CI = dyn_cast<CallInst>(this)) {
+    if (CI->getCalledFunction() &&
+        CI->getCalledFunction()->hasFnAttribute("cj-heapmalloc"))
+      return false;
     return !CI->doesNotThrow();
+  }
   if (const auto *CRI = dyn_cast<CleanupReturnInst>(this))
     return CRI->unwindsToCaller();
   if (const auto *CatchSwitch = dyn_cast<CatchSwitchInst>(this))
@@ -711,6 +715,10 @@ bool Instruction::willReturn() const {
     // return. Remove this workaround once all intrinsics are appropriately
     // annotated.
     return CB->hasFnAttr(Attribute::WillReturn) ||
+           CB->getIntrinsicID() == Intrinsic::cj_gcwrite_ref ||
+           CB->getIntrinsicID() == Intrinsic::cj_gcwrite_struct ||
+           CB->getIntrinsicID() == Intrinsic::cj_gcwrite_static_ref ||
+           CB->getIntrinsicID() == Intrinsic::cj_gcwrite_static_struct ||
            (isa<IntrinsicInst>(CB) && CB->onlyReadsMemory());
   return true;
 }

@@ -28,6 +28,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -35,6 +36,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/PatternMatch.h"
@@ -81,6 +83,10 @@ static cl::opt<bool> EarlyCSEDebugHash(
     "earlycse-debug-hash", cl::init(false), cl::Hidden,
     cl::desc("Perform extra assertion checking to verify that SimpleValue's hash "
              "function is well-behaved w.r.t. its isEqual predicate"));
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
 
 //===----------------------------------------------------------------------===//
 // SimpleValue
@@ -701,6 +707,38 @@ private:
             Info.IsVolatile = false;
             break;
           }
+
+          if (CJPipeline) {
+            switch (IntrID) {
+            case Intrinsic::cj_gcwrite_ref:
+              Info.PtrVal = cangjie::getPointerArg(cast<CallBase>(Inst));
+              Info.MatchingId = Intrinsic::cj_gcread_ref;
+              Info.ReadMem = false;
+              Info.WriteMem = true;
+              Info.IsVolatile = false;
+              break;
+            case Intrinsic::cj_gcwrite_static_ref:
+              Info.PtrVal = cangjie::getPointerArg(cast<CallBase>(Inst));
+              Info.MatchingId = Intrinsic::cj_gcread_static_ref;
+              Info.ReadMem = false;
+              Info.WriteMem = true;
+              Info.IsVolatile = false;
+              break;
+            case Intrinsic::cj_gcread_ref:
+              Info.PtrVal = cangjie::getPointerArg(cast<CallBase>(Inst));
+              Info.MatchingId = Intrinsic::cj_gcread_ref;
+              Info.ReadMem = true;
+              Info.WriteMem = false;
+              Info.IsVolatile = false;
+              break;
+            case Intrinsic::cj_gcread_static_ref:
+              Info.PtrVal = cangjie::getPointerArg(cast<CallBase>(Inst));
+              Info.MatchingId = Intrinsic::cj_gcread_static_ref;
+              Info.ReadMem = true;
+              Info.WriteMem = false;
+              Info.IsVolatile = false;
+            }
+          }
         }
       }
     }
@@ -815,6 +853,10 @@ private:
     switch (ID) {
     case Intrinsic::masked_load:
     case Intrinsic::masked_store:
+    case Intrinsic::cj_gcwrite_ref:
+    case Intrinsic::cj_gcwrite_struct:
+    case Intrinsic::cj_gcread_ref:
+    case Intrinsic::cj_gcread_static_ref:
       return true;
     }
     return false;
@@ -855,8 +897,12 @@ private:
                                                 Type *ExpectedType) const {
     switch (II->getIntrinsicID()) {
     case Intrinsic::masked_load:
+    case Intrinsic::cj_gcread_ref:
+    case Intrinsic::cj_gcread_static_ref:
       return II;
     case Intrinsic::masked_store:
+    case Intrinsic::cj_gcwrite_ref:
+    case Intrinsic::cj_gcwrite_static_ref:
       return II->getOperand(0);
     }
     return nullptr;
@@ -905,6 +951,11 @@ private:
         return II->getOperand(0);
       if (II->getIntrinsicID() == Intrinsic::masked_store)
         return II->getOperand(1);
+      if (II->getIntrinsicID() == Intrinsic::cj_gcread_ref ||
+          II->getIntrinsicID() == Intrinsic::cj_gcread_static_ref ||
+          II->getIntrinsicID() == Intrinsic::cj_gcwrite_ref ||
+          II->getIntrinsicID() == Intrinsic::cj_gcwrite_static_ref)
+        return cangjie::getPointerArg(const_cast<IntrinsicInst *>(II));
       llvm_unreachable("Unexpected IntrinsicInst");
     };
     auto MaskOp = [](const IntrinsicInst *II) {
@@ -961,6 +1012,14 @@ private:
       //   mask.
       return IsSubmask(MaskOp(Earlier), MaskOp(Later));
     }
+    if ((IDE == Intrinsic::cj_gcread_ref || IDE == Intrinsic::cj_gcwrite_ref) &&
+        (IDL == Intrinsic::cj_gcread_ref || IDL == Intrinsic::cj_gcwrite_ref))
+      return true;
+    if ((IDE == Intrinsic::cj_gcread_static_ref ||
+         IDE == Intrinsic::cj_gcwrite_static_ref) &&
+        (IDL == Intrinsic::cj_gcread_static_ref ||
+         IDL == Intrinsic::cj_gcwrite_static_ref))
+      return true;
     return false;
   }
 
@@ -976,6 +1035,21 @@ private:
     // removeMemoryAccess.  The non-optimized MemoryUse case is lazily updated
     // by MemorySSA's getClobberingMemoryAccess.
     MSSAUpdater->removeMemoryAccess(&Inst, true);
+  }
+
+  void removeReadNoneMSSA(Instruction &Inst) {
+    if (!MSSA)
+      return;
+    if (VerifyMemorySSA)
+      MSSA->verifyMemorySSA();
+
+    for (User *U : Inst.users()) {
+      if (auto *CB = dyn_cast<CallBase>(U)) {
+        // Removing a callsite that may not read from or write memory.
+        // This is necessary for correctness, see the createNewAccess method.
+        MSSAUpdater->removeMemoryAccess(CB, true);
+      }
+    }
   }
 };
 
@@ -1119,8 +1193,10 @@ Value *EarlyCSE::getMatchingValue(LoadValue &InVal, ParseMemoryInst &MemInst,
                                   unsigned CurrentGeneration) {
   if (InVal.DefInst == nullptr)
     return nullptr;
+
   if (InVal.MatchingId != MemInst.getMatchingId())
     return nullptr;
+
   // We don't yet handle removing loads with ordering of any kind.
   if (MemInst.isVolatile() || !MemInst.isUnordered())
     return nullptr;
@@ -1146,8 +1222,10 @@ Value *EarlyCSE::getMatchingValue(LoadValue &InVal, ParseMemoryInst &MemInst,
   // Deal with non-target memory intrinsics.
   bool MatchingNTI = isHandledNonTargetIntrinsic(Matching);
   bool OtherNTI = isHandledNonTargetIntrinsic(Other);
+
   if (OtherNTI != MatchingNTI)
     return nullptr;
+  // In cangjie, it doesn't go to this branch.
   if (OtherNTI && MatchingNTI) {
     if (!isNonTargetIntrinsicMatch(cast<IntrinsicInst>(InVal.DefInst),
                                    cast<IntrinsicInst>(MemInst.get())))
@@ -1355,6 +1433,10 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
       } else {
         bool Killed = false;
         if (!Inst.use_empty()) {
+          Function *Callee = dyn_cast<Function>(V);
+          if (Callee && Callee->hasFnAttribute(Attribute::ReadNone)) {
+            removeReadNoneMSSA(Inst);
+          }
           Inst.replaceAllUsesWith(V);
           Changed = true;
         }

@@ -443,6 +443,7 @@ int Driver::MainLoop() {
   m_debugger.SetOutputFileHandle(stdout, false);
   // Don't take ownership of STDIN yet...
   m_debugger.SetInputFileHandle(stdin, false);
+  m_debugger.HandleCommand("setting set prompt \"(cjdb) \"");
 
   m_debugger.SetUseExternalEditor(m_option_data.m_use_external_editor);
 

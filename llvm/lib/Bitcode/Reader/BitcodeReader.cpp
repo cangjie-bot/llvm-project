@@ -2003,6 +2003,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
     return Attribute::Hot;
   case bitc::ATTR_KIND_PRESPLIT_COROUTINE:
     return Attribute::PresplitCoroutine;
+  case bitc::ATTR_KIND_CJ_STACK_POINTER:
+    return Attribute::CJStackPointer;
   }
 }
 
@@ -4041,7 +4043,6 @@ Error BitcodeReader::parseGlobalIndirectSymbolRecord(
         StringRef(Strtab.data() + Record[OpNum], Record[OpNum + 1]));
     OpNum += 2;
   }
-
   ValueList.push_back(NewGA, getVirtualTypeID(NewGA->getType(), TypeID));
   IndirectSymbolInits.push_back(std::make_pair(NewGA, Val));
   return Error::success();

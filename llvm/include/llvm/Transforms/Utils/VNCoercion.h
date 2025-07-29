@@ -21,6 +21,7 @@
 #ifndef LLVM_TRANSFORMS_UTILS_VNCOERCION_H
 #define LLVM_TRANSFORMS_UTILS_VNCOERCION_H
 
+#include "llvm/IR/IntrinsicInst.h"
 namespace llvm {
 class Constant;
 class StoreInst;
@@ -53,6 +54,15 @@ Value *coerceAvailableValueToLoadType(Value *StoredVal, Type *LoadedTy,
 /// On failure, it returns -1.
 int analyzeLoadFromClobberingStore(Type *LoadTy, Value *LoadPtr,
                                    StoreInst *DepSI, const DataLayout &DL);
+
+/// This function determines whether a value for the pointer LoadPtr can be
+/// extracted from the gcwrite at DepSI.
+///
+/// On success, it returns the offset into DepSI that extraction would start.
+/// On failure, it returns -1.
+int anaLyzeLoadFromClobberingGCWrite(Type *LoadTy, Value *LoadPtr,
+                                     IntrinsicInst *DepII,
+                                     const DataLayout &DL);
 
 /// This function determines whether a value for the pointer LoadPtr can be
 /// extracted from the load at DepLI.

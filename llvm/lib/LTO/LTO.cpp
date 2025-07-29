@@ -69,6 +69,14 @@ static cl::opt<bool>
     DumpThinCGSCCs("dump-thin-cg-sccs", cl::init(false), cl::Hidden,
                    cl::desc("Dump the SCCs in the ThinLTO index's callgraph"));
 
+static cl::opt<bool>
+    IsCJFullLTO("cangjie-full-lto", cl::init(false), cl::Hidden,
+                cl::desc("Cangjie run FullLTO."));
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
+
 /// Enable global value internalization in LTO.
 cl::opt<bool> EnableLTOInternalization(
     "enable-lto-internalization", cl::init(true), cl::Hidden,
@@ -650,11 +658,16 @@ Error LTO::addModule(InputFile &Input, unsigned ModI,
 
   BitcodeModule BM = Input.Mods[ModI];
   auto ModSyms = Input.module_symbols(ModI);
+  // For cangjie, use IsCJFullLTO to set whether to run FullLTO.
+  //   When IsCJFullLTO is not specified, run ThinLTO by default for cangjie.
+  // For others, use default set of LLVM.
+  bool IsThinLTO =
+      (CJPipeline && !IsCJFullLTO) || (!CJPipeline && LTOInfo->IsThinLTO);
   addModuleToGlobalRes(ModSyms, {ResI, ResE},
-                       LTOInfo->IsThinLTO ? ThinLTO.ModuleMap.size() + 1 : 0,
+                       IsThinLTO ? ThinLTO.ModuleMap.size() + 1 : 0,
                        LTOInfo->HasSummary);
 
-  if (LTOInfo->IsThinLTO)
+  if (IsThinLTO)
     return addThinLTO(BM, ModSyms, ResI, ResE);
 
   RegularLTO.EmptyCombinedModule = false;
@@ -997,6 +1010,39 @@ Error LTO::checkPartiallySplit() {
   return Error::success();
 }
 
+void LTO::checkCJBC() {
+  bool IsCJBC = true;
+  // scan modules for ThinLTO
+  for (auto &Mod : ThinLTO.ModuleMap) {
+    LTOLLVMContext BackendContext(Conf);
+    Expected<std::unique_ptr<Module>> MOrErr =
+        Mod.second.parseModule(BackendContext);
+    if (!MOrErr)
+      continue;
+    Module &M = **MOrErr;
+    Metadata *MD = M.getModuleFlag("CJBC");
+    if (MD == nullptr) {
+      IsCJBC = false;
+      break;
+    }
+  }
+
+  // scan module for FullLTO
+  for (auto &Mod : RegularLTO.ModsWithSummaries) {
+    Module &M = *Mod.M;
+    Metadata *MD = M.getModuleFlag("CJBC");
+    if (MD == nullptr) {
+      IsCJBC = false;
+      break;
+    }
+  }
+
+  if (!IsCJBC) {
+    report_fatal_error(
+        "Only allow module from cangjie bc files for cangjie LTO!");
+  }
+}
+
 Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
   // Compute "dead" symbols, we don't want to import/export these!
   DenseSet<GlobalValue::GUID> GUIDPreservedSymbols;
@@ -1034,6 +1080,10 @@ Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
   if (!StatsFileOrErr)
     return StatsFileOrErr.takeError();
   std::unique_ptr<ToolOutputFile> StatsFile = std::move(StatsFileOrErr.get());
+
+  if (CJPipeline) {
+    checkCJBC();
+  }
 
   Error Result = runRegularLTO(AddStream);
   if (!Result)

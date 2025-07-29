@@ -25,6 +25,8 @@ endif()
 
 add_public_tablegen_target(X86CommonTableGen)
 
+include_directories(${CANGJIE_DEMANGLE_DIR})
+
 set(sources
   X86AsmPrinter.cpp
   X86AvoidTrailingCall.cpp
@@ -87,6 +89,9 @@ set(sources
   X86VZeroUpper.cpp
   X86WinEHState.cpp
   X86InsertWait.cpp
+
+  ADDITIONAL_HEADER_DIRS
+  ${CANGJIE_DEMANGLE_DIR}
   )
 
 add_llvm_target(X86CodeGen ${sources}

@@ -75,4 +75,5 @@
 #include "lldb/API/SBValueList.h"
 #include "lldb/API/SBVariablesOptions.h"
 #include "lldb/API/SBWatchpoint.h"
+#include "lldb/API/SBMixedArkTSDebugger.h"
 %}

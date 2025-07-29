@@ -121,6 +121,16 @@ void AsmPrinter::emitEncodingByte(unsigned Val, const char *Desc) const {
   OutStreamer->emitIntValue(Val, 1);
 }
 
+/// When there are no callsites in a function, emit a magic number
+/// 0x55555555 in EH table header.
+void AsmPrinter::EmitNoCallsiteEHHeader() const {
+  if (isVerbose()) {
+    OutStreamer->AddComment(Twine("No callsite function EH table header"));
+  }
+
+  OutStreamer->emitIntValue(0x55555555, 4);
+}
+
 /// GetSizeOfEncodedValue - Return the size of the encoding in bytes.
 unsigned AsmPrinter::GetSizeOfEncodedValue(unsigned Encoding) const {
   if (Encoding == dwarf::DW_EH_PE_omit)

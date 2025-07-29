@@ -71,12 +71,19 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "prologepilog"
-
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
 using MBBVector = SmallVector<MachineBasicBlock *, 4>;
 
 STATISTIC(NumLeafFuncWithSpills, "Number of leaf functions with CSRs");
 STATISTIC(NumFuncSeen, "Number of functions seen in PEI");
 
+
+static cl::opt<unsigned>
+CJWarnStackSize("cj-warn-stack-size",
+    cl::desc("size of stack warning"),
+    cl::init(1 * 1024 * 1024)); // 1Mb
 
 namespace {
 
@@ -205,11 +212,22 @@ static void stashEntryDbgValues(MachineBasicBlock &MBB,
       MI->removeFromParent();
 }
 
+static void CJStackSizeWarning(const Function &F, unsigned StackSize) {
+  if (StackSize > CJWarnStackSize) {
+    DiagnosticInfoStackSize DiagStackSize(F, StackSize, CJWarnStackSize, DS_Warning);
+    F.getContext().diagnose(DiagStackSize);
+  }
+}
+
 /// runOnMachineFunction - Insert prolog/epilog code and replace abstract
 /// frame indexes with appropriate references.
 bool PEI::runOnMachineFunction(MachineFunction &MF) {
   NumFuncSeen++;
   const Function &F = MF.getFunction();
+  if (F.hasFnAttribute("cj-fast-new-obj") &&
+     (MF.getTarget().getTargetTriple().getArch() == Triple::x86_64)) {
+    return false;
+  }
   const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
   const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
 
@@ -273,23 +291,29 @@ bool PEI::runOnMachineFunction(MachineFunction &MF) {
   MachineFrameInfo &MFI = MF.getFrameInfo();
   uint64_t StackSize = MFI.getStackSize();
 
-  unsigned Threshold = UINT_MAX;
-  if (MF.getFunction().hasFnAttribute("warn-stack-size")) {
-    bool Failed = MF.getFunction()
-                      .getFnAttribute("warn-stack-size")
-                      .getValueAsString()
-                      .getAsInteger(10, Threshold);
-    // Verifier should have caught this.
-    assert(!Failed && "Invalid warn-stack-size fn attr value");
-    (void)Failed;
-  }
   if (MF.getFunction().hasFnAttribute(Attribute::SafeStack)) {
     StackSize += MFI.getUnsafeStackSize();
   }
-  if (StackSize > Threshold) {
-    DiagnosticInfoStackSize DiagStackSize(F, StackSize, Threshold, DS_Warning);
-    F.getContext().diagnose(DiagStackSize);
+
+  if (F.hasCangjieGC()) {
+     CJStackSizeWarning(F, StackSize);
+  } else {
+    unsigned Threshold = UINT_MAX;
+    if (MF.getFunction().hasFnAttribute("warn-stack-size")) {
+      bool Failed = MF.getFunction()
+                        .getFnAttribute("warn-stack-size")
+                        .getValueAsString()
+                        .getAsInteger(10, Threshold);
+      // Verifier should have caught this.
+      assert(!Failed && "Invalid warn-stack-size fn attr value");
+      (void)Failed;
+    }
+    if (StackSize > Threshold) {
+      DiagnosticInfoStackSize DiagStackSize(F, StackSize, Threshold, DS_Warning);
+      F.getContext().diagnose(DiagStackSize);
+    }
   }
+
   ORE->emit([&]() {
     return MachineOptimizationRemarkAnalysis(DEBUG_TYPE, "StackSize",
                                              MF.getFunction().getSubprogram(),
@@ -1416,8 +1440,12 @@ void PEI::replaceFrameIndices(MachineBasicBlock *BB, MachineFunction &MF,
                "DBG_VALUE machine instruction");
         Register Reg;
         MachineOperand &Offset = MI.getOperand(i + 1);
-        StackOffset refOffset = TFI->getFrameIndexReferencePreferSP(
-            MF, MI.getOperand(i).getIndex(), Reg, /*IgnoreSPUpdates*/ false);
+        StackOffset refOffset = CJPipeline
+                                    ? TFI->getFrameIndexRefForCJ(
+                                          MF, MI.getOperand(i).getIndex(), Reg)
+                                    : TFI->getFrameIndexReferencePreferSP(
+                                          MF, MI.getOperand(i).getIndex(), Reg,
+                                          /* IgnoreSPUpdates */ false);
         assert(!refOffset.getScalable() &&
                "Frame offsets with a scalable component are not supported");
         Offset.setImm(Offset.getImm() + refOffset.getFixed() + SPAdj);

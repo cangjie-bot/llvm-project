@@ -228,6 +228,38 @@ protected:
   // GOFF specific sections.
   MCSection *PPA1Section = nullptr;
 
+  /// Cangjie File(CFile) specific sections.
+  /// Sections about cangjie generic.
+  MCSection *CJTypeTemplateSection = nullptr;        // TypeTemplate
+  MCSection *CJStaticGenericTISection =
+      nullptr; // Compiler-generated generic instantiation types
+  /// Sections about cangjie typeinfo.
+  MCSection *CJTypeInfoSection = nullptr;   // TypeInfo
+  MCSection *CJTypeFieldsSection = nullptr; // Fields of TI or TT
+
+  /// Sections about vtable and itable
+  MCSection *CJMtableSection = nullptr;              // Tile all extensiondefs
+  MCSection *CJInnerTypeExtensionsSection = nullptr; // Reference of inner eds
+  MCSection *CJOuterTypeExtensionsSection = nullptr; // Reference of outer eds
+
+  /// Sections about cangjie reflect.
+  MCSection *CJReflectPkgInfoSection = nullptr;
+  MCSection *CJReflectGVSection = nullptr;
+  MCSection *CJReflectGenericTISection = nullptr;
+
+  /// Sections about cangjie gc.
+  MCSection *CJMethodInfoSection = nullptr; // Method descriptor
+  MCSection *CJStackMapSection = nullptr;
+  MCSection *CJGCTibSection = nullptr;
+  MCSection *CJGCRootSection = nullptr;
+  MCSection *CJGCFlagsSection = nullptr;
+
+  /// Other cangjie sections.
+  MCSection *CJSDKVersionSection = nullptr;
+  MCSection *CJStringPoolDictSection = nullptr;
+  MCSection *CJStringPoolSection = nullptr;
+  MCSection *CJGlobalInitFuncSection = nullptr;
+
   // XCOFF specific sections
   MCSection *TOCBaseSection = nullptr;
   MCSection *ReadOnly8Section = nullptr;
@@ -433,6 +465,48 @@ public:
   MCSection *getTOCBaseSection() const { return TOCBaseSection; }
 
   MCSection *getEHFrameSection() const { return EHFrameSection; }
+
+  /// Cangjie File(CFile) specific sections.
+  // TypeInfo information
+  MCSection *getCJTypeTemplateSection() const { return CJTypeTemplateSection; }
+  MCSection *getCJStaticGenericTISection() const { return CJStaticGenericTISection; }
+  MCSection *getTypeInfoSection() const { return CJTypeInfoSection; }
+  MCSection *getCJTypeFieldsSection() const { return CJTypeFieldsSection; }
+
+  // VTable/ITable
+  MCSection *getCJMtableSection() const { return CJMtableSection; }
+  MCSection *getCJInnerTypeExtensionsSection() const {
+    return CJInnerTypeExtensionsSection;
+  }
+  MCSection *getCJOuterTypeExtensionsSection() const {
+    return CJOuterTypeExtensionsSection;
+  }
+
+  // Reflect
+  MCSection *getCJReflectPkgInfoSection() const {
+    return CJReflectPkgInfoSection;
+  }
+  MCSection *getCJReflectGVSection() const { return CJReflectGVSection; }
+  MCSection *getCJReflectGenericTISection() const {
+    return CJReflectGenericTISection;
+  }
+
+  // GC
+  MCSection *getCJMethodInfoSection() const { return CJMethodInfoSection; }
+  MCSection *getCJStackMapSection() const { return CJStackMapSection; }
+  MCSection *getCJGCTibSection() const { return CJGCTibSection; }
+  MCSection *getCJGCRootSection() const { return CJGCRootSection; }
+  MCSection *getCJGCFlagsSection() const { return CJGCFlagsSection; }
+
+  // Others
+  MCSection *getCJSDKVersionSection() const { return CJSDKVersionSection; }
+  MCSection *getCJStringPoolDictSection() const {
+    return CJStringPoolDictSection;
+  }
+  MCSection *getCJStringPoolSection() const { return CJStringPoolSection; }
+  MCSection *getCJGlobalInitFuncSection() const {
+    return CJGlobalInitFuncSection;
+  }
 
   bool isPositionIndependent() const { return PositionIndependent; }
 

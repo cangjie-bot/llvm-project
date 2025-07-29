@@ -31,6 +31,15 @@ let hasSideEffects = 0, isNotDuplicable = 1, Uses = [ESP, SSP],
   def MOVPC32r : Ii32<0xE8, Pseudo, (outs GR32:$reg), (ins i32imm:$label),
                       "", []>;
 
+// used by cangjie stack back calling convention:
+//    call $next_inst
+//    do nothing
+//
+//    pop rip
+//    ret
+let hasSideEffects = 0, isNotDuplicable = 1, SchedRW = [WriteJump] in
+  def PUSHPC64 : Ii64<0xE9, Pseudo, (outs), (ins i64imm:$label), "", []>;
+
 // ADJCALLSTACKDOWN/UP implicitly use/def ESP because they may be expanded into
 // a stack adjustment and the codegen must know that they may modify the stack
 // pointer before prolog-epilog rewriting occurs.

@@ -15,7 +15,7 @@ entry:
 
 loop:
 ; CHECK-LABEL: loop
-; CHECK-NOT: call void @do_safepoint
+; CHECK: call void @do_safepoint
   call void @foo()
   br label %loop
 }

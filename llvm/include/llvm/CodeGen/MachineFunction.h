@@ -400,6 +400,16 @@ class LLVM_EXTERNAL_VISIBILITY MachineFunction {
   /// \pre Fn, Target, MMI, and FunctionNumber are properly set.
   void init();
 
+  /// The symbol for the epilogue of current function.
+  MCSymbol *EpilogueLabel = nullptr;
+
+  /// Whether we've found the Epilogue for the current funciton.
+  bool EpilogueLabelEmitted = false;
+
+  /// Whether the current cangjie function needs Reload RSP, used by
+  /// append epilogue.
+  bool NeedCangjieReloadSP = false;
+
 public:
   struct VariableDbgInfo {
     const DILocalVariable *Var;
@@ -1260,12 +1270,28 @@ public:
   /// Move the call site info from \p Old to \New call site info. This function
   /// is used when we are replacing one call instruction with another one to
   /// the same callee.
-  void moveCallSiteInfo(const MachineInstr *Old,
-                        const MachineInstr *New);
+  void moveCallSiteInfo(const MachineInstr *Old, const MachineInstr *New);
 
-  unsigned getNewDebugInstrNum() {
-    return ++DebugInstrNumberingCount;
-  }
+  unsigned getNewDebugInstrNum() { return ++DebugInstrNumberingCount; }
+
+  /// Return whether the epilogue position has been set.
+  bool isEpilogueLabelEmitted() const { return EpilogueLabelEmitted; }
+
+  /// Set the epilogue label emitted to indicate we've found and emitted the
+  /// epilogue label.
+  void setEpilogueLabelEmitted() { EpilogueLabelEmitted = true; }
+
+  /// Get epilogue label for the current function.
+  MCSymbol *getEpilogueLabel() const { return EpilogueLabel; }
+
+  /// Set epilogue label for the current function.
+  void setEpilogueLabel(MCSymbol *label) { EpilogueLabel = label; }
+
+  /// Get flag for reload rsp before epilogue.
+  bool getNeedCangjieReloadSP() const { return NeedCangjieReloadSP; }
+
+  /// Set the flag whether we need to reload rsp in epilogue.
+  void setNeedCangjieReloadSP(bool value) { NeedCangjieReloadSP = value; }
 };
 
 //===--------------------------------------------------------------------===//

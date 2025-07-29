@@ -755,6 +755,11 @@ StackFrameSP StackFrameList::GetFrameWithStackID(const StackID &stack_id) {
       frame_sp = GetFrameAtIndex(frame_idx);
       if (frame_sp && frame_sp->GetStackID() == stack_id)
         break;
+      if (frame_sp && frame_sp->GetSymbolContext(eSymbolContextEverything).\
+          GetFunctionName(Mangled::ePreferDemangledWithoutArguments).\
+          GetStringRef().endswith("::main")) {
+        break;
+      }
       frame_idx++;
     } while (frame_sp);
   }

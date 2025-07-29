@@ -175,6 +175,9 @@ static cl::opt<bool> DebugInfoForProfiling(
 static cl::opt<bool> PseudoProbeForProfiling(
     "new-pm-pseudo-probe-for-profiling", cl::init(false), cl::Hidden,
     cl::desc("Emit pseudo probes to enable PGO profile generation."));
+static cl::opt<bool> OnlyVerifyOut(
+    "only-verify-out", cl::init(false), cl::Hidden,
+    cl::desc("Verify only the IR of output."));
 /// @}}
 
 template <typename PassManagerT>
@@ -437,7 +440,7 @@ bool llvm::runPassPipeline(StringRef Arg0, Module &M, TargetMachine *TM,
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
   ModulePassManager MPM;
-  if (VK > VK_NoVerifier)
+  if (VK > VK_NoVerifier && !OnlyVerifyOut)
     MPM.addPass(VerifierPass());
   if (EnableDebugify)
     MPM.addPass(NewPMDebugifyPass());

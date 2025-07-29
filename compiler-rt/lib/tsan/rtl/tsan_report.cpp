@@ -54,10 +54,16 @@ ReportDesc::~ReportDesc() {
 const int kThreadBufSize = 32;
 const char *thread_name(char *buf, Tid tid) {
   if (tid == kMainTid)
+#if SANITIZER_CJ
+    return "main cjthread";
+  internal_snprintf(buf, kThreadBufSize, "cjthread T%d", tid);
+#else
     return "main thread";
   internal_snprintf(buf, kThreadBufSize, "thread T%d", tid);
+#endif
   return buf;
 }
+
 
 static const char *ReportTypeString(ReportType typ, uptr tag) {
   switch (typ) {
@@ -82,7 +88,11 @@ static const char *ReportTypeString(ReportType typ, uptr tag) {
     case ReportTypeMutexInvalidAccess:
       return "use of an invalid mutex (e.g. uninitialized or destroyed)";
     case ReportTypeMutexBadUnlock:
+#if SANITIZER_CJ
+      return "unlock of an unlocked mutex (or by a wrong cjthread)";
+#else
       return "unlock of an unlocked mutex (or by a wrong thread)";
+#endif
     case ReportTypeMutexBadReadLock:
       return "read lock of a write locked mutex";
     case ReportTypeMutexBadReadUnlock:
@@ -235,7 +245,11 @@ static void PrintThread(const ReportThread *rt) {
   if (rt->id == kMainTid)  // Little sense in describing the main thread.
     return;
   Printf("%s", d.ThreadDescription());
+#if SANITIZER_CJ
+  Printf("  CJThread T%d", rt->id);
+#else
   Printf("  Thread T%d", rt->id);
+#endif
   if (rt->name && rt->name[0] != '\0')
     Printf(" '%s'", rt->name);
   char thrbuf[kThreadBufSize];

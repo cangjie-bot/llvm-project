@@ -14,15 +14,14 @@ body: |
 
 # CHECK-LABEL: TestFrameRecordLocation
 
-# CHECK: stp d9, d8, [sp, #-48]!
-# CHECK: stp x29, x30, [sp, #16]
-# CHECK: str x19, [sp, #32]
-# CHECK: add x29, sp, #16
-
-# CHECK: .cfi_def_cfa w29, 32
+# CHECK: stp	x29, x30, [sp, #-48]!           // 16-byte Folded Spill
+# CHECK: stp	d9, d8, [sp, #16]               // 16-byte Folded Spill
+# CHECK: str	x19, [sp, #32]                  // 8-byte Folded Spill
+# CHECK: mov	x29, sp
+# CHECK: .cfi_def_cfa w29, 48
 # CHECK: .cfi_offset w19, -16
-# CHECK: .cfi_offset w30, -24
-# CHECK: .cfi_offset w29, -32
-# CHECK: .cfi_offset b8, -40
-# CHECK: .cfi_offset b9, -48
+# CHECK: .cfi_offset b8, -24
+# CHECK: .cfi_offset b9, -32
+# CHECK: .cfi_offset w30, -40
+# CHECK: .cfi_offset w29, -48
 ...

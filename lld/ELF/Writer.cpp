@@ -2129,7 +2129,7 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
     }
   }
 
-  if (!script->hasSectionsCommand && !config->relocatable)
+  if (!config->relocatable)
     fixSectionAlignments();
 
   // This is used to:

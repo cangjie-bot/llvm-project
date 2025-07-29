@@ -22,12 +22,13 @@
 namespace llvm {
 
 class AsmPrinter;
+class GCStrategy;
 class MCSymbol;
 class MCExpr;
 class MCStreamer;
 class raw_ostream;
 class TargetRegisterInfo;
-
+struct CompressedInfo;
 /// MI-level stackmap operands.
 ///
 /// MI stackmap operations take the form:
@@ -150,9 +151,13 @@ public:
 ///   <StackMaps::ConstantOp>, <num deopt args>, [deopt args...],
 ///   <StackMaps::ConstantOp>, <num gc pointer args>, [gc pointer args...],
 ///   <StackMaps::ConstantOp>, <num gc allocas>, [gc allocas args...],
-///   <StackMaps::ConstantOp>, <num  entries in gc map>, [base/derived pairs]
+///   <StackMaps::ConstantOp>, <num entries in gc map>, [base/derived pairs]
 ///   base/derived pairs in gc map are logical indices into <gc pointer args>
 ///   section.
+///   <StackMaps::ConstantOp>, <num entries in gc fields>, [base/offset pairs]
+///   base/offset pairs in gc fields are logical indices into <gc allocas>
+///   section.
+///   <StackMaps::ConstantOp>, <num stack ptrs>, [stack ptr...].
 ///   All gc pointers assigned to VRegs produce new value (in form of MI Def
 ///   operand) and are tied to it.
 class StatepointOpers {
@@ -182,6 +187,13 @@ public:
 
   /// Get index of Num Call Arguments operand.
   unsigned getNCallArgsPos() const { return NumDefs + NCallArgsPos; }
+
+  /// Get starting index of Call Arguments operand.
+  unsigned getCallArgsPos() const {
+    assert(MI->getOperand(NumDefs + NCallArgsPos).getImm() > 0 &&
+           "The Num of CallArgs is 0!");
+    return NumDefs + MetaEnd;
+  }
 
   /// Get starting index of non call related arguments
   /// (calling convention, statepoint flags, vm state and gc state).
@@ -221,9 +233,21 @@ public:
   /// Return the statepoint flags.
   uint64_t getFlags() const { return MI->getOperand(getFlagsIdx()).getImm(); }
 
+  unsigned getNumCallArgs() const {
+    return MI->getOperand(getNCallArgsPos()).getImm();
+  }
+
   uint64_t getNumDeoptArgs() const {
     return MI->getOperand(getNumDeoptArgsIdx()).getImm();
   }
+
+  const Function *getCalledFunction();
+
+  /// Get index of number of stack pointers.
+  unsigned getNumStackPtrsIdx();
+
+  /// Get index of number of struct arg map entries.
+  unsigned getNumStructArgEntriesIdx();
 
   /// Get index of number of gc map entries.
   unsigned getNumGcMapEntriesIdx();
@@ -237,11 +261,28 @@ public:
   /// Get index of first GC pointer operand of -1 if there are none.
   int getFirstGCPtrIdx();
 
+  /// Get index of first Struct pointer operand of -1 if there are none.
+  int getFirstAllocaIdx();
+
+  /// Get index of first Stack pointer operand of -1 if there are none.
+  int getFirstStackPtrIdx();
+
+  /// Get index of first Stack Arg operand of -1 if there are none.
+  int getFirstStackArgIdx();
+
   /// Get vector of base/derived pairs from statepoint.
   /// Elements are indices into GC Pointer operand list (logical).
   /// Returns number of elements in GCMap.
   unsigned
   getGCPointerMap(SmallVectorImpl<std::pair<unsigned, unsigned>> &GCMap);
+
+  /// Get vector of struct ptr/offset pairs from statepoint.
+  /// Elements are indices Struct Pointer operand list (logical).
+  /// Returns number of elements in StructArgMap.
+  unsigned
+  getStructArgMap(SmallVectorImpl<std::pair<unsigned, signed>> &StructArgMap);
+
+  bool isCJStackCheck();
 
 private:
   const MachineInstr *MI;
@@ -263,6 +304,18 @@ public:
     unsigned Size = 0;
     unsigned Reg = 0;
     int64_t Offset = 0;
+    // base/derive ptr will be traversing by the following order:
+    // small register -> large register -> large SlotOffset -> small SlotOffset
+    bool operator<(const Location &X) const {
+      return (Type < X.Type) || (Type == X.Type && Size < X.Size) ||
+             (Type == X.Type && Size == X.Size && Reg < X.Reg) ||
+             (Type == X.Type && Size == X.Size && Reg == X.Reg &&
+              Offset > X.Offset);
+    }
+    bool operator==(const Location &X) const {
+      return Type == X.Type && Size == X.Size && Reg == X.Reg &&
+             Offset == X.Offset;
+    }
 
     Location() = default;
     Location(LocationType Type, unsigned Size, unsigned Reg, int64_t Offset)
@@ -303,10 +356,12 @@ public:
 
   struct FunctionInfo {
     uint64_t StackSize = 0;
-    uint64_t RecordCount = 1;
+    uint64_t RecordCount = 0;
+    std::map<unsigned, int> CSReg2Stack; // <reg, stackOffset>
 
     FunctionInfo() = default;
-    explicit FunctionInfo(uint64_t StackSize) : StackSize(StackSize) {}
+    FunctionInfo(uint64_t StackSize, std::map<unsigned, int> &Info)
+        : StackSize(StackSize), CSReg2Stack(Info) {}
   };
 
   struct CallsiteInfo {
@@ -314,17 +369,28 @@ public:
     uint64_t ID = 0;
     LocationVec Locations;
     LiveOutVec LiveOuts;
+    LocationVec FOLocations;
+    LocationVec StackLocations;
+    uint32_t LineNumber = 0;
+    bool RecordAllRefInReg = false;
+    // vector which stores {base, derived, base, derived...}
+    LocationVec RefPairs;
 
     CallsiteInfo() = default;
     CallsiteInfo(const MCExpr *CSOffsetExpr, uint64_t ID,
-                 LocationVec &&Locations, LiveOutVec &&LiveOuts)
+                 LocationVec &&Locations, LiveOutVec &&LiveOuts,
+                 LocationVec &&FOLocs, uint32_t LineNum = 0)
         : CSOffsetExpr(CSOffsetExpr), ID(ID), Locations(std::move(Locations)),
-          LiveOuts(std::move(LiveOuts)) {}
+          LiveOuts(std::move(LiveOuts)), FOLocations(std::move(FOLocs)),
+          LineNumber(LineNum) {}
   };
 
   using FnInfoMap = MapVector<const MCSymbol *, FunctionInfo>;
   using CallsiteInfoList = std::vector<CallsiteInfo>;
-
+  inline void setX86_64() { IsX86_64 = true; }
+  inline bool isX86_64() const { return IsX86_64; }
+  inline void setAArch64() { IsAArch64 = true; }
+  inline bool isAArch64() const { return IsAArch64; }
   /// Generate a stackmap record for a stackmap instruction.
   ///
   /// MI must be a raw STACKMAP, not a PATCHPOINT.
@@ -336,19 +402,32 @@ public:
                         const MachineInstr &MI);
 
   /// Generate a stackmap record for a statepoint instruction.
-  void recordStatepoint(const MCSymbol &L,
-                        const MachineInstr &MI);
+  void recordStatepoint(const MCSymbol &L, const MachineInstr &MI,
+                        bool RecordAllRefInReg = false);
+
+  /// Generate a stackmap record for a cangjie statepoint instruction.
+  void recordCJStackMap(const MachineInstr &MI, bool RecordAllRefInReg = false);
 
   /// If there is any stack map data, create a stack map section and serialize
   /// the map info into it. This clears the stack map data structures
   /// afterwards.
   void serializeToStackMapSection();
 
+  void updateOrInsertFnInfo(const MCSymbol *FnSym, CallsiteInfo &CallInfo);
+
   /// Get call site info.
   CallsiteInfoList &getCSInfos() { return CSInfos; }
 
   /// Get function info.
   FnInfoMap &getFnInfos() { return FnInfos; }
+
+  void emitCangjieStackMaps(MCStreamer &OS);
+
+  struct StackMapOpersInfo {
+    uint64_t ID;
+    MachineInstr::const_mop_iterator MOI;
+    MachineInstr::const_mop_iterator MOE;
+  };
 
 private:
   static const char *WSMP;
@@ -357,18 +436,56 @@ private:
   CallsiteInfoList CSInfos;
   ConstantPool ConstPool;
   FnInfoMap FnInfos;
+  bool IsX86_64 = false;
+  bool IsAArch64 = false;
+
+  void processArrayType(ArrayType *ST, int64_t RefOffset,
+                        LocationVec &Locations, unsigned Reg,
+                        const GCStrategy *GS) const;
+
+  void processAllocaStructType(StructType *ST, int64_t RefOffset,
+                               LocationVec &Locations, unsigned Reg,
+                               const GCStrategy *GS) const;
 
   MachineInstr::const_mop_iterator
-  parseOperand(MachineInstr::const_mop_iterator MOI,
-               MachineInstr::const_mop_iterator MOE, LocationVec &Locs,
-               LiveOutVec &LiveOuts) const;
+  parseOperand(MachineInstr::const_mop_iterator MOI, CallsiteInfo &CSInfo,
+               bool IsResult) const;
+
+  MachineInstr::const_mop_iterator
+  parseImmOperand(MachineInstr::const_mop_iterator MOI, CallsiteInfo &CSInfo,
+                  bool IsResult) const;
+
+  MachineInstr::const_mop_iterator
+  parseRegOperand(MachineInstr::const_mop_iterator MOI, CallsiteInfo &CSInfo,
+                  LocationVec &Locations, bool IsResult) const;
+
+  MachineInstr::const_mop_iterator
+  parseStructArgsOperand(MachineInstr::const_mop_iterator MOI,
+                         LocationVec &FOLocations, unsigned Offset) const;
+
+  MachineInstr::const_mop_iterator
+  parseAllocaOperand(MachineInstr::const_mop_iterator MOI,
+                     LocationVec &Locations) const;
+
+  MachineInstr::const_mop_iterator
+  parseStackPtrOperand(MachineInstr::const_mop_iterator MOI,
+                       LocationVec &Locations) const;
+
+  MachineInstr::const_mop_iterator
+  parseCangjieStackOpers(MachineInstr::const_mop_iterator MOI,
+                         CallsiteInfo &CSInfo) const;
+
+  void
+  parseCangjieStatepointOpers(const MachineInstr &MI, StatepointOpers &SO,
+                              CallsiteInfo &CSInfo, unsigned NumAllocas,
+                              SmallVectorImpl<unsigned> &GCPtrIndices) const;
 
   /// Specialized parser of statepoint operands.
   /// They do not directly correspond to StackMap record entries.
   void parseStatepointOpers(const MachineInstr &MI,
                             MachineInstr::const_mop_iterator MOI,
                             MachineInstr::const_mop_iterator MOE,
-                            LocationVec &Locations, LiveOutVec &LiveOuts);
+                            CallsiteInfo &CSInfo);
 
   /// Create a live-out register record for the given register @p Reg.
   LiveOutReg createLiveOutReg(unsigned Reg,
@@ -384,12 +501,12 @@ private:
   /// STACKMAP, and PATCHPOINT the label is expected to immediately *preceed*
   /// lowering of the MI to MCInsts.  For STATEPOINT, it expected to
   /// immediately *follow*.  It's not clear this difference was intentional,
-  /// but it exists today.  
-  void recordStackMapOpers(const MCSymbol &L,
-                           const MachineInstr &MI, uint64_t ID,
-                           MachineInstr::const_mop_iterator MOI,
-                           MachineInstr::const_mop_iterator MOE,
-                           bool recordResult = false);
+  /// but it exists today.
+  void recordStackMapOpers(const MCSymbol &L, const MachineInstr &MI,
+                           StackMapOpersInfo OpersInfo,
+                           bool RecordResult = false, bool RecordAllRef = true);
+
+  void emitCangjieCompressedStackMaps(MCStreamer &OS);
 
   /// Emit the stackmap header.
   void emitStackmapHeader(MCStreamer &OS);
@@ -405,6 +522,12 @@ private:
 
   void print(raw_ostream &OS);
   void debug() { print(dbgs()); }
+
+  void prepareCompressedData(CompressedInfo &Data, const FunctionInfo &FnInfo,
+                             unsigned CSIdx, unsigned CSIdxEnd) const;
+
+  void emitCangjieCompressedData(MCStreamer &OS,
+                                 const CompressedInfo &Data) const;
 };
 
 } // end namespace llvm

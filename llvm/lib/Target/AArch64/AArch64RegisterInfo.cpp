@@ -99,6 +99,8 @@ AArch64RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     return CSR_AArch64_AAPCS_SwiftTail_SaveList;
   if (MF->getFunction().getCallingConv() == CallingConv::PreserveMost)
     return CSR_AArch64_RT_MostRegs_SaveList;
+  if (MF->getFunction().getCallingConv() == CallingConv::CangjieGC)
+    return CSR_AArch64_CangjieGC_SaveList;
   if (MF->getFunction().getCallingConv() == CallingConv::Win64)
     // This is for OSes other than Windows; Windows is a separate case further
     // above.
@@ -242,6 +244,8 @@ AArch64RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
   if (CC == CallingConv::PreserveMost)
     return SCS ? CSR_AArch64_RT_MostRegs_SCS_RegMask
                : CSR_AArch64_RT_MostRegs_RegMask;
+  if (CC == CallingConv::CangjieGC)
+    return CSR_AArch64_CangjieGC_RegMask;
   else
     return SCS ? CSR_AArch64_AAPCS_SCS_RegMask : CSR_AArch64_AAPCS_RegMask;
 }
@@ -314,6 +318,17 @@ AArch64RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
   markSuperRegs(Reserved, AArch64::WSP);
   markSuperRegs(Reserved, AArch64::WZR);
+
+  if (MF.getFunction().hasCangjieGC() ||
+      MF.getFunction().hasFnAttribute("pkg_c_wrapper")) {
+    markSuperRegs(Reserved, AArch64::W28);
+    // MachO's compact unwind format relies on all registers being stored in
+    // pairs. If only W28 is set, the setting does not take effect.
+    // W28 is used together with W27.
+    if (MF.getTarget().getTargetTriple().isOSBinFormatMachO()) {
+      markSuperRegs(Reserved, AArch64::W27);
+    }
+  }
 
   if (TFI->hasFP(MF) || TT.isOSDarwin())
     markSuperRegs(Reserved, AArch64::W29);
@@ -485,6 +500,16 @@ Register
 AArch64RegisterInfo::getFrameRegister(const MachineFunction &MF) const {
   const AArch64FrameLowering *TFI = getFrameLowering(MF);
   return TFI->hasFP(MF) ? AArch64::FP : AArch64::SP;
+}
+
+MCPhysReg AArch64RegisterInfo::getX8Register() const {
+  return AArch64::X8;
+}
+
+const std::vector<MCPhysReg>
+AArch64RegisterInfo::getArgRegs(const MachineFunction &MF) const {
+  return { AArch64::X0, AArch64::X1, AArch64::X2, AArch64::X3, AArch64::X4,
+           AArch64::X5, AArch64::X6, AArch64::X7 };
 }
 
 bool AArch64RegisterInfo::requiresRegisterScavenging(

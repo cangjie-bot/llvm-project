@@ -830,7 +830,8 @@ bool Value::canBeFreed() const {
     // usual trick of requesting declaration of the intrinsic from the module
     // doesn't work.
     for (auto &Fn : *F->getParent())
-      if (Fn.getIntrinsicID() == Intrinsic::experimental_gc_statepoint)
+      if (Fn.getIntrinsicID() == Intrinsic::experimental_gc_statepoint ||
+          Fn.getIntrinsicID() == Intrinsic::cj_gc_statepoint)
         return true;
     return false;
   }

@@ -853,10 +853,16 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
   case MachineOperand::MO_JumpTableIndex:
     OS << printJumpTableEntryReference(getIndex());
     break;
-  case MachineOperand::MO_GlobalAddress:
-    getGlobal()->printAsOperand(OS, /*PrintType=*/false, MST);
+  case MachineOperand::MO_GlobalAddress: {
+    const GlobalValue *GV = getGlobal();
+    if (!GV) {
+      OS << "\"\"";
+    } else {
+      GV->printAsOperand(OS, /*PrintType=*/false, MST);
+    }
     printOperandOffset(OS, getOffset());
     break;
+  }
   case MachineOperand::MO_ExternalSymbol: {
     StringRef Name = getSymbolName();
     OS << '&';

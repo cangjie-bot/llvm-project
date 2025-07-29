@@ -37,6 +37,7 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/CodeGen/CJMetadata.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/GCMetadataPrinter.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -80,6 +81,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PseudoProbe.h"
+#include "llvm/IR/Statepoint.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
@@ -126,6 +128,14 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
+static cl::opt<bool> EnableCJNewObjFast("enable-cangjie-new-obj-fastpath",
+                                        cl::init(true), cl::ReallyHidden);
+static cl::opt<bool> ReflectOffset("reflect-offset", cl::init(true),
+                                   cl::NotHidden);
+
+namespace llvm {
+extern cl::opt<unsigned> CangjieStackCheckSize;
+}
 
 const char DWARFGroupName[] = "dwarf";
 const char DWARFGroupDescription[] = "DWARF Emission";
@@ -143,6 +153,21 @@ const char PPGroupName[] = "pseudo probe";
 const char PPGroupDescription[] = "Pseudo Probe Emission";
 
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> EnableStackGrow;
+
+// Warning: The following values must be synchronized with
+// the data struct `ThreadLocalData` in runtime
+constexpr int64_t AllocBufferOffsetInCJTLS = 0;
+constexpr int64_t MutatorOffsetInCJTLS = AllocBufferOffsetInCJTLS + 8;
+constexpr int64_t CJThreadOffsetInCJTLS = MutatorOffsetInCJTLS + 8;
+constexpr int64_t ScheduleOffsetInCJTLS = CJThreadOffsetInCJTLS + 8;
+constexpr int64_t PreemptFlagOffsetInCJTLS = ScheduleOffsetInCJTLS + 8;
+constexpr int64_t ProtectAddrOffsetInCJTLS = PreemptFlagOffsetInCJTLS + 8;
+constexpr int64_t SafePollingAddrOffsetInCJTLS = ProtectAddrOffsetInCJTLS + 8;
+} // end anonymous namespace
 
 char AsmPrinter::ID = 0;
 
@@ -755,7 +780,7 @@ void AsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
   // If we have a bss global going to a section that supports the
   // zerofill directive, do so here.
   if (GVKind.isBSS() && MAI->hasMachoZeroFillDirective() &&
-      TheSection->isVirtualSection()) {
+      TheSection->isVirtualSection() && !GV->isCJMeta()) {
     if (Size == 0)
       Size = 1; // zerofill of 0 bytes is undefined.
     emitLinkage(GV, GVSym);
@@ -767,7 +792,8 @@ void AsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
   // If this is a BSS local symbol and we are emitting in the BSS
   // section use .lcomm/.comm directive.
   if (GVKind.isBSSLocal() &&
-      getObjFileLowering().getBSSSection() == TheSection) {
+      getObjFileLowering().getBSSSection() == TheSection &&
+      !GV->isCJMeta()) {
     if (Size == 0)
       Size = 1; // .comm Foo, 0 is undefined, avoid it.
 
@@ -852,12 +878,25 @@ void AsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
   emitLinkage(GV, EmittedInitSym);
   emitAlignment(Alignment, GV);
 
+  if (GV->isCJMeta()) {
+    MCSymbol *RefSym =
+        OutContext.getOrCreateSymbol(Twine(".LRef.") + GVSym->getName());
+    OutStreamer->emitLabel(RefSym);
+  }
   OutStreamer->emitLabel(EmittedInitSym);
   MCSymbol *LocalAlias = getSymbolPreferLocal(*GV);
   if (LocalAlias != EmittedInitSym)
     OutStreamer->emitLabel(LocalAlias);
 
-  emitGlobalConstant(GV->getParent()->getDataLayout(), GV->getInitializer());
+  bool IsReflectionGV = false;
+  if (ReflectOffset) {
+    if (GV->hasAttribute("CFileReflect")) {
+      IsReflectionGV = true;
+    }
+  }
+
+  emitGlobalConstant(GV->getParent()->getDataLayout(), GV->getInitializer(),
+                     nullptr, IsReflectionGV);
 
   if (MAI->hasDotTypeDotSizeDirective())
     // .size foo, 42
@@ -969,6 +1008,18 @@ void AsmPrinter::emitFunctionHeader() {
   if (MAI->needsFunctionDescriptors())
     emitFunctionDescriptor();
 
+  const Triple TT(F.getParent()->getTargetTriple());
+  if (F.hasCangjieGC() && !F.hasFnAttribute("leaf-function") &&
+      !TT.isOSBinFormatMachO()) {
+    MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
+        ".Lmethod_desc." + CurrentFnSym->getName());
+    MCSymbol *PCSym = OutContext.createTempSymbol();
+    OutStreamer->emitLabel(PCSym);
+    const MCExpr *MethodDescOffset = MCBinaryExpr::createSub(
+        MCSymbolRefExpr::create(DescSymbol, OutContext),
+        MCSymbolRefExpr::create(PCSym, OutContext), OutContext);
+    OutStreamer->emitValue(MethodDescOffset, 4);
+  }
   // Emit the CurrentFnSym. This is a virtual function to allow targets to do
   // their wild and crazy things as required.
   emitFunctionEntryLabel();
@@ -1463,7 +1514,10 @@ void AsmPrinter::emitFunctionBody() {
   // Print out code for the function.
   bool HasAnyRealCode = false;
   int NumInstsInFunction = 0;
-
+  bool CangjieSrc = MF->getFunction().hasCangjieGC();
+  if (CangjieSrc) {
+    MF->setEpilogueLabel(nullptr);
+  }
   bool CanDoExtraAnalysis = ORE->allowExtraAnalysis(DEBUG_TYPE);
   for (auto &MBB : *MF) {
     // Print a label for the basic block.
@@ -1485,6 +1539,29 @@ void AsmPrinter::emitFunctionBody() {
         NamedRegionTimer T(HI.TimerName, HI.TimerDescription, HI.TimerGroupName,
                            HI.TimerGroupDescription, TimePassesIsEnabled);
         HI.Handler->beginInstruction(&MI);
+      }
+      // Place the epilogue label for Cangjie function.
+      // Please note the x86 'esp/rsp' recovery instrucition
+      // is not recognized as in the epilogue sequence marked by
+      // FrameDestroy flag. The EpilogueIns flag is added to
+      // mark these instructions. The epilogue label will be
+      // placed before the first pop of callee-saved register
+      // or the recovery of 'esp/rsp' registers.
+      if ((MI.getFlag(MachineInstr::FrameDestroy) ||
+           MI.getExtFlag(MachineInstr::EpilogueIns)) &&
+          !MF->isEpilogueLabelEmitted() && CangjieSrc) {
+        auto TSym = createTempSymbol("_epilogue");
+        MF->setEpilogueLabel(TSym);
+        OutStreamer->emitLabel(TSym);
+        MF->setEpilogueLabelEmitted();
+        // SP might change on certain platforms during function execution.
+        // This would break our stack unwinding in exception path through
+        // epilogue. In order to guarantee that the SP is at the correct
+        // position when exception jumps to epilogue. The SP is reloaded
+        // to the correct position manually here.
+        if (MF->getNeedCangjieReloadSP()) {
+          reloadSPForEpilogue(*MF);
+        }
       }
 
       if (isVerbose())
@@ -1618,6 +1695,37 @@ void AsmPrinter::emitFunctionBody() {
       }
       ORE->emit(R);
     }
+  }
+
+  if (CangjieSrc) {
+    // emit stackgrow or stack_overflow_error
+    for (auto SC: StackCheckMap) {
+      for (const HandlerInfo &HI : Handlers) {
+        HI.Handler->beginInstruction(SC.first);
+      }
+      if (EnableStackGrow) {
+        NumInstsInFunction += emitStackGrow(*SC.first);
+      } else {
+        NumInstsInFunction += emitSOFECall(*SC.first);
+      }
+      for (const HandlerInfo &HI : Handlers) {
+        HI.Handler->endInstruction();
+      }
+    }
+    StackCheckMap.clear();
+
+    // emit safepoint
+    for (unsigned SafeIndex = 0; SafeIndex < SafepointStackMap.size();
+         SafeIndex++) {
+      for (const HandlerInfo &HI : Handlers) {
+        HI.Handler->beginInstruction(std::get<0>(SafepointStackMap[SafeIndex]));
+      }
+      NumInstsInFunction += emitSafePointDirectCall(SafeIndex);
+      for (const HandlerInfo &HI : Handlers) {
+        HI.Handler->endInstruction();
+      }
+    }
+    SafepointStackMap.clear();
   }
 
   EmittedInsts += NumInstsInFunction;
@@ -1944,8 +2052,11 @@ bool AsmPrinter::doFinalization(Module &M) {
   computeGlobalGOTEquivs(M);
 
   // Emit global variables.
-  for (const auto &G : M.globals())
-    emitGlobalVariable(&G);
+  for (const auto &G : M.globals()) {
+    if (G.isCJGlobalValue() || G.isCJSDKVersion() || !G.isCJMeta()) {
+      emitGlobalVariable(&G);
+    }
+  }
 
   // Emit remaining GOT equivalent globals.
   emitGlobalGOTEquivs();
@@ -2135,7 +2246,8 @@ bool AsmPrinter::doFinalization(Module &M) {
     for (const GlobalValue &GV : M.global_values()) {
       if (!GV.use_empty() && !GV.isTransitiveUsedByMetadataOnly() &&
           !GV.isThreadLocal() && !GV.hasDLLImportStorageClass() &&
-          !GV.getName().startswith("llvm.") && !GV.hasAtLeastLocalUnnamedAddr())
+          !GV.getName().startswith("llvm.") &&
+          !GV.hasAtLeastLocalUnnamedAddr())
         OutStreamer->emitAddrsigSym(getSymbol(&GV));
     }
   }
@@ -2217,11 +2329,13 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   MBBSectionRanges.clear();
   MBBSectionExceptionSyms.clear();
   bool NeedsLocalForSize = MAI->needsLocalForSize();
+  bool NeedsInCangjieGC = F.hasCangjieGC();
   if (F.hasFnAttribute("patchable-function-entry") ||
       F.hasFnAttribute("function-instrument") ||
       F.hasFnAttribute("xray-instruction-threshold") ||
       needFuncLabelsForEHOrDebugInfo(MF) || NeedsLocalForSize ||
-      MF.getTarget().Options.EmitStackSizeSection || MF.hasBBLabels()) {
+      NeedsInCangjieGC || MF.getTarget().Options.EmitStackSizeSection ||
+      MF.hasBBLabels()) {
     CurrentFnBegin = createTempSymbol("func_begin");
     if (NeedsLocalForSize)
       CurrentFnSymForSize = CurrentFnBegin;
@@ -2861,7 +2975,9 @@ static void emitGlobalConstantImpl(const DataLayout &DL, const Constant *C,
                                    AsmPrinter &AP,
                                    const Constant *BaseCV = nullptr,
                                    uint64_t Offset = 0,
-                                   AsmPrinter::AliasMapTy *AliasList = nullptr);
+                                   AsmPrinter::AliasMapTy *AliasList =
+                                       nullptr,
+                                   bool IsReflectGV = false);
 
 static void emitGlobalConstantFP(const ConstantFP *CFP, AsmPrinter &AP);
 static void emitGlobalConstantFP(APFloat APF, Type *ET, AsmPrinter &AP);
@@ -3033,7 +3149,8 @@ static void emitGlobalConstantVector(const DataLayout &DL,
 static void emitGlobalConstantStruct(const DataLayout &DL,
                                      const ConstantStruct *CS, AsmPrinter &AP,
                                      const Constant *BaseCV, uint64_t Offset,
-                                     AsmPrinter::AliasMapTy *AliasList) {
+                                     AsmPrinter::AliasMapTy *AliasList,
+                                     bool IsReflectGV = false) {
   // Print the fields in successive locations. Pad to align if needed!
   unsigned Size = DL.getTypeAllocSize(CS->getType());
   const StructLayout *Layout = DL.getStructLayout(CS->getType());
@@ -3043,7 +3160,7 @@ static void emitGlobalConstantStruct(const DataLayout &DL,
 
     // Print the actual field value.
     emitGlobalConstantImpl(DL, Field, AP, BaseCV, Offset + SizeSoFar,
-                           AliasList);
+                           AliasList, IsReflectGV);
 
     // Check if padding is needed and insert one or more 0s.
     uint64_t FieldSize = DL.getTypeAllocSize(Field->getType());
@@ -3257,10 +3374,53 @@ static void handleIndirectSymViaGOTPCRel(AsmPrinter &AP, const MCExpr **ME,
     AP.GlobalGOTEquivs[GOTEquivSym] = std::make_pair(GV, NumUses);
 }
 
+
+static const MCExpr *transRef2OffsetForReflectGV(const MCExpr *ME,
+                                                 AsmPrinter &AP) {
+  const Module *M = AP.MMI->getModule();
+
+  auto createOffsetExpr = [&](const MCSymbolRefExpr *SRE, bool ReportErr) {
+    const MCSymbol &Sym = SRE->getSymbol();
+    const GlobalVariable *GV = nullptr;
+    if (AP.TM.getTargetTriple().isOSBinFormatMachO()) {
+      // 1: GVName name is _xxx in macos, so begin from 1 to get xxx.
+      GV = M->getNamedGlobal(Sym.getName().substr(1));
+    } else {
+      GV = M->getNamedGlobal(Sym.getName());
+    }
+    if (GV && GV->isCJReflectGV()) {
+      MCSymbol *RefSym =
+          AP.OutContext.getOrCreateSymbol(Twine(".LRef.") + Sym.getName());
+
+      MCSymbol *PCSymbol = AP.OutContext.createTempSymbol();
+      AP.OutStreamer->emitLabel(PCSymbol);
+      ME = MCBinaryExpr::createSub(
+          MCSymbolRefExpr::create(RefSym, AP.OutContext),
+          MCSymbolRefExpr::create(PCSymbol, AP.OutContext), AP.OutContext);
+    } else if (ReportErr) {
+      report_fatal_error("generate reflect info failed! GV is not a valid reflect GV!\n");
+    }
+  };
+
+  if (const MCSymbolRefExpr *SRE = dyn_cast<MCSymbolRefExpr>(ME)) {
+    createOffsetExpr(SRE, false);
+  } else if (auto *SBE = dyn_cast<MCBinaryExpr>(ME)) {
+    if (SBE->getOpcode() != MCBinaryExpr::Opcode::Add) {
+      report_fatal_error("Binary expr should be add expr in reflect GV!\n");
+    }
+    auto *AddValue = SBE->getRHS();
+    auto *SRExpr = cast<MCSymbolRefExpr>(SBE->getLHS());
+    createOffsetExpr(SRExpr, true);
+    ME = MCBinaryExpr::createAdd(ME, AddValue, AP.OutContext);
+  }
+  return ME;
+}
+
 static void emitGlobalConstantImpl(const DataLayout &DL, const Constant *CV,
                                    AsmPrinter &AP, const Constant *BaseCV,
                                    uint64_t Offset,
-                                   AsmPrinter::AliasMapTy *AliasList) {
+                                   AsmPrinter::AliasMapTy *AliasList,
+                                   bool IsReflectGV) {
   emitGlobalAliasInline(AP, Offset, AliasList);
   uint64_t Size = DL.getTypeAllocSize(CV->getType());
 
@@ -3307,13 +3467,14 @@ static void emitGlobalConstantImpl(const DataLayout &DL, const Constant *CV,
     return emitGlobalConstantArray(DL, CVA, AP, BaseCV, Offset, AliasList);
 
   if (const ConstantStruct *CVS = dyn_cast<ConstantStruct>(CV))
-    return emitGlobalConstantStruct(DL, CVS, AP, BaseCV, Offset, AliasList);
+    return emitGlobalConstantStruct(DL, CVS, AP, BaseCV, Offset, AliasList, IsReflectGV);
 
   if (const ConstantExpr *CE = dyn_cast<ConstantExpr>(CV)) {
     // Look through bitcasts, which might not be able to be MCExpr'ized (e.g. of
     // vectors).
     if (CE->getOpcode() == Instruction::BitCast)
-      return emitGlobalConstantImpl(DL, CE->getOperand(0), AP);
+      return emitGlobalConstantImpl(DL, CE->getOperand(0), AP, nullptr, 0,
+                                    nullptr, IsReflectGV);
 
     if (Size > 8) {
       // If the constant expression's size is greater than 64-bits, then we have
@@ -3338,15 +3499,51 @@ static void emitGlobalConstantImpl(const DataLayout &DL, const Constant *CV,
   if (AP.getObjFileLowering().supportIndirectSymViaGOTPCRel())
     handleIndirectSymViaGOTPCRel(AP, &ME, BaseCV, Offset);
 
+  if (IsReflectGV) {
+    ME = transRef2OffsetForReflectGV(ME, AP);
+  }
+
   AP.OutStreamer->emitValue(ME, Size);
+}
+
+// When the allocated space is less than the threshold and the call
+// functions are non-stack-overflow function, we do not need to check
+// for stack out-of-bounds.
+static bool isNonStackOverflowFunc(MachineFunction &MF, unsigned FrameSize) {
+  if (FrameSize > CangjieStackCheckSize)
+    return false;
+
+  for (MachineBasicBlock &BB : MF) {
+    for (MachineInstr &MI : BB) {
+      if (MI.getOpcode() != TargetOpcode::STATEPOINT)
+        continue;
+
+      StatepointOpers SO(&MI);
+      uint64_t ID = SO.getID();
+      if (ID == CJStatepointID::Safepoint || ID == CJStatepointID::StackCheck)
+        continue;
+
+      const MachineOperand &CallTarget = SO.getCallTarget();
+      if (!CallTarget.isGlobal())
+        return false;
+
+      const auto *Callee = dyn_cast<const Function>(CallTarget.getGlobal());
+      if (Callee == nullptr)
+        return false;
+
+      if (!Callee->hasFnAttribute("cj-runtime"))
+        return false;
+    }
+  }
+  return true;
 }
 
 /// EmitGlobalConstant - Print a general LLVM constant to the .s file.
 void AsmPrinter::emitGlobalConstant(const DataLayout &DL, const Constant *CV,
-                                    AliasMapTy *AliasList) {
+                                    AliasMapTy *AliasList, bool IsReflectGV) {
   uint64_t Size = DL.getTypeAllocSize(CV->getType());
   if (Size)
-    emitGlobalConstantImpl(DL, CV, *this, nullptr, 0, AliasList);
+    emitGlobalConstantImpl(DL, CV, *this, nullptr, 0, AliasList, IsReflectGV);
   else if (MAI->hasSubsectionsViaSymbols()) {
     // If the global has zero size, emit a single byte so that two labels don't
     // look like they are at the same location.
@@ -3728,6 +3925,11 @@ void AsmPrinter::emitStackMaps(StackMaps &SM) {
     SM.serializeToStackMapSection();
 }
 
+void AsmPrinter::emitCJMetadataInfo(CJMetadataInfo &CMI, Module &M) {
+  if (CJPipeline) {
+    CMI.emitCJMetadata(M);
+  }
+}
 /// Pin vtable to this file.
 AsmPrinterHandler::~AsmPrinterHandler() = default;
 
@@ -3900,4 +4102,113 @@ dwarf::FormParams AsmPrinter::getDwarfFormParams() const {
 unsigned int AsmPrinter::getUnitLengthFieldByteSize() const {
   return dwarf::getUnitLengthFieldByteSize(
       OutStreamer->getContext().getDwarfFormat());
+}
+
+const Function *
+AsmPrinter::tryGetCangjieStubCallNativeFunc(const MachineInstr *MI,
+                                            const Function *Callee) const {
+  const Function *NativeFunc = nullptr;
+  const auto &CallerFunc = MI->getParent()->getParent()->getFunction();
+  if (Callee->isCangjieNativeStub(CallerFunc)) {
+    if (Callee->hasFnAttribute("cj2c")) {
+      NativeFunc = Callee->getParent()->getFunction("CJ_MCC_C2NStub");
+    } else {
+      NativeFunc = Callee->getParent()->getFunction("CJ_MCC_N2CStub");
+    }
+  }
+  return NativeFunc;
+}
+
+void AsmPrinter::emitCangjieStackCheck(const MachineInstr &MI) {
+  unsigned FrameSize = MI.peekCJStackSize() & 0x7fffffff;
+  if (isNonStackOverflowFunc(*MF, FrameSize))
+    return;
+
+  emitCJStackCheck(MI);
+}
+
+// Note: emit specific inst should update inst size info in
+// AArch64InstrInfo::getInstSizeInBytes for AArch64 at the same time
+bool AsmPrinter::tryEmitCangjieSpecificCallByMOSym(const MachineInstr *MI,
+                                                   const MachineOperand &MOSym,
+                                                   unsigned Opcode) {
+  if (!MOSym.isGlobal()) {
+    return false;
+  }
+  const auto *Callee = dyn_cast<const Function>(MOSym.getGlobal());
+  if (Callee == nullptr) {
+    return false;
+  }
+  StringRef FuncName = Callee->getName();
+  if (FuncName.isGetGCPhase()) {
+    emitGcStateCheck();
+    return true;
+  }
+  // Using for debug information only, no emit instructions.
+  if (FuncName.isSetDebugLocation()) {
+    return true;
+  }
+  if (FuncName.equals("CJ_MRT_PreInitializePackage")) {
+    emitMetadataAddress();
+    return true;
+  }
+  if (FuncName.equals("CJ_MCC_ThrowException")) {
+    emitCJThrowException(MI, MOSym, Opcode);
+    return true;
+  }
+  if ((FuncName.equals("CJ_MCC_NewObject") ||
+       FuncName.equals("CJ_MCC_NewFinalizer")) &&
+      EnableCJNewObjFast) {
+    emitMccNewObjectFastPath(MI, MOSym, Opcode);
+    return true;
+  }
+  if (Callee->isGetCJThreadId()) {
+    emitGetCJThreadId();
+    return true;
+  }
+  const Function *NativeFunc = tryGetCangjieStubCallNativeFunc(MI, Callee);
+  if (NativeFunc != nullptr) {
+    emitCangjieCallStubInstImpl(MI, NativeFunc, MOSym, Opcode);
+    return true;
+  }
+  return false;
+}
+
+bool AsmPrinter::tryEmitCangjieSpecificCall(const MachineInstr *MI) {
+  if (!MI->isCall()) {
+    return false;
+  }
+
+  unsigned Opcode = MI->getOpcode();
+  // statepoint call will be processed by LowerSTATEPOINT
+  if (Opcode == TargetOpcode::STATEPOINT) {
+    return false;
+  }
+
+  if (MI->getNumOperands() == 0) {
+    return false;
+  }
+
+  const MachineOperand &MOSym = MI->getOperand(0);
+  return tryEmitCangjieSpecificCallByMOSym(MI, MOSym, Opcode);
+}
+
+int64_t AsmPrinter::getAllocBufferOffsetInCJTLS() const {
+  return AllocBufferOffsetInCJTLS;
+}
+
+int64_t AsmPrinter::getMutatorOffsetInCJTLS() const {
+  return MutatorOffsetInCJTLS;
+}
+
+int64_t AsmPrinter::getCJThreadOffsetInCJTLS() const {
+  return CJThreadOffsetInCJTLS;
+}
+
+int64_t AsmPrinter::getProtectAddrOffsetInCJTLS() const {
+  return ProtectAddrOffsetInCJTLS;
+}
+
+int64_t AsmPrinter::getSafepointCheckAddrOffsetInCJTLS() const {
+  return SafePollingAddrOffsetInCJTLS;
 }

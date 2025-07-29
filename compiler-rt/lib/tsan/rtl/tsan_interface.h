@@ -26,7 +26,7 @@ using __sanitizer::tid_t;
 extern "C" {
 #endif
 
-#if !SANITIZER_GO
+#if !SANITIZER_GO && !SANITIZER_CJ
 
 // This function should be called at the very beginning of the process,
 // before any instrumented code is executed and before any call to malloc.

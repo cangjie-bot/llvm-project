@@ -707,6 +707,17 @@ let TargetPrefix = "aarch64" in {
 def int_aarch64_get_fpcr : FPCR_Get_Intrinsic;
 def int_aarch64_set_fpcr : FPCR_Set_Intrinsic;
 
+let TargetPrefix = "aarch64" in {
+  class FPSR_Get_Intrinsic
+    : DefaultAttrsIntrinsic<[llvm_i64_ty], [], [IntrNoMem, IntrHasSideEffects]>;
+  class FPSR_Reset_Intrinsic
+    : DefaultAttrsIntrinsic<[], [], [IntrNoMem, IntrHasSideEffects]>;
+}
+
+// FPSR
+def int_aarch64_get_fpsr : FPSR_Get_Intrinsic;
+def int_aarch64_reset_fpsr : FPSR_Reset_Intrinsic;
+
 // Armv8.5-A Random number generation intrinsics
 def int_aarch64_rndr : RNDR_Intrinsic;
 def int_aarch64_rndrrs : RNDR_Intrinsic;

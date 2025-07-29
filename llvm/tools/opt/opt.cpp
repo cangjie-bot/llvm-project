@@ -61,7 +61,12 @@
 #include <memory>
 using namespace llvm;
 using namespace opt_tool;
-
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> DisableGCSupport;
+extern cl::opt<bool> EnableBarrierOnly;
+extern cl::opt<bool> EnableSafepointOnly;
+}
 static codegen::RegisterCodeGenFlags CFG;
 
 // The OptimizationList is automatically populated with registered Passes by the
@@ -89,7 +94,8 @@ static cl::opt<std::string> PassPipeline(
 static cl::opt<bool> PrintPasses("print-passes",
                                  cl::desc("Print available passes that can be "
                                           "specified in -passes=foo and exit"));
-
+static cl::opt<bool> DisableInline("disable-inlining",
+                                   cl::desc("Do not run the inliner pass"));
 static cl::opt<std::string>
 InputFilename(cl::Positional, cl::desc("<input bitcode file>"),
     cl::init("-"), cl::value_desc("filename"));
@@ -337,7 +343,9 @@ static void AddOptimizationPasses(legacy::PassManagerBase &MPM,
   Builder.OptLevel = OptLevel;
   Builder.SizeLevel = SizeLevel;
 
-  if (OptLevel > 1) {
+  if (DisableInline) {
+    // No inlining pass
+  } else if (OptLevel > 1) {
     Builder.Inliner = createFunctionInliningPass(OptLevel, SizeLevel, false);
   } else {
     Builder.Inliner = createAlwaysInlinerLegacyPass();
@@ -547,14 +555,20 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv,
     "llvm .bc -> .bc modular optimizer and analysis printer\n");
 
+  if (DisableGCSupport + EnableBarrierOnly + EnableSafepointOnly > 1) {
+    errs() << "At most one of the three options (DisableGCSupport, "
+              "EnableBarrierOnly and EnableSafepointOnly) should be set true.\n";
+    return 1;
+  }
+
   LLVMContext Context;
 
   // If `-passes=` is specified, use NPM.
   // If `-enable-new-pm` is specified and there are no codegen passes, use NPM.
   // e.g. `-enable-new-pm -sroa` will use NPM.
   // but `-enable-new-pm -codegenprepare` will still revert to legacy PM.
-  const bool UseNPM = (EnableNewPassManager && !shouldForceLegacyPM()) ||
-                      PassPipeline.getNumOccurrences() > 0;
+  const bool UseNPM = ((EnableNewPassManager && !shouldForceLegacyPM()) ||
+                       PassPipeline.getNumOccurrences() > 0);
 
   if (!UseNPM && PluginList.size()) {
     errs() << argv[0] << ": " << PassPlugins.ArgStr
