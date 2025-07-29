@@ -1069,6 +1069,8 @@ static void replaceFastFunc(Function &F, GCStatepointInst *CI,
 }
 
 static bool doNewFastPath(Function &F, SetVector<GCStatepointInst *> &NewObjs) {
+  if (CangjieJIT)
+    return false;
   for (GCStatepointInst *CI : NewObjs) {
     Function *Callee = CI->getActualCalledFunction();
     if (Callee->getName().equals("CJ_MCC_NewObject")) {
