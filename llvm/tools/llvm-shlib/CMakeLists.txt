@@ -15,12 +15,50 @@ if(LLVM_BUILD_LLVM_DYLIB)
     message(FATAL_ERROR "Generating libLLVM is not supported on MSVC")
   endif()
 
+  option(LLVM_SPLIT_LLVM_DYLIB "Split libLLVM into two libraries, libLLVM and libLLVM-Foundation" OFF)
+  if(LLVM_SPLIT_LLVM_DYLIB)
+    set(LLVM_FOUNDATION_LIBS
+      LLVMLinker
+      LLVMIRReader
+      LLVMAsmParser
+      LLVMTransformUtils
+      LLVMBitWriter
+      LLVMAnalysis
+      LLVMProfileData
+      LLVMDebugInfoDWARF
+      LLVMDebugInfoMSF
+      LLVMObject
+      LLVMTextAPI
+      LLVMMCParser
+      LLVMMC
+      LLVMDebugInfoCodeView
+      LLVMBitReader
+      LLVMCore
+      LLVMRemarks
+      LLVMBitstreamReader
+      LLVMBinaryFormat
+      LLVMSupport
+      LLVMDemangle)
+    if(LLVM_LINK_LLVM_DYLIB)
+      set(INSTALL_WITH_TOOLCHAIN INSTALL_WITH_TOOLCHAIN)
+    endif()
+    add_llvm_library(LLVM-Foundation SHARED DISABLE_LLVM_LINK_LLVM_DYLIB SONAME ${INSTALL_WITH_TOOLCHAIN} ${SOURCES})
+    if(MINGW)
+        set(LINK_LLVM_FOUNDATION_LIBS -Wl,--whole-archive ${LLVM_FOUNDATION_LIBS} -Wl,--no-whole-archive)
+    endif()
+    target_link_libraries(LLVM-Foundation PRIVATE ${LINK_LLVM_FOUNDATION_LIBS})
+  endif()
+
   llvm_map_components_to_libnames(LIB_NAMES ${LLVM_DYLIB_COMPONENTS})
 
   # Exclude libLLVMTableGen for the following reasons:
   #  - it is only used by internal *-tblgen utilities;
   #  - it pollutes the global options space.
   list(REMOVE_ITEM LIB_NAMES "LLVMTableGen")
+
+  if(LLVM_SPLIT_LLVM_DYLIB)
+    list(REMOVE_ITEM LIB_NAMES ${LLVM_FOUNDATION_LIBS})
+  endif()
 
   if(LLVM_DYLIB_EXPORTED_SYMBOL_FILE)
     set(LLVM_EXPORTED_SYMBOL_FILE ${LLVM_DYLIB_EXPORTED_SYMBOL_FILE})
@@ -33,6 +71,13 @@ if(LLVM_BUILD_LLVM_DYLIB)
   add_llvm_library(LLVM SHARED DISABLE_LLVM_LINK_LLVM_DYLIB SONAME ${INSTALL_WITH_TOOLCHAIN} ${SOURCES})
 
   list(REMOVE_DUPLICATES LIB_NAMES)
+  if(LLVM_SPLIT_LLVM_DYLIB)
+    add_dependencies(LLVM ${LIB_NAMES})
+    add_dependencies(LLVM LLVM-Foundation)
+    # Target names are converted into simple -l options to avoid introducing indirect dependencies of targets.
+    # Linking indirect dependencies may cause duplicate symbol errors for PE targets.
+    list(TRANSFORM LIB_NAMES PREPEND "-l")
+  endif()
   if(("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux") OR (MINGW) OR (HAIKU)
      OR ("${CMAKE_SYSTEM_NAME}" STREQUAL "FreeBSD")
      OR ("${CMAKE_SYSTEM_NAME}" STREQUAL "GNU")
@@ -62,6 +107,10 @@ if(LLVM_BUILD_LLVM_DYLIB)
   endif()
 
   target_link_libraries(LLVM PRIVATE ${LIB_NAMES})
+  if(LLVM_SPLIT_LLVM_DYLIB)
+    target_link_options(LLVM PUBLIC -L${CMAKE_BINARY_DIR}/lib)
+    target_link_options(LLVM PUBLIC LLVM-Foundation-15)
+  endif()
 
   if (APPLE)
     set_property(TARGET LLVM APPEND_STRING PROPERTY
