@@ -617,6 +617,30 @@ static StringRef getCJSectionPrefixForGlobal(SectionKind Kind) {
   llvm_unreachable("Unknown section kind");
 }
 
+static StringRef getCJCOFFSectionPrefixForGlobal(SectionKind Kind) {
+  assert((Kind.isCJMetaData() && !Kind.isCJMetadataInfo()) &&
+        "It is not a cangjie section kind!");
+  if (Kind.isCJTypeInfo())
+    return ".cjti";
+  if (Kind.isCJTypeTemplate())
+    return ".cjtt";
+  if (Kind.isCJTypeFields())
+    return ".cjfield";
+  if (Kind.isCJGCTib())
+    return ".cjgctib";
+  if (Kind.isCJMTable())
+    return ".cjmtbl";
+  if (Kind.isCJReflectPkgInfo())
+    return ".cjrflp";
+  if (Kind.isCJReflectGV())
+    return ".cjrflv";
+  if (Kind.isCJInnerTypeExtensions())
+    return ".cjinty";
+  if (Kind.isCJReflectGenericTI())
+    return ".cjrflg";
+  llvm_unreachable("Unknown section kind");
+}
+
 static StringRef getCJMachOSectionPrefixForGlobal(SectionKind Kind) {
   assert((Kind.isCJMetaData() && !Kind.isCJMetadataInfo()) &&
          "It is not a cangjie section Kind!");
@@ -1726,7 +1750,7 @@ static StringRef getCOFFSectionNameForUniqueGlobal(SectionKind Kind) {
   if (Kind.isReadOnly() || Kind.isReadOnlyWithRel())
     return ".rdata";
   if (Kind.isCJMetaData())
-    return getCJSectionPrefixForGlobal(Kind);
+    return getCJCOFFSectionPrefixForGlobal(Kind);
   return ".data";
 }
 
