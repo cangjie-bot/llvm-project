@@ -109,7 +109,7 @@ if(LLVM_BUILD_LLVM_DYLIB)
   target_link_libraries(LLVM PRIVATE ${LIB_NAMES})
   if(LLVM_SPLIT_LLVM_DYLIB)
     target_link_options(LLVM PUBLIC -L${CMAKE_BINARY_DIR}/lib)
-    target_link_options(LLVM PUBLIC LLVM-Foundation-15)
+    target_link_libraries(LLVM PUBLIC LLVM-Foundation-15)
   endif()
 
   if (APPLE)
