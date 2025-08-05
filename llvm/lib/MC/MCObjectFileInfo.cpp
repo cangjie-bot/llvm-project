@@ -933,82 +933,82 @@ void MCObjectFileInfo::initCOFFMCObjectFileInfo(const Triple &T) {
   // Cangjie File(CFile) specific sections
   // TypeInfo information
   CJTypeTemplateSection = Ctx->getCOFFSection(
-      ".cjmetadata.typetemplate",
+      ".cjtt",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
   CJStaticGenericTISection = Ctx->getCOFFSection(
-      ".cjmetadata.static.generic.ti",
+      ".cjsgt",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
-  CJTypeInfoSection = Ctx->getCOFFSection(".cjmetadata.typeinfo",
+  CJTypeInfoSection = Ctx->getCOFFSection(".cjti",
                                           COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
                                               COFF::IMAGE_SCN_MEM_READ |
                                               COFF::IMAGE_SCN_MEM_WRITE,
                                           SectionKind::getCJTypeInfo());
   CJTypeFieldsSection = Ctx->getCOFFSection(
-      ".cjmetadata.type.fields",
+      ".cjfield",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
 
   // VTable/ITable
-  CJMtableSection = Ctx->getCOFFSection(".cjmetadata.mtable",
+  CJMtableSection = Ctx->getCOFFSection(".cjmtbl",
                                         COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
                                             COFF::IMAGE_SCN_MEM_READ |
                                             COFF::IMAGE_SCN_MEM_WRITE,
                                         SectionKind::getCJMTable());
   CJInnerTypeExtensionsSection = Ctx->getCOFFSection(
-      ".cjmetadata.innerty.eds",
+      ".cjinty",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
   CJOuterTypeExtensionsSection = Ctx->getCOFFSection(
-      ".cjmetadata.outerty.eds",
+      ".cjouty",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
 
   // Reflect
   CJReflectPkgInfoSection = Ctx->getCOFFSection(
-      ".cjmetadata.reflect.pkginfo",
+      ".cjrflp",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
   CJReflectGVSection = Ctx->getCOFFSection(
-      ".cjmetadata.reflect.gv",
+      ".cjrflv",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
   CJReflectGenericTISection = Ctx->getCOFFSection(
-      ".cjmetadata.reflect.generic.ti",
+      ".cjrflg",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
 
   // GC
   CJMethodInfoSection = Ctx->getCOFFSection(
-      ".cjmetadata.methodinfo",
+      ".cjmthd",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
-  CJStackMapSection = Ctx->getCOFFSection(".cjmetadata.stackmap",
+  CJStackMapSection = Ctx->getCOFFSection(".cjsm",
                                           COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
                                               COFF::IMAGE_SCN_MEM_READ |
                                               COFF::IMAGE_SCN_MEM_WRITE,
                                           SectionKind::getData());
-  CJGCTibSection = Ctx->getCOFFSection(".cjmetadata.gctib",
+  CJGCTibSection = Ctx->getCOFFSection(".cjgctib",
                                        COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
                                            COFF::IMAGE_SCN_MEM_READ |
                                            COFF::IMAGE_SCN_MEM_WRITE,
                                        SectionKind::getData());
-  CJGCRootSection = Ctx->getCOFFSection(".cjmetadata.gcroots",
+  CJGCRootSection = Ctx->getCOFFSection(".cjgcrts",
                                         COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
                                             COFF::IMAGE_SCN_MEM_READ |
                                             COFF::IMAGE_SCN_MEM_WRITE,
                                         SectionKind::getData());
-  CJGCFlagsSection = Ctx->getCOFFSection(".cjmetadata.gcflags",
+  CJGCFlagsSection = Ctx->getCOFFSection(".cjgcflg",
                                          COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
                                              COFF::IMAGE_SCN_MEM_READ |
                                              COFF::IMAGE_SCN_MEM_WRITE,
@@ -1016,22 +1016,22 @@ void MCObjectFileInfo::initCOFFMCObjectFileInfo(const Triple &T) {
 
   // Others
   CJSDKVersionSection = Ctx->getCOFFSection(
-      ".cjmetadata.sdk.version",
+      ".cjsdkv",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
   CJStringPoolDictSection = Ctx->getCOFFSection(
-      ".cjmetadata.stringpooldict",
+      ".cjspdct",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
   CJStringPoolSection = Ctx->getCOFFSection(
-      ".cjmetadata.stringpool",
+      ".cjsp",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
   CJGlobalInitFuncSection = Ctx->getCOFFSection(
-      ".cjmetadata.globalInitFunc",
+      ".cjinitF",
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
