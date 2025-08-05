@@ -563,7 +563,7 @@ void CJMetadataInfo::emitMethodInfoTable() {
           ELF::SHF_ALLOC | ELF::SHF_WRITE | ELF::SHF_GROUP, 0, Group, false);
     } else if (TT.isOSBinFormatCOFF()) {
       CJComdatMethodInfoSection = Context.getCOFFSection(
-          ".cjmetadata.methodinfo.",
+          ".cjmthd.",
           COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
               COFF::IMAGE_SCN_MEM_WRITE,
           SectionKind::getReadOnly());
