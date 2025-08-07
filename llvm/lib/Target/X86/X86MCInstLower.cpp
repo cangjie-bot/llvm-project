@@ -3134,7 +3134,7 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
     OutStreamer->emitInstruction(TmpInst, getSubtargetInfo());
 
     // move rslt from xmm0 to eax to do the fp16 calling-convetion adaption
-    if (IsTruncToFP16) {
+    if (IsTruncToFP16 && !TT.isOSWindows()) {
       MCInst MovXMM0ToEAX = MCInstBuilder(X86::PINSRWrr)
                                 .addReg(X86::XMM0)
                                 .addReg(X86::XMM0)
