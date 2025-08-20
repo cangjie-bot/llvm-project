@@ -2074,6 +2074,7 @@ ARMTargetLowering::getEffectiveCallingConv(CallingConv::ID CC,
   case CallingConv::Swift:
   case CallingConv::SwiftTail:
     return isVarArg ? CallingConv::ARM_AAPCS : CallingConv::ARM_AAPCS_VFP;
+  case CallingConv::CangjieGC:
   case CallingConv::C:
   case CallingConv::Tail:
     if (!Subtarget->isAAPCS_ABI())
