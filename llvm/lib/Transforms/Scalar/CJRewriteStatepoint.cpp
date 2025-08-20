@@ -83,10 +83,6 @@ using namespace llvm;
 static cl::opt<bool> PrintBasePointers("cj-spp-print-base-pointers", cl::Hidden,
                                        cl::init(false));
 
-static cl::opt<bool>
-    DisableCJRewrite("disable-cj-rewrite-statepoint", cl::init(false),
-                     cl::desc("Do not run CJRewriteStatepoint"));
-
 // Cost threshold measuring when it is profitable to rematerialize value instead
 // of relocating it
 static cl::opt<unsigned>
@@ -103,6 +99,10 @@ static cl::opt<unsigned> StructContainGCFieldThreshold(
 
 namespace llvm {
 extern cl::opt<bool> CJPipeline;
+
+cl::opt<bool>
+    DisableCJRewrite("disable-cj-rewrite-statepoint", cl::init(false),
+                     cl::desc("Do not run CJRewriteStatepoint"));
 }
 
 /// The IR fed into CJRewriteStatepoint may have had attributes and metadata
