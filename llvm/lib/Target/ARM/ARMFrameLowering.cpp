@@ -2076,6 +2076,8 @@ static unsigned estimateRSStackSizeLimit(MachineFunction &MF,
       for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
         if (!MI.getOperand(i).isFI())
           continue;
+        if (MI.isPseudo())
+          continue;
 
         // When using ADDri to get the address of a stack object, 255 is the
         // largest offset guaranteed to fit in the immediate offset.
