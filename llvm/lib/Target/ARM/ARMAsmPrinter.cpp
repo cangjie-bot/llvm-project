@@ -27,11 +27,13 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
+#include "llvm/CodeGen/StackMaps.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
+#include "llvm/IR/Statepoint.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
@@ -55,7 +57,8 @@ using namespace llvm;
 ARMAsmPrinter::ARMAsmPrinter(TargetMachine &TM,
                              std::unique_ptr<MCStreamer> Streamer)
     : AsmPrinter(TM, std::move(Streamer)), Subtarget(nullptr), AFI(nullptr),
-      MCP(nullptr), InConstantPool(false), OptimizationGoals(-1) {}
+      MCP(nullptr), InConstantPool(false), OptimizationGoals(-1), SM(*this),
+      CMI(*this, SM) {}
 
 void ARMAsmPrinter::emitFunctionBodyEnd() {
   // Make sure to terminate any constant pools that were at the end
@@ -165,6 +168,8 @@ bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     OutStreamer->emitCOFFSymbolStorageClass(Scl);
     OutStreamer->emitCOFFSymbolType(Type);
     OutStreamer->endCOFFSymbolDef();
+
+    CMI.recordCurrentFunc();
   }
 
   // Emit the rest of the function body.
@@ -577,6 +582,9 @@ void ARMAsmPrinter::emitEndOfAsmFile(Module &M) {
   OptimizationGoals = -1;
 
   ATS.finishAttributeSection();
+
+  emitCJMetadataInfo();
+  emitStackMaps();
 }
 
 //===----------------------------------------------------------------------===//

@@ -584,8 +584,14 @@ void CJMetadataInfo::emitGCRoots() {
     return;
 
   OS.switchSection(TD[GCRootsTableIdx].TableSection);
+
+  uint32_t PtrSize = 8;
+  const Triple TT(M->getTargetTriple());
+  if (TT.getArchName().contains("arm")) {
+    PtrSize = 4;
+  }
   for (const auto GCRoot : GCRootTable) {
-    OS.emitValue(GCRoot, 8);
+    OS.emitValue(GCRoot, PtrSize);
   }
 }
 
@@ -741,8 +747,13 @@ void CJMetadataInfo::emitSDKVersion() {
     return;
 
   OS.switchSection(TD[SDKVersionIdx].TableSection);
-  // 8: sdk version size, 8 bytes.
-  OS.emitValue(getGVRefSymbol(Version), 8);
+  
+  uint32_t PtrSize = 8;
+  const Triple TT(M->getTargetTriple());
+  if (TT.getArchName().contains("arm")) {
+    PtrSize = 4;
+  }
+  OS.emitValue(getGVRefSymbol(Version), PtrSize);
 }
 
 void CJMetadataInfo::emitStackMaps() {
