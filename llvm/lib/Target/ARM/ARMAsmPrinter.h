@@ -11,6 +11,8 @@
 
 #include "ARMSubtarget.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/CJMetadata.h"
+#include "llvm/CodeGen/StackMaps.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
@@ -64,6 +66,10 @@ class LLVM_LIBRARY_VISIBILITY ARMAsmPrinter : public AsmPrinter {
   /// We need to emit labels even for promoted globals so that DWARF
   /// debug info can link properly.
   SmallPtrSet<const GlobalVariable*,2> EmittedPromotedGlobalLabels;
+
+  StackMaps SM;
+  CJMetadataInfo CMI;
+
 
 public:
   explicit ARMAsmPrinter(TargetMachine &TM,
