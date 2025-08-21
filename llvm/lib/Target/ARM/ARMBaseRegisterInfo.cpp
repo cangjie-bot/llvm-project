@@ -69,6 +69,8 @@ ARMBaseRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     // GHC set of callee saved regs is empty as all those regs are
     // used for passing STG regs around
     return CSR_NoRegs_SaveList;
+  } else if (F.getCallingConv() == CallingConv::CangjieGC) {
+    return CSR_CangjieGC_SaveList;
   } else if (STI.splitFramePointerPush(*MF)) {
     return CSR_Win_SplitFP_SaveList;
   } else if (F.getCallingConv() == CallingConv::CFGuard_Check) {
@@ -140,6 +142,8 @@ ARMBaseRegisterInfo::getCallPreservedMask(const MachineFunction &MF,
     return STI.isTargetDarwin() ? CSR_iOS_SwiftTail_RegMask
                                 : CSR_AAPCS_SwiftTail_RegMask;
   }
+  if (CC == CallingConv::CangjieGC)
+    return CSR_CangjieGC_RegMask;
   if (STI.getTargetLowering()->supportSwiftError() &&
       MF.getFunction().getAttributes().hasAttrSomewhere(Attribute::SwiftError))
     return STI.isTargetDarwin() ? CSR_iOS_SwiftError_RegMask
