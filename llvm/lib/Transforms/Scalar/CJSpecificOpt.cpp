@@ -284,6 +284,7 @@ static bool replaceInvalidAddrpaceCast(Function &F) {
 static bool insertStackCheck(Function &F) {
   if (CangjieJIT || F.hasFnAttribute("gc-leaf-function"))
     return false;
+  return false;
 
   uint64_t ApproximateSize = 0;
   bool HasCJCall = false;

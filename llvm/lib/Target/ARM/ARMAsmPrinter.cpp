@@ -2319,6 +2319,33 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
   case ARM::SEH_EpilogEnd:
     ATS.emitARMWinCFIEpilogEnd();
     return;
+
+  case TargetOpcode::STATEPOINT: {
+    StatepointOpers SOpers(MI);
+    const MachineOperand &CallTarget = SOpers.getCallTarget();
+    MCOperand CallTargetMCOp;
+    unsigned CallOpcode;
+    switch (CallTarget.getType()) {
+    default:
+      llvm_unreachable("Unsupported operand type in statepoint call target");
+      break;
+    case MachineOperand::MO_GlobalAddress:
+    case MachineOperand::MO_ExternalSymbol:
+      CallOpcode = ARM::BL;
+      lowerOperand(CallTarget, CallTargetMCOp);
+      break;
+    case MachineOperand::MO_Immediate:
+      CallTargetMCOp = MCOperand::createImm(CallTarget.getImm());
+      CallOpcode = ARM::BL;
+      break;
+    case MachineOperand::MO_Register:
+      CallTargetMCOp = MCOperand::createReg(CallTarget.getReg());
+      CallOpcode = ARM::BLX;
+      break;
+    }
+    EmitToStreamer(*OutStreamer, MCInstBuilder(CallOpcode).addOperand(CallTargetMCOp));
+    return;
+  }
   }
 
   MCInst TmpInst;

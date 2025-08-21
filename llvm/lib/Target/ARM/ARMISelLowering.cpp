@@ -2067,6 +2067,7 @@ ARMTargetLowering::getEffectiveCallingConv(CallingConv::ID CC,
   case CallingConv::ARM_APCS:
   case CallingConv::GHC:
   case CallingConv::CFGuard_Check:
+  case CallingConv::CangjieGC:
     return CC;
   case CallingConv::PreserveMost:
     return CallingConv::PreserveMost;
@@ -2117,6 +2118,8 @@ CCAssignFn *ARMTargetLowering::CCAssignFnForNode(CallingConv::ID CC,
   switch (getEffectiveCallingConv(CC, isVarArg)) {
   default:
     report_fatal_error("Unsupported calling convention");
+  case CallingConv::CangjieGC:
+    return Return ? RetCC_ARM_AAPCS : CC_ARM_AAPCS;
   case CallingConv::ARM_APCS:
     return (Return ? RetCC_ARM_APCS : CC_ARM_APCS);
   case CallingConv::ARM_AAPCS:
@@ -11758,6 +11761,14 @@ ARMTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     MI.print(errs());
     llvm_unreachable("Unexpected instr type to insert");
   }
+
+  case TargetOpcode::STATEPOINT:
+    MI.addOperand(*MI.getMF(),
+                  MachineOperand::CreateReg(
+                      ARM::LR, /*isDef*/ true,
+                      /*isImp*/ true, /*isKill*/ false, /*isDead*/ true,
+                      /*isUndef*/ false, /*isEarlyClobber*/ true));
+    return emitPatchPoint(MI, BB);
 
   // Thumb1 post-indexed loads are really just single-register LDMs.
   case ARM::tLDR_postidx: {
