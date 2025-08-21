@@ -584,8 +584,19 @@ void CJMetadataInfo::emitGCRoots() {
     return;
 
   OS.switchSection(TD[GCRootsTableIdx].TableSection);
+
+  if (TT.isOSBinFormatMachO())
+    // 8: align size, 8 bytes
+    OS.emitValueToAlignment(8);
+
+  uint32_t PtrSize = 8;
+  const Triple TT(M->getTargetTriple());
+  if (TT.getArchName().contains("arm")) {
+    PtrSize = 4;
+  }
+
   for (const auto GCRoot : GCRootTable) {
-    OS.emitValue(GCRoot, 8);
+    OS.emitValue(GCRoot, PtrSize);
   }
 }
 
