@@ -861,6 +861,13 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF,
 
   // Move past area 1.
   if (GPRCS1Size > 0) {
+    if (MF.getFunction().hasCangjieGC()) {
+      while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup))
+        ++MBBI;
+      assert(MBB.begin() != MBB.end());
+      MBBI = std::prev(MBBI);
+      GPRCS1Size += 4; // 4: size of pc register
+    }
     GPRCS1Push = LastPush = MBBI++;
     DefCFAOffsetCandidates.addInst(LastPush, GPRCS1Size, true);
   }
@@ -1047,6 +1054,8 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF,
   if (HasFP) {
     AfterPush = std::next(GPRCS1Push);
     unsigned PushSize = sizeOfSPAdjustment(*GPRCS1Push);
+    if (MF.getFunction().hasCangjieGC())
+      PushSize += 4 * 3; // 4: RegSize, 3: r11, lr, pc
     int FPOffset = PushSize + FramePtrOffsetInPush;
     if (STI.splitFramePointerPush(MF)) {
       AfterPush = std::next(GPRCS2Push);
@@ -1549,8 +1558,34 @@ void ARMFrameLowering::emitPushInst(MachineBasicBlock &MBB,
                                     .addReg(ARM::SP)
                                     .setMIFlags(MIFlags)
                                     .add(predOps(ARMCC::AL));
-      for (unsigned i = 0, e = Regs.size(); i < e; ++i)
-        MIB.addReg(Regs[i].first, getKillRegState(Regs[i].second));
+      if (MBB.getParent()->getFunction().hasCangjieGC()) {
+        auto *MF = MBB.getParent();
+        // start pc
+        BuildMI(MBB, MI, DL, TII.get(StmOpc), ARM::SP)
+            .addReg(ARM::SP)
+            .setMIFlags(MIFlags)
+            .add(predOps(ARMCC::AL))
+            .addReg(ARM::PC);
+
+        auto MIB2 = BuildMI(MBB, MI, DL, TII.get(StmOpc), ARM::SP)
+                        .addReg(ARM::SP)
+                        .setMIFlags(MIFlags)
+                        .add(predOps(ARMCC::AL));
+        for (unsigned i = 0, e = Regs.size(); i < e; ++i)
+          if (TRI.getEncodingValue(Regs[i].first) >=
+              TRI.getEncodingValue(TRI.getFrameRegister(*MF)))
+            // r11, lr
+            MIB.addReg(Regs[i].first, getKillRegState(Regs[i].second));
+          else
+            // Other callee saved reg
+            MIB2.addReg(Regs[i].first, getKillRegState(Regs[i].second));
+        // Empty csr operands
+        if (MIB2->getDesc().getNumOperands() > MIB2->getNumOperands())
+          MIB2->eraseFromParent();
+      } else {
+        for (unsigned i = 0, e = Regs.size(); i < e; ++i)
+          MIB.addReg(Regs[i].first, getKillRegState(Regs[i].second));
+      }
     } else if (Regs.size() == 1) {
       BuildMI(MBB, MI, DL, TII.get(StrOpc), ARM::SP)
           .addReg(Regs[0].first, getKillRegState(Regs[0].second))
@@ -1646,8 +1681,29 @@ void ARMFrameLowering::emitPopInst(MachineBasicBlock &MBB,
                                     .addReg(ARM::SP)
                                     .add(predOps(ARMCC::AL))
                                     .setMIFlags(MachineInstr::FrameDestroy);
-      for (unsigned i = 0, e = Regs.size(); i < e; ++i)
-        MIB.addReg(Regs[i], getDefRegState(true));
+      if (MBB.getParent()->getFunction().hasCangjieGC()) {
+        auto *MF = MBB.getParent();
+        // 4: size of pc
+        emitSPUpdate(!AFI->isThumbFunction(), MBB, MI, DL, *STI.getInstrInfo(),
+                     4, MachineInstr::FrameDestory);
+        auto MIB2 = BuildMI(MBB, MI, DL, TII.get(LdmOpc), ARM::SP)
+                        .addReg(ARM::SP)
+                        .add(predOps(ARMCC::AL))
+                        .setMIFlags(MachineInstr::FrameDestory);
+        for (unsigned i = 0, e = Regs.size(); i < e; ++i)
+          if (TRI.getEncondingValue(Regs[i]) <
+              TRI.getEncodingValue(TRI.getFrameRegister(*MF)))
+            // r11, lr
+            MIB.addReg(Regs[i], getDefRegState(true));
+          else
+            MIB2.addReg(Regs[i], getDefRegState(true));
+        // Empty csr operands
+        if (MIB->getDesc().getNumOperands() > MIB2->getNumOperands())
+          MIB->eraseFromParent();
+      } else {
+        for (unsigned i = 0, e = Regs.size(); i < e; ++i)
+          MIB.addReg(Regs[i], getDefRegState(true));
+      }
       if (DeleteRet) {
         if (MI != MBB.end()) {
           MIB.copyImplicitOps(*MI);
