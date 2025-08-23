@@ -499,6 +499,14 @@ static void assignCalleeSavedSpillSlots(MachineFunction &F,
       }
 
       CS.setFrameIdx(FrameIdx);
+
+      if (F.getFunction().hasCangjieGC() &&
+          F.getTarget().getTargetTriple().isARM() &&
+          Reg == RegInfo->getFrameRegister(F)) {
+        assert(Reg == CSI[1].getReg());
+        // 4: reg size
+        MFI.CreateStackObject(4, Align(4), true);
+      }
     }
   }
 
