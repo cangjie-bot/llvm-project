@@ -1685,13 +1685,13 @@ void ARMFrameLowering::emitPopInst(MachineBasicBlock &MBB,
         auto *MF = MBB.getParent();
         // 4: size of pc
         emitSPUpdate(!AFI->isThumbFunction(), MBB, MI, DL, *STI.getInstrInfo(),
-                     4, MachineInstr::FrameDestory);
+                     4, MachineInstr::FrameDestroy);
         auto MIB2 = BuildMI(MBB, MI, DL, TII.get(LdmOpc), ARM::SP)
                         .addReg(ARM::SP)
                         .add(predOps(ARMCC::AL))
-                        .setMIFlags(MachineInstr::FrameDestory);
+                        .setMIFlags(MachineInstr::FrameDestroy);
         for (unsigned i = 0, e = Regs.size(); i < e; ++i)
-          if (TRI.getEncondingValue(Regs[i]) <
+          if (TRI.getEncodingValue(Regs[i]) <
               TRI.getEncodingValue(TRI.getFrameRegister(*MF)))
             // r11, lr
             MIB.addReg(Regs[i], getDefRegState(true));
