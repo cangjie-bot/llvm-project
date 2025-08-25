@@ -2067,7 +2067,6 @@ ARMTargetLowering::getEffectiveCallingConv(CallingConv::ID CC,
   case CallingConv::ARM_APCS:
   case CallingConv::GHC:
   case CallingConv::CFGuard_Check:
-  case CallingConv::CangjieGC:
     return CC;
   case CallingConv::PreserveMost:
     return CallingConv::PreserveMost;
