@@ -583,8 +583,8 @@ void ARMAsmPrinter::emitEndOfAsmFile(Module &M) {
 
   ATS.finishAttributeSection();
 
-  emitCJMetadataInfo();
-  emitStackMaps();
+  emitCJMetadataInfo(CMI, M);
+  emitStackMaps(SM);
 }
 
 //===----------------------------------------------------------------------===//
