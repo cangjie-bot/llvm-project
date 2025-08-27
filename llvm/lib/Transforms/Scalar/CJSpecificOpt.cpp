@@ -284,7 +284,6 @@ static bool replaceInvalidAddrpaceCast(Function &F) {
 static bool insertStackCheck(Function &F) {
   if (CangjieJIT || F.hasFnAttribute("gc-leaf-function"))
     return false;
-  return false;
 
   uint64_t ApproximateSize = 0;
   bool HasCJCall = false;
@@ -381,7 +380,9 @@ static bool runOnFunction(Function &F, unsigned OptLevel) {
   Changed |= markfastCall(F);
   Changed |= deadAllocaElimination(F);
   Changed |= replaceInvalidAddrpaceCast(F);
-  Changed |= insertStackCheck(F);
+  const Triple TT(F.getParent()->getTargetTriple());
+  if (!TT.isARM())
+    Changed |= insertStackCheck(F);
   Changed |= insertResetFPState(F, OptLevel);
   return Changed;
 }
