@@ -21204,7 +21204,12 @@ Value *ARMTargetLowering::emitLoadLinked(IRBuilderBase &Builder, Type *ValueTy,
         IsAcquire ? Intrinsic::arm_ldaexd : Intrinsic::arm_ldrexd;
     Function *Ldrex = Intrinsic::getDeclaration(M, Int);
 
-    Addr = Builder.CreateBitCast(Addr, Type::getInt8PtrTy(M->getContext()));
+    if (Builder.GetInsertBlock()->getParent()->hasCangjieGC())
+      // It is safe to cast addrspace.
+      Addr = Builder.CreatePointerBitCastOrAddrSpaceCast(
+          Addr, Type::getInt8PtrTy(M->getContext()));
+    else
+      Addr = Builder.CreateBitCast(Addr, Type::getInt8PtrTy(M->getContext()));
     Value *LoHi = Builder.CreateCall(Ldrex, Addr, "lohi");
 
     Value *Lo = Builder.CreateExtractValue(LoHi, 0, "lo");
@@ -21254,7 +21259,11 @@ Value *ARMTargetLowering::emitStoreConditional(IRBuilderBase &Builder,
     Value *Hi = Builder.CreateTrunc(Builder.CreateLShr(Val, 32), Int32Ty, "hi");
     if (!Subtarget->isLittle())
       std::swap(Lo, Hi);
-    Addr = Builder.CreateBitCast(Addr, Type::getInt8PtrTy(M->getContext()));
+    if (Builder.GetInsertBlock()->getParent()->hasCangjieGC())
+      Addr = Builder.CreatePointerBitCastOrAddrSpaceCast(
+          Addr, Type::getInt8PtrTy(M->getContext()));
+    else
+      Addr = Builder.CreateBitCast(Addr, Type::getInt8PtrTy(M->getContext()));
     return Builder.CreateCall(Strex, {Lo, Hi, Addr});
   }
 
