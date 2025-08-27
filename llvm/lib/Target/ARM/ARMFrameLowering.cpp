@@ -1701,7 +1701,7 @@ void ARMFrameLowering::emitPopInst(MachineBasicBlock &MBB,
           else
             MIB2.addReg(Regs[i], getDefRegState(true));
         // Empty csr operands
-        if (MIB->getDesc().getNumOperands() > MIB2->getNumOperands())
+        if (MIB->getDesc().getNumOperands() > MIB->getNumOperands())
           MIB->eraseFromParent();
       } else {
         for (unsigned i = 0, e = Regs.size(); i < e; ++i)
