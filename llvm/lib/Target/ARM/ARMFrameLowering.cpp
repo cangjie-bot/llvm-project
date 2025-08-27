@@ -1558,7 +1558,8 @@ void ARMFrameLowering::emitPushInst(MachineBasicBlock &MBB,
                                     .addReg(ARM::SP)
                                     .setMIFlags(MIFlags)
                                     .add(predOps(ARMCC::AL));
-      if (MBB.getParent()->getFunction().hasCangjieGC()) {
+      // Only need to be handle in `isARMArea1Register`, and the last reg is LR.
+      if (MBB.getParent()->getFunction().hasCangjieGC() && LastReg == ARM::LR) {
         auto *MF = MBB.getParent();
         // start pc
         BuildMI(MBB, MI, DL, TII.get(StmOpc), ARM::SP)
@@ -1681,7 +1682,9 @@ void ARMFrameLowering::emitPopInst(MachineBasicBlock &MBB,
                                     .addReg(ARM::SP)
                                     .add(predOps(ARMCC::AL))
                                     .setMIFlags(MachineInstr::FrameDestroy);
-      if (MBB.getParent()->getFunction().hasCangjieGC()) {
+      // The last reg may be PC or LR.
+      if (MBB.getParent()->getFunction().hasCangjieGC() &&
+          (LastReg == ARM::PC || LastReg == ARM::LR)) {
         auto *MF = MBB.getParent();
         // 4: size of pc
         emitSPUpdate(!AFI->isThumbFunction(), MBB, MI, DL, *STI.getInstrInfo(),
