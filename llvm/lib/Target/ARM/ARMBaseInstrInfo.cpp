@@ -807,6 +807,13 @@ unsigned ARMBaseInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
       Size = alignTo(Size, 4);
     return Size;
   }
+  case TargetOpcode::STATEPOINT:
+    auto NumBytes = StatepointOpers(&MI).getNumPatchBytes();
+    assert(NumBytes % 4 == 0 && "Invalid number of NOP bytes requested!");
+    // No patch bytes means a normal call inst is emitted
+    if (NumBytes == 0)
+      NumBytes = 4;
+    return NumBytes;
   }
 }
 
