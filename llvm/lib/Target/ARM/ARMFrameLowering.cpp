@@ -1055,7 +1055,9 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF,
     AfterPush = std::next(GPRCS1Push);
     unsigned PushSize = sizeOfSPAdjustment(*GPRCS1Push);
     if (MF.getFunction().hasCangjieGC())
-      PushSize += 4 * 3; // 4: RegSize, 3: r11, lr, pc
+      PushSize += 4 * (GPRCS1Push->getOperand(4).getReg() == ARM::PC
+                           ? 2   // 2: r11, lr
+                           : 3); // 3: r11, lr, pc, 4: RegSize
     int FPOffset = PushSize + FramePtrOffsetInPush;
     if (STI.splitFramePointerPush(MF)) {
       AfterPush = std::next(GPRCS2Push);
