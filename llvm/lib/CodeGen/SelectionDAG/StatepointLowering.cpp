@@ -449,9 +449,11 @@ lowerStructFieldsValue(SmallVector<FieldInfo, 16> &Fields,
     assert(AllocaPtrsIndexMap.count(PtrSD) && "struct not found in index map");
     const DataLayout &DL = Builder.DAG.getDataLayout();
     APInt Offsets(DL.getIndexSizeInBits(0), P.second, true);
+    auto VT =
+        Builder.DAG.getTarget().getTargetTriple().isARM() ? MVT::i32 : MVT::i64;
     Ops.push_back(
-        Builder.DAG.getTargetConstant(AllocaPtrsIndexMap[PtrSD], L, MVT::i64));
-    Ops.push_back(Builder.DAG.getTargetConstant(Offsets, L, MVT::i64));
+        Builder.DAG.getTargetConstant(AllocaPtrsIndexMap[PtrSD], L, VT));
+    Ops.push_back(Builder.DAG.getTargetConstant(Offsets, L, VT));
   }
 }
 
