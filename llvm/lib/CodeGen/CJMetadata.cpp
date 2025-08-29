@@ -596,9 +596,8 @@ void CJMetadataInfo::emitGCRoots() {
 
   uint32_t PtrSize = 8;
   const Triple TT(M->getTargetTriple());
-  if (TT.getArchName().contains("arm")) {
+  if (TT.isARM())
     PtrSize = 4;
-  }
   for (const auto GCRoot : GCRootTable) {
     OS.emitValue(GCRoot, PtrSize);
   }
@@ -737,8 +736,11 @@ void CJMetadataInfo::emitGlobalInitFuncTable() {
     if (FuncName != GlobalInitFuncName)
       return;
 
-    // 8: method pc size, 8 bytes
-    OS.emitSymbolValue(FuncBegin, 8);
+    uint32_t PtrSize = 8; // 8: method pc size, 8 bytes
+    const Triple TT(F.getParent()->getTargetTriple());
+    if (TT.isARM())
+      PtrSize = 4;
+    OS.emitSymbolValue(FuncBegin, PtrSize);
     if (IsMachO) {
       FuncName.push_back('\0');
       OS.emitBytes(FuncName);
