@@ -393,7 +393,7 @@ static TargetMachine* GetTargetMachine(Triple TheTriple, StringRef CPUStr,
     return nullptr;
   }
 
-  if (CJPipeline && TheTriple.getArchName().contains("arm")) {
+  if (CJPipeline && TheTriple.isARM()) {
     DisableGCSupport = true;
     DisableCJRewrite = true;
   }
