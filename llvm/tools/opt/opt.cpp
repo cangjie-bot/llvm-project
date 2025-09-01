@@ -67,6 +67,7 @@ extern cl::opt<bool> DisableGCSupport;
 extern cl::opt<bool> EnableBarrierOnly;
 extern cl::opt<bool> EnableSafepointOnly;
 extern cl::opt<bool> DisableCJRewrite;
+extern cl::opt<bool> EnableCJBarrierSplit;
 }
 static codegen::RegisterCodeGenFlags CFG;
 
@@ -396,6 +397,7 @@ static TargetMachine* GetTargetMachine(Triple TheTriple, StringRef CPUStr,
   if (CJPipeline && TheTriple.isARM()) {
     DisableGCSupport = true;
     DisableCJRewrite = true;
+    EnableCJBarrierSplit = false;
   }
 
   return TheTarget->createTargetMachine(
