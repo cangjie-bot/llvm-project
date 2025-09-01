@@ -506,6 +506,12 @@ static void assignCalleeSavedSpillSlots(MachineFunction &F,
         assert(Reg == CSI[1].getReg());
         // 4: reg size
         MFI.CreateStackObject(4, Align(4), true);
+        // It ensures that the stack object is placed below the callee-saved
+        // area.
+        if ((unsigned)FrameIdx < MinCSFrameIndex)
+          MinCSFrameIndex = FrameIdx;
+        if ((unsigned)FrameIdx > MaxCSFrameIndex)
+          MaxCSFrameIndex = FrameIdx;
       }
     }
   }
