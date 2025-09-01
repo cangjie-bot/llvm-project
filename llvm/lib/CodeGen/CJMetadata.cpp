@@ -730,7 +730,7 @@ void CJMetadataInfo::emitGlobalInitFuncTable() {
       return;
 
     uint32_t PtrSize = 8; // 8: method pc size, 8 bytes
-    const Triple TT(F.getParent()->getTargetTriple());
+    const Triple TT(M->getTargetTriple());
     if (TT.isARM())
       PtrSize = 4;
     OS.emitSymbolValue(FuncBegin, PtrSize);
