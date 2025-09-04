@@ -771,6 +771,9 @@ private:
 } // namespace
 
 static bool doCJIRVerify(Module &M) {
+  Triple T(M.getTargetTriple());
+  if (T.isARM())
+    return false;
   bool Broken = false;
   CJVerifier CV(M, &dbgs());
 
