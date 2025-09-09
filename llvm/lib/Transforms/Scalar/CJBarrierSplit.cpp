@@ -401,12 +401,18 @@ static bool simplySplit(Function *F) {
 
 PreservedAnalyses CJBarrierSplit::run(Module &M,
                                       ModuleAnalysisManager &) const {
+  auto C = &(M.getContext());
+  int LongSize = M.getDataLayout().getPointerSizeInBits();
+  auto IntptrTy = Type::getIntNTy(*C, LongSize);
+
   SmallVector<Function *> AggBarrierIntrinsics = {
-      Intrinsic::getDeclaration(&M, Intrinsic::cj_gcread_struct),
+      Intrinsic::getDeclaration(&M, Intrinsic::cj_gcread_struct, {IntptrTy}),
       Intrinsic::getDeclaration(&M, Intrinsic::cj_gcwrite_struct,
-                                {Type::getInt8PtrTy(M.getContext())}),
-      Intrinsic::getDeclaration(&M, Intrinsic::cj_gcread_static_struct),
-      Intrinsic::getDeclaration(&M, Intrinsic::cj_gcwrite_static_struct)};
+                                {Type::getInt8PtrTy(M.getContext()), IntptrTy}),
+      Intrinsic::getDeclaration(&M, Intrinsic::cj_gcread_static_struct,
+                                {IntptrTy}),
+      Intrinsic::getDeclaration(&M, Intrinsic::cj_gcwrite_static_struct,
+                                {IntptrTy})};
   bool Changed = false;
   for (auto *F : AggBarrierIntrinsics)
     Changed |= simplySplit(F);
