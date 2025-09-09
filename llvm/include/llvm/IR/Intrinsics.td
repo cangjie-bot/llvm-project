@@ -500,7 +500,7 @@ def int_cj_division_check_urem                 : Intrinsic<[llvm_anyint_ty],
                                                            [llvm_anyint_ty, llvm_anyint_ty],
                                                            [Throws]>;
 def int_cj_acquire_rawdata                     : Intrinsic<[llvm_ptr_ty],
-                                                           [llvm_gcptr_ty, llvm_i64_ty]>;
+                                                           [llvm_gcptr_ty, llvm_ptr_ty]>;
 def int_cj_release_rawdata                     : Intrinsic<[],
                                                            [llvm_gcptr_ty, llvm_ptr_ty, llvm_i32_ty]>;
 def int_cj_post_throw_exception                : Intrinsic<[llvm_gcptr_ty],
