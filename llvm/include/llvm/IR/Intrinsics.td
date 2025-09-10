@@ -516,25 +516,25 @@ def int_cj_pre_initialize_package              : Intrinsic<[],
                                                            [llvm_ptr_ty]>;
 def int_cj_fill_in_stack_trace                 : Intrinsic<[llvm_gcptr_ty],
                                                            [llvm_ptr_ty, llvm_gcptr_ty]>;
-def int_cj_get_real_heap_size                  : Intrinsic<[llvm_i64_ty],
+def int_cj_get_real_heap_size                  : Intrinsic<[llvm_anyint_ty],
                                                            []>;
-def int_cj_get_allocated_heap_size             : Intrinsic<[llvm_i64_ty],
+def int_cj_get_allocated_heap_size             : Intrinsic<[llvm_anyint_ty],
                                                            []>;
-def int_cj_get_max_heap_size                   : Intrinsic<[llvm_i64_ty],
+def int_cj_get_max_heap_size                   : Intrinsic<[llvm_anyint_ty],
                                                            []>;
 def int_cj_dump_heap_data                      : Intrinsic<[llvm_i1_ty],
                                                            [llvm_i32_ty]>;
-def int_cj_get_thread_number                   : Intrinsic<[llvm_i64_ty],
+def int_cj_get_thread_number                   : Intrinsic<[llvm_anyint_ty],
                                                            []>;
-def int_cj_get_blocking_thread_number          : Intrinsic<[llvm_i64_ty],
+def int_cj_get_blocking_thread_number          : Intrinsic<[llvm_anyint_ty],
                                                            []>;
-def int_cj_get_native_thread_number            : Intrinsic<[llvm_i64_ty],
+def int_cj_get_native_thread_number            : Intrinsic<[llvm_anyint_ty],
                                                            []>;
-def int_cj_get_gc_count                        : Intrinsic<[llvm_i64_ty],
+def int_cj_get_gc_count                        : Intrinsic<[llvm_anyint_ty],
                                                            []>;
 def int_cj_get_gc_time_us                      : Intrinsic<[llvm_i64_ty],
                                                            []>;
-def int_cj_get_gc_freed_size                   : Intrinsic<[llvm_i64_ty],
+def int_cj_get_gc_freed_size                   : Intrinsic<[llvm_anyint_ty],
                                                            []>;
 def int_cj_start_cpu_profiling                 : Intrinsic<[llvm_i1_ty],
                                                            []>;
