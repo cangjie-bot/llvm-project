@@ -168,8 +168,6 @@ bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     OutStreamer->emitCOFFSymbolStorageClass(Scl);
     OutStreamer->emitCOFFSymbolType(Type);
     OutStreamer->endCOFFSymbolDef();
-
-    CMI.recordCurrentFunc();
   }
 
   // Emit the rest of the function body.
@@ -177,6 +175,8 @@ bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   // Emit the XRay table for this function.
   emitXRayTable();
+
+  CMI.recordCurrentFunc();
 
   // If we need V4T thumb mode Register Indirect Jump pads, emit them.
   // These are created per function, rather than per TU, since it's
