@@ -1010,7 +1010,7 @@ void AsmPrinter::emitFunctionHeader() {
 
   const Triple TT(F.getParent()->getTargetTriple());
   if (F.hasCangjieGC() && !F.hasFnAttribute("leaf-function") &&
-      !TT.isOSBinFormatMachO() && !TT.isARM()) {
+      !TT.isOSBinFormatMachO()) {
     MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
         ".Lmethod_desc." + CurrentFnSym->getName());
     MCSymbol *PCSym = OutContext.createTempSymbol();
