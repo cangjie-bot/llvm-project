@@ -24,6 +24,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PatternMatch.h"
@@ -124,8 +125,12 @@ struct CallRetState {
     }
     bool Changed = false;
     SetVector<CallBase *> Memsets;
+    SetVector<Instruction *> FuncInsts;
     for (auto I = inst_begin(F); I != inst_end(F);) {
-      auto *CB = dyn_cast<CallBase>(&*I++);
+      FuncInsts.insert(&*I++);
+    }
+    for (auto *FuncInst : FuncInsts) {
+      auto *CB = dyn_cast<CallBase>(FuncInst);
       if (CB == nullptr ||
           CB->getArgOperandWithAttribute(Attribute::StructRet) == nullptr)
         continue;
@@ -195,9 +200,15 @@ struct CallRetState {
   bool replaceCJCallRet(CallRetUnit &CRU, GetElementPtrInst *GEP,
                         SetVector<CallBase *> &Memsets) {
     if (GEP != nullptr) {
-      if (CRU.CJMemset == nullptr)
-        GEP->moveBefore(CRU.CB);
-      else
+      if (CRU.CJMemset == nullptr) {
+        auto *CallRetWithoutCast =
+            dyn_cast<Instruction>(CRU.CB->getArgOperand(0));
+        if (CallRetWithoutCast == CRU.CallRet) {
+          GEP->moveBefore(CRU.CB);
+        } else {
+          GEP->moveBefore(CallRetWithoutCast);
+        }
+      } else
         return false;
     }
     if (CRU.CJMemset != nullptr && !PDT.dominates(CRU.CB, CRU.CJMemset))
@@ -470,6 +481,7 @@ struct MutexLockLower {
         Attribute::get(F->getContext(), "gc-leaf-function"));
     GetCJThreadIdFunc->addFnAttr(Attribute::get(F->getContext(), "cj-runtime"));
     GetCJThreadIdFunc->setCallingConv(CallingConv::CangjieGC);
+    GetCJThreadIdFunc->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
     auto *CallInst = IRB.CreateCall(GetCJThreadIdFunc);
     CallInst->setCallingConv(CallingConv::CangjieGC);
     auto *StoreInst = IRB.CreateStore(CallInst, MutexCjthreadIdPtr);

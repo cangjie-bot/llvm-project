@@ -196,7 +196,8 @@ public:
   bool isThreadBSSLocal() const { return K == ThreadBSSLocal; }
 
   bool isGlobalWriteableData() const {
-    return isBSS() || isCommon() || isData() || isReadOnlyWithRel();
+    return isBSS() || isCommon() || isData() || isReadOnlyWithRel() ||
+           isCJData();
   }
 
   bool isBSS() const { return K == BSS || K == BSSLocal || K == BSSExtern; }
@@ -206,6 +207,7 @@ public:
   bool isCommon() const { return K == Common; }
 
   bool isData() const { return K == Data; }
+  bool isCJData() const { return K > CJMetadataInfo && K <= CJGCTib; }
 
   bool isReadOnlyWithRel() const {
     return K == ReadOnlyWithRel;

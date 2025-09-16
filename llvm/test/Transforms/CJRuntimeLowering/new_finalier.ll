@@ -1,4 +1,5 @@
 ; RUN: opt < %s -passes=cj-runtime-lowering -S | FileCheck %s
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
 
 declare i8 addrspace(1)* @llvm.cj.malloc.object(i8*, i32)
 
