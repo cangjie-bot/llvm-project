@@ -1276,6 +1276,12 @@ static void LoadCjFormatterSummary(lldb::TypeCategoryImplSP cpp_category_sp) {
   AddCXXSummary(cpp_category_sp, lldb_private::formatters::RangeSummaryProvider,
       "Range summary provider", ConstString("^std[.]core::Range<.+>$"), cj_flags, true);
 
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::DateTimeSummaryProvider,
+      "DateTime summary provider", ConstString("^std[.]time::DateTime$"), cj_flags, true);
+
+  AddCXXSummary(cpp_category_sp, lldb_private::formatters::DecimalSummaryProvider,
+      "Decimal summary provider", ConstString("^std[.]math.numeric::Decimal$"), cj_flags, true);
+
   // Applies only to the enum type without parameters.
   AddCXXSummary(cpp_category_sp, lldb_private::formatters::EnumSummaryProvider,
       "Range summary provider", ConstString("^(.+)?E0\\$(.+)$"), cj_flags, true);

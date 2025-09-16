@@ -2768,10 +2768,10 @@ InlineResult CallAnalyzer::analyze() {
             const auto &FuncName = Func->getName();
             // TODO Currently, only the following implicit exceptions are
             // considered
-            if ((FuncName.contains("IndexOutOfBoundsException") ||
-                 FuncName.contains("NegativeArraySizeException") ||
-                 FuncName.contains("OverflowException")) &&
-                ExecptionBB.insert(FuncName)) {
+            if (FuncName.contains("IndexOutOfBoundsException") ||
+                FuncName.contains("NegativeArraySizeException") ||
+                FuncName.contains("OverflowException")) {
+              if (!ExecptionBB.insert(FuncName)) break;
               BBWorklist.insert(TI->getSuccessor(TIdx));
               break;
             }

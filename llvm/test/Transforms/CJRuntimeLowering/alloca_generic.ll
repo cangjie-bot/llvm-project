@@ -68,6 +68,6 @@ bb0:
   ret void
 }
 
-attributes #0 = { "CFileKlass" }
+attributes #0 = { "CFileKlass" "can_malloc_with_fixed_size" }
 
 !0 = !{!"Int64.Type"}

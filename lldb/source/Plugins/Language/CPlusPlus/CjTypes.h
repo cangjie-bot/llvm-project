@@ -30,6 +30,9 @@ bool EnumOptionPtrSummaryProvider(ValueObject &valobj, Stream &stream, const Typ
 bool FunctionSummaryProvider(ValueObject &valobj, Stream &stream, const TypeSummaryOptions &options);
 bool EnumSummaryProvider(ValueObject &valobj, Stream &stream, const TypeSummaryOptions &options);
 bool Enum2SummaryProvider(ValueObject &valobj, Stream &stream, const TypeSummaryOptions &options);
+bool DateTimeSummaryProvider(ValueObject &valobj, Stream &stream, const TypeSummaryOptions &options);
+std::string GetBigIntvalue(ValueObject &valobj);
+bool DecimalSummaryProvider(ValueObject &valobj, Stream &stream, const TypeSummaryOptions &options);
 } // namespace formatters
 } // namespace lldb_private
 

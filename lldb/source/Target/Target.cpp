@@ -4898,27 +4898,3 @@ std::recursive_mutex &Target::GetAPIMutex() {
 
 /// Get metrics associated with this target in JSON format.
 llvm::json::Value Target::ReportStatistics() { return m_stats.ToJSON(*this); }
-
-std::vector<std::shared_ptr<lldb_private::Target::CJThread>> Target::GetAllCJThreadStatus(
-  lldb_private::ExecutionContext &exe_ctx) {
-  CommandObjCJThreadCommon cjthread_help;
-  Status error;
-  std::vector<std::shared_ptr<struct CJThread>> cjthreads;
-  auto count = cjthread_help.GetCJThreadCount(exe_ctx, error);
-  auto info = cjthread_help.GetCJThreadInfo(exe_ctx, error);
-  std::lock_guard<std::recursive_mutex> guard(
-    exe_ctx.GetProcessPtr()->GetThreadList().GetMutex());
-  for (uint64_t i = 0; i < count; i++) {
-     auto cjthread_context = info->GetChildAtIndex(i, true);
-    cjthread_help.HandOneCJThread(exe_ctx.GetThreadSP(), cjthread_context, error, true);
-    auto frames = cjthread_help.m_frames;
-    StreamString strm;
-    auto name = cjthread_help.GetCJThreadName(cjthread_context);
-    auto id = cjthread_help.GetCJThreadID(cjthread_context);
-    auto state = cjthread_help.GetCJThreadState(cjthread_context);
-    auto cjthread = std::make_shared<struct CJThread>(frames, id, name, state);
-    cjthreads.push_back(cjthread);
-  }
-
-  return cjthreads;
-}

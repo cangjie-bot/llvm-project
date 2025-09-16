@@ -44,14 +44,26 @@ static bool isAligned(const Value *Base, const APInt &Offset, Align Alignment,
 
 static void getUses(Value *Base, SetVector<Value *> &Uses,
                     Value *StopInst = nullptr) {
-  SmallVector<Value *, 8> WorkList = {Base};
+  SmallVector<std::pair<Value *, bool>, 8> WorkList = {{Base, false}};
+  auto IsLoad = [](Value *V) {
+    if (isa<LoadInst>(V))
+      return true;
+    auto *II = dyn_cast<IntrinsicInst>(V);
+    if (!II)
+      return false;
+    auto IID = II->getIntrinsicID();
+    return IID == Intrinsic::cj_gcread_ref ||
+           IID == Intrinsic::cj_gcread_static_ref;
+  };
   while (!WorkList.empty()) {
-    Value *V = WorkList.pop_back_val();
+    auto [V, L] = WorkList.pop_back_val();
     for (auto *U : V->users()) {
-      if (Uses.contains(U) || U == StopInst)
+      bool Tag = IsLoad(U);
+      // load after load, then stop.
+      if ((L && Tag) || Uses.contains(U) || U == StopInst)
         continue;
       Uses.insert(U);
-      WorkList.push_back(U);
+      WorkList.push_back({U, Tag | L});
     }
   }
 }
@@ -103,7 +115,7 @@ static bool checkMaybeLoadFromNullST(Value *V, Value *&BP) {
   return false;
 }
 
-static bool isNoNullArgumentOrLoad(const Value *V) {
+static bool isNoNullArgumentOrLoad(const Value *V, const DominatorTree *DT) {
   Value *BP = const_cast<Value *>(V);
   if (checkMaybeLoadFromNullST(const_cast<Value *>(V), BP))
     return false;
@@ -130,30 +142,31 @@ static bool isNoNullArgumentOrLoad(const Value *V) {
         return false;
     }
     if (auto *SI = dyn_cast<StoreInst>(U);
-        SI && getUnderlyingObject(SI->getPointerOperand()) != BP)
+        SI && getUnderlyingObject(SI->getPointerOperand()) != BP &&
+        !DT->dominates(V, SI))
       return false;
     if (auto *MI = dyn_cast<MemTransferInst>(U);
-        MI && getUnderlyingObject(MI->getDest()) != BP)
+        MI && getUnderlyingObject(MI->getDest()) != BP && !DT->dominates(V, MI))
       return false;
   }
   return true;
 }
 
-static bool isNoNullPointer(const Value *V) {
+static bool isNoNullPointer(const Value *V, const DominatorTree *DT) {
   assert(isa<PointerType>(V->getType()) && "It should be pointer type");
   if (auto *I = dyn_cast<Instruction>(V);
       I && I->hasMetadata(LLVMContext::MD_untrusted_ref))
     return false;
   if (auto *II = dyn_cast<IntrinsicInst>(V)) {
     if (II->isCJRefGCRead())
-      return isNoNullArgumentOrLoad(V);
+      return isNoNullArgumentOrLoad(V, DT);
   } else if (auto *CI = dyn_cast<CallInst>(V)) {
     auto *F = CI->getCalledFunction();
     return F && F->hasFnAttribute("cj-heapmalloc");
   } else if (isa<AllocaInst>(V)) {
     return true;
   } else if (isa<Argument>(V) || isa<LoadInst>(V)) {
-    return isNoNullArgumentOrLoad(V);
+    return isNoNullArgumentOrLoad(V, DT);
   }
   return false;
 }
@@ -169,7 +182,7 @@ static bool isCJDeferenceablePointer(const Value *V, const Instruction *CtxI,
     // If Base is a normal instruction, check whether the type of Base is in
     // stack or Base is cangjie malloc. In the case of Base dominates CtxI, V
     // can safely dereference at CtxI.
-    return DT->dominates(Base, CtxI) && isNoNullPointer(Base);
+    return DT->dominates(Base, CtxI) && isNoNullPointer(Base, DT);
   }
   return false;
 }
