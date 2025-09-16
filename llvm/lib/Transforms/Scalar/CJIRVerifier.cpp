@@ -318,6 +318,12 @@ public:
             (Callee->hasFnAttribute("cj2c") || Callee->hasFnAttribute("c2cj")))
           return;
       }
+      if (auto *II = dyn_cast<IntrinsicInst>(U))
+        if (II->getIntrinsicID() == Intrinsic::cj_blackhole)
+          return;
+      if (auto *II = dyn_cast<IntrinsicInst>(I.getOperand(0)))
+        if (II->getIntrinsicID() == Intrinsic::cj_blackhole)
+          return;
     }
 
     for (const User *U : I.users()) {
@@ -733,7 +739,7 @@ private:
                                     SmallVector<uint64_t, 8> &AllRefPos) {
     uint64_t EleNum = AT->getNumElements();
     Type *EleType = AT->getElementType();
-    if (isa<PointerType>(EleType)) {
+    if (isa<PointerType>(EleType) && isGCPointerType(EleType)) {
       for (uint64_t Idx = 0; Idx < EleNum; Idx++) {
         AllRefPos.push_back(CurPos + 8 * Idx); // 8: pointer size
       }

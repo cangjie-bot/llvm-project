@@ -5745,6 +5745,7 @@ CCAssignFn *AArch64TargetLowering::CCAssignFnForCall(CallingConv::ID CC,
     return CC_AArch64_WebKit_JS;
   case CallingConv::GHC:
     return CC_AArch64_GHC;
+  case CallingConv::AnyReg:
   case CallingConv::C:
   case CallingConv::Fast:
   case CallingConv::PreserveMost:

@@ -94,11 +94,6 @@ STATISTIC(NumLFTR        , "Number of loop exit tests replaced");
 STATISTIC(NumElimExt     , "Number of IV sign/zero extends eliminated");
 STATISTIC(NumElimIV      , "Number of congruent IVs eliminated");
 
-namespace llvm {
-extern cl::opt<bool> CJPipeline;
-extern cl::opt<bool> EnableCJIRCEPass;
-} // namespace llvm
-
 // Trip count verification can be enabled by default under NDEBUG if we
 // implement a strong expression equivalence checker in SCEV. Until then, we
 // use the verify-indvars flag, which may assert in some cases.
@@ -1973,11 +1968,7 @@ bool IndVarSimplify::run(Loop *L) {
     SE->forgetLoop(L);
   }
 
-  // If we have a trip count expression, rewrite the loop's exit condition
-  // using it.
-  // In cangjie, close LFTR because it affects IRCE.
-  bool LFTREnable = CJPipeline ? !EnableCJIRCEPass && !DisableLFTR : !DisableLFTR;
-  if (LFTREnable) {
+  if (!DisableLFTR) {
     BasicBlock *PreHeader = L->getLoopPreheader();
 
     SmallVector<BasicBlock*, 16> ExitingBlocks;

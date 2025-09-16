@@ -1580,8 +1580,6 @@ public:
     ~CJThread() = default;
   };
 
-  std::vector<std::shared_ptr<struct CJThread>> GetAllCJThreadStatus(lldb_private::ExecutionContext &exe_ctx);
-
 private:
   /// Construct with optional file and arch.
   ///

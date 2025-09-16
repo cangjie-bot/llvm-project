@@ -249,7 +249,7 @@ public:
                                     SmallVector<uint64_t, 8> &AllRefPos) {
     uint64_t EleNum = AT->getNumElements();
     Type *EleType = AT->getElementType();
-    if (isa<PointerType>(EleType)) {
+    if (isa<PointerType>(EleType) && isGCPointerType(EleType)) {
       for (uint64_t Idx = 0; Idx < EleNum; Idx++) {
         AllRefPos.push_back(CurPos + 8 * Idx); // 8: pointer size
       }

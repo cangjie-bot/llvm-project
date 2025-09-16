@@ -27,6 +27,8 @@ public:
 
   lldb::SBData GetBackTrace(SBError &er);
 
+  lldb::SBData OperateDebugMessage(const char *message, SBError &er);
+
 };
 
 } // namespace lldb

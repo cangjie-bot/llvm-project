@@ -472,6 +472,12 @@ def int_cj_array_copy_struct        : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
 def int_cj_copy_struct_field        : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
+def int_cj_cross_access_barrier    : Intrinsic<[], [llvm_i64_ty]>;
+def int_cj_get_exported_ref        : Intrinsic<[llvm_gcptr_ty],
+                                                [llvm_i64_ty]>;
+def int_cj_remove_exported_ref     : Intrinsic<[], [llvm_i64_ty]>;
+def int_cj_create_export_handle         : Intrinsic<[llvm_i64_ty],
+                                                [llvm_gcptr_ty]>;
 
 //===------------------- Cangjie runtime Intrinsics ------------------------===//
 //
@@ -563,6 +569,7 @@ def int_cj_atomic_compare_swap  : Intrinsic<[llvm_i1_ty],
 def int_cj_get_fp_state         : Intrinsic<[llvm_i64_ty], [llvm_anyint_ty]>;
 def int_cj_reset_fp_state       : Intrinsic<[], []>;
 def int_cj_set_location         : Intrinsic<[], []>;
+def int_cj_blackhole           : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty]>;
 
 //===------------------- Cangjie generic Intrinsics ------------------------===//
 //
