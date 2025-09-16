@@ -107,21 +107,6 @@ protected:
   std::string m_new_process_action;
 };
 
-static void SetSigsegvForCangjie(ProcessSP process_sp) {
-  // Set SIGSEGV as default action PASS:true STOP:false NOTIFY:false for gc.
-  // Add "!" to pass_action is necessary according to lldb source code
-  bool stop_action = false;
-  bool pass_action = true;
-  bool notify_action = false;
-  UnixSignalsSP signals_sp = process_sp->GetUnixSignals();
-  int32_t signo = signals_sp->GetSignalNumberFromName("SIGSEGV");
-  if (signo != LLDB_INVALID_SIGNAL_NUMBER) {
-    signals_sp->SetShouldStop(signo, stop_action);
-    signals_sp->SetShouldSuppress(signo, !pass_action);
-    signals_sp->SetShouldNotify(signo, notify_action);
-  }
-}
-
 #if defined(__APPLE__)
 static void SetSigBusvForCangjie(ProcessSP process_sp) {
   // Set SIGBUS as default action PASS:true STOP:false NOTIFY:false for macos
@@ -287,7 +272,6 @@ protected:
 
     if (error.Success()) {
       ProcessSP process_sp(target->GetProcessSP());
-      SetSigsegvForCangjie(process_sp);
 #if defined(__APPLE__)
       SetSigBusvForCangjie(process_sp);
 #endif
@@ -456,7 +440,6 @@ protected:
     if (error.Success()) {
       process_sp = target->GetProcessSP();
       if (process_sp) {
-        SetSigsegvForCangjie(process_sp);
 #if defined(__APPLE__)
         SetSigBusvForCangjie(process_sp);
 #endif

@@ -86,6 +86,10 @@ Value *getDest(const CallBase *CI) {
     return CI->getArgOperand(GCReadGeneric::DstPtr);
   case Intrinsic::cj_assign_generic:
     return CI->getArgOperand(AssignGeneric::DstPtr);
+  case Intrinsic::cj_array_copy_ref:
+  case Intrinsic::cj_array_copy_struct:
+  case Intrinsic::cj_array_copy_generic:
+    return CI->getArgOperand(ArrayCopy::DstPtr);
   }
 }
 
@@ -108,6 +112,10 @@ Value *getSource(const CallBase *CI) {
     return CI->getArgOperand(GCReadGeneric::SrcPtr);
   case Intrinsic::cj_assign_generic:
     return CI->getArgOperand(AssignGeneric::SrcPtr);
+  case Intrinsic::cj_array_copy_ref:
+  case Intrinsic::cj_array_copy_struct:
+  case Intrinsic::cj_array_copy_generic:
+    return CI->getArgOperand(ArrayCopy::SrcPtr);
   }
 }
 
@@ -128,6 +136,10 @@ Value *getSize(const CallBase *CI) {
     return CI->getArgOperand(GCWriteGeneric::Size);
   case Intrinsic::cj_gcread_generic:
     return CI->getArgOperand(GCReadGeneric::Size);
+  case Intrinsic::cj_array_copy_ref:
+  case Intrinsic::cj_array_copy_struct:
+  case Intrinsic::cj_array_copy_generic:
+    return CI->getArgOperand(ArrayCopy::Size);
   }
 }
 Value *getAtomicOrder(const CallBase *CI) {

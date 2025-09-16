@@ -368,6 +368,19 @@ std::string CangjieDeclMap::GetFuncNameFromComplierType(const CompilerType& func
   return funcname;
 }
 
+bool CheckNestedGenericFunction(lldb_private::ConstString funcname) {
+    int count = 0;
+    size_t pos = 0;
+    auto str = funcname.GetStringRef();
+    llvm::StringRef substr = "<T";
+    while ((pos = str.find(substr, pos)) != llvm::StringRef::npos) {
+        ++count;
+        pos += substr.size();
+    }
+
+    return count > 1;
+}
+
 std::vector<CangjieDeclMap::CompilerTypeInfo> CangjieDeclMap::LookUpFunction(std::string name, bool find_global) {
   std::vector<CangjieDeclMap::CompilerTypeInfo> result;
   auto target = m_exe_ctx.GetTargetPtr();
@@ -404,6 +417,9 @@ std::vector<CangjieDeclMap::CompilerTypeInfo> CangjieDeclMap::LookUpFunction(std
     sc_list.GetContextAtIndex(index, sym_ctx);
     if (!sym_ctx.function) {
       continue;
+    }
+    if (CheckNestedGenericFunction(sym_ctx.function->GetNameNoArguments())) {
+      return result;
     }
     std::string funcNameWithPkg = sym_ctx.function->GetNameNoArguments().GetCString();
     if (funcNameWithPkg.find(m_current_pkgname) == std::string::npos) {
@@ -1733,8 +1749,8 @@ CompilerType CangjieDeclMap::GetDynamicTypeFromTy(Ptr<AST::Ty>& ty, std::string 
   } else if (ty->IsString()) {
     auto type = this->FindParsedTypesByName(typeName);
     if (!type.IsValid()) {
-        type = LookUptype(lldb::ModuleSP(),
-      lldb_private::ConstString(typeName.c_str()), lldb_private::CompilerDeclContext());
+      type = LookUptype(lldb::ModuleSP(), lldb_private::ConstString(typeName.c_str()),
+                        lldb_private::CompilerDeclContext());
       m_parsed_types.insert({"std.core::String", type});
     }
     return type;

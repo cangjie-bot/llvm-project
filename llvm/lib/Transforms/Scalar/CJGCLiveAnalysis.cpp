@@ -1174,6 +1174,17 @@ void StructLiveAnalysis::visitMemoryIntrinsic(
     addGCFieldsByMemory(II->getArgOperand(0), AllocaDefs, MemSize);
     break;
   }
+  case Intrinsic::cj_array_copy_ref:
+  case Intrinsic::cj_array_copy_struct:
+  case Intrinsic::cj_array_copy_generic: {
+    uint64_t MemSize = 0;
+    if (auto Size = dyn_cast<ConstantInt>(getSize(II))) {
+      MemSize = Size->getZExtValue();
+    }
+    addGCFieldsByMemory(getDest(II), AllocaDefs, MemSize);
+    addGCFieldsByMemory(getSource(II), AllocaUses, MemSize);
+    break;
+  }
   case Intrinsic::lifetime_start:
     // lifetime_start means the begin of using a stack ptr.
     // we treat this ptr as a kill
@@ -1214,10 +1225,10 @@ void StructLiveAnalysis::visitMemoryCallBase(
     Value *Arg = CB->getArgOperand(ArgIdx);
     Type *Ty = Arg->getType();
     if (Ty->isPointerTy() && !Ty->isOpaquePointerTy()) {
-      if (auto *ST =
-              dyn_cast<StructType>(Ty->getNonOpaquePointerElementType())) {
-        Size = static_cast<unsigned>(DL.getTypeAllocSize(ST).getFixedSize());
-      }
+      auto *Pointee = Ty->getNonOpaquePointerElementType();
+      if (isa<StructType>(Pointee) || isa<ArrayType>(Pointee))
+        Size =
+            static_cast<unsigned>(DL.getTypeAllocSize(Pointee).getFixedSize());
     }
 
     addGCFieldsByMemory(Arg, AllocaUses, Size);

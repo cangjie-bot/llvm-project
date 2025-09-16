@@ -410,9 +410,17 @@ void CangjieIRForTarget::SetPlatformInfo() {
     if (env.equals("ohos")) {
       m_module->setTargetTriple("aarch64-unknown-linux-ohos");
     }
+    if (env.equals("android")) {
+      m_module->setTargetTriple("aarch64-unknown-linux-android");
+    }
     m_module->setDataLayout("e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128");
   }
-
+  if (ostype == llvm::Triple::Linux && archtype == llvm::Triple::ArchType::x86_64) {
+    if (env.equals("ohos")) {
+      m_module->setTargetTriple("x86_64-unknown-linux-ohos");
+      m_module->setDataLayout("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128");
+    }
+  }
   if (ostype == llvm::Triple::Darwin) {
     if (archtype == llvm::Triple::ArchType::aarch64) {
       m_module->setDataLayout("e-m:o-i64:64-i128:128-n32:64-S128");

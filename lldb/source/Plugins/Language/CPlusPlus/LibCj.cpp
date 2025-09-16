@@ -61,7 +61,9 @@ public:
   bool MightHaveChildren() override { return true; }
   size_t GetIndexOfChildWithName(ConstString name) override { return ExtractIndexFromString(name.GetCString()); }
   void SetIsInternalType(bool internal) { m_internal = internal; }
-
+  std::string GetChildName(ValueObjectSP value);
+  llvm::StringRef GetBasicTypeName(ValueObjectSP value);
+  bool IsBasicType(ValueObjectSP value);
 private:
   int64_t m_freeOffset = 0;
   ValueObjectSP m_appendIndex;
@@ -616,6 +618,65 @@ CjHashMapSyntheticFrontEnd::CjHashMapSyntheticFrontEnd(ValueObjectSP valobj_sp)
   Update();
 }
 
+bool CjHashMapSyntheticFrontEnd::IsBasicType(ValueObjectSP value) {
+  auto type = value->GetCompilerType();
+  if (type.GetTypeClass() == lldb::eTypeClassTypedef) {
+    type = type.GetTypedefedType();
+  }
+  if (type.GetTypeClass() == lldb::eTypeClassBuiltin) {
+    return true;
+  }
+  if (type.GetTypeClass() == lldb::eTypeClassStruct) {
+    auto typeName = type.GetTypeName().GetStringRef();
+    if (typeName.find("std.core::String") == 0) {
+      return true;
+    }
+    if (typeName.find("std.math.numeric::Decimal") == 0) {
+      return true;
+    }
+    if (typeName.find("std.time::DateTime") == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+llvm::StringRef CjHashMapSyntheticFrontEnd::GetBasicTypeName(ValueObjectSP value) {
+  auto type = value->GetCompilerType();
+  auto typeName = type.GetTypeName().GetStringRef();
+  if (typeName == "Rune" || typeName == "Int8" || typeName == "UInt8") {
+    return value->GetSummaryAsCString();
+  }
+  if (type.GetTypeClass() == lldb::eTypeClassStruct) {
+    // String
+    return value->GetSummaryAsCString();
+  }
+  // integer, float, bool
+  return value->GetValueAsCString();
+}
+
+std::string CjHashMapSyntheticFrontEnd::GetChildName(ValueObjectSP value) {
+  // HashMap is internal type means a child of cangjie HashSet
+  // then we only need one child of value(the type of value is class)
+  // and this child idx is 2(key), child idx is 3(value).
+  ValueObjectSP child_key_sp = value->GetChildAtIndex(2, true);
+  ValueObjectSP child_val_sp = value->GetChildAtIndex(3, true);
+  if (!child_key_sp || !child_val_sp) {
+    return "";
+  }
+  if (!IsBasicType(child_key_sp)) {
+    return "";
+  }
+  llvm::StringRef key_str = GetBasicTypeName(child_key_sp);
+  if (!IsBasicType(child_val_sp)) {
+    std::string name = "[" + key_str.str() +"]";
+    return name;
+  }
+  llvm::StringRef val_str = GetBasicTypeName(child_val_sp);
+  std::string name = "[" + key_str.str() + " -> "+ val_str.str() + "]";
+  return name;
+}
+
 size_t CjHashMapSyntheticFrontEnd::CalculateNumChildren() {
   if (!m_appendIndex || !m_freeSize) {
     return 0;
@@ -658,8 +719,13 @@ ValueObjectSP CjHashMapSyntheticFrontEnd::GetChildAtIndex(size_t idx) {
 
     // Mark the value(class type) is a child of HashMap.
     value->SetIsInternalType(true);
-    std::string name = llvm::formatv("[{0}]", idx).str();
-    value->SetName(ConstString(name.c_str()));
+    // idx =>  Bob -> 123 for metaDsl.
+    if (value->IsInternalType()) {
+      auto name = GetChildName(value);
+      if (!name.empty()) {
+        value->SetName(ConstString(name));
+      }
+    }
     return value;
   }
 

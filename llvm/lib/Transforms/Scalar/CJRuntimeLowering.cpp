@@ -98,7 +98,12 @@ const static StdMap<unsigned, StringRef> RuntimeMap {
     {Intrinsic::cj_is_subtype, "CJ_MCC_IsSubType"},
     {Intrinsic::cj_is_tupletype_of, "CJ_MCC_IsTupleTypeOf"},
     {Intrinsic::cj_is_typeinfo_equal, "CJ_MCC_IsTypeInfoEqual"},
-    {Intrinsic::cj_set_location, "SetDebugLocation"}};
+    {Intrinsic::cj_set_location, "SetDebugLocation"},
+    {Intrinsic::cj_cross_access_barrier, "CJ_MCC_CrossAccessBarrier"},
+    {Intrinsic::cj_get_exported_ref, "CJ_MCC_GetExportedRef"},
+    {Intrinsic::cj_remove_exported_ref, "CJ_MCC_RemoveExportedRef"},
+    {Intrinsic::cj_create_export_handle, "CJ_MCC_CreateExportHandle"},
+    {Intrinsic::cj_blackhole, "CJ_LLVM_BlackHole"}};
 
 struct LowerGetFieldOffset {
   CallBase *CI;
@@ -296,27 +301,50 @@ public:
 
   // cj.heapmalloc.class (i8* bitcast (TypeInfo* @Klass.ti to i8*), i32 size)
   void setHeapMallocSizeAlign(CallBase *CI) {
-    auto HeapSizeAlign = [&](uint64_t Size) {
+    auto ConstantSizeAlign = [&](uint64_t Size) {
       Size += ObjectHeadSize;
       Size = (Size + 7) & (~(7)); // 8 bytes alignment
       CI->setArgOperand(1, ConstantInt::get(Type::getInt32Ty(C), Size));
     };
-    if (auto *SizeVar = dyn_cast<ConstantInt>(CI->getArgOperand(1))) {
-      HeapSizeAlign(SizeVar->getZExtValue());
-      return;
+    auto VariableSizeAlign = [&](Value *Size, IRBuilder<> &IRB) {
+      auto *V = IRB.CreateAnd(IRB.CreateAdd(Size, IRB.getInt32(15)),
+                              IRB.getInt32(~7));
+      CI->setArgOperand(1, V);
+    };
+    auto GetTISizePointer = [this](Value *TI, IRBuilder<> &IRB) -> Value * {
+      Type *Ty = TI->getType()->getNonOpaquePointerElementType();
+      if (isa<GlobalVariable>(TI) || isa<StructType>(Ty))
+        return IRB.CreateInBoundsGEP(Ty, TI,
+                                     {IRB.getInt32(0), IRB.getInt32(CIT_SIZE)});
+      auto *ST = StructType::getTypeByName(M.getContext(), "TypeInfo");
+      if (!ST)
+        report_fatal_error("error");
+      auto *SL = M.getDataLayout().getStructLayout(ST);
+      auto *GEP =
+          IRB.CreateGEP(Ty, TI, {IRB.getInt32(SL->getElementOffset(CIT_SIZE))});
+      return IRB.CreateBitCast(GEP, IRB.getInt32Ty()->getPointerTo());
+    };
+
+    auto *TI = CI->getArgOperand(0)->stripPointerCasts();
+    auto *GV = dyn_cast<GlobalVariable>(TI);
+    // In Cangjie, non-fixed size classes allow member variable extension
+    // compatibility, so the size needs to be explicitly loaded from typeinfo.
+    if (!GV || !GV->hasAttribute("can_malloc_with_fixed_size")) {
+      IRBuilder<> IRB(CI);
+      auto *Ptr = GetTISizePointer(TI, IRB);
+      assert(Ptr->getType()->getNonOpaquePointerElementType() ==
+             IRB.getInt32Ty());
+      auto *LI = dyn_cast<Instruction>(IRB.CreateLoad(IRB.getInt32Ty(), Ptr));
+      LI->setDebugLoc(CI->getDebugLoc());
+      return VariableSizeAlign(LI, IRB);
     }
-    auto *Klass =
-        dyn_cast<GlobalVariable>(CI->getArgOperand(0)->stripPointerCasts());
-    if (Klass && Klass->hasInitializer()) {
-      TypeInfo TI(Klass);
-      HeapSizeAlign(TI.getSize());
-      return;
-    }
+    if (auto *SizeVar = dyn_cast<ConstantInt>(CI->getArgOperand(1)))
+      return ConstantSizeAlign(SizeVar->getZExtValue());
+    if (GV && GV->hasInitializer())
+      return ConstantSizeAlign(TypeInfo(GV).getSize());
+
     IRBuilder<> IRB(CI);
-    // 15: 8 bytes Typeinfo* and 7 bytes for align
-    Value *V = IRB.CreateAdd(CI->getArgOperand(1), IRB.getInt32(15));
-    Value *AlignSize = IRB.CreateAnd(V, IRB.getInt32(~(7))); // 8 bytes align
-    CI->setArgOperand(1, AlignSize);
+    VariableSizeAlign(CI->getArgOperand(1), IRB);
   }
 
   void replaceFixedNewObject(CallBase *&CI) {
@@ -362,7 +390,7 @@ public:
     Function *Func = M.getFunction("CJ_MCC_NewWeakRefObject");
     if (Func == nullptr) {
       Func = M.declareCJRuntimeFunc("CJ_MCC_NewWeakRefObject",
-                                    CI->getFunctionType(), true);
+                                    CI->getFunctionType(), false);
     }
     CI->setCalledFunction(Func);
   }
@@ -713,8 +741,13 @@ private:
     StringRef Callee = getRuntimeFuncName(CI);
     assert(Callee != "" && "Callee don`t exist.");
     auto Itr = RTFuncMap.find(Callee);
-    if (Itr != RTFuncMap.end())
-      return Itr->second;
+    if (Itr != RTFuncMap.end()) {
+      Function *RTFunc = Itr->second;
+      if (!RTFunc->isDeclaration()) {
+        RTFunc->deleteBody();
+      }
+      return RTFunc;
+    }
 
     FunctionType *FT = FuncType ? FuncType : CI->getFunctionType();
     Function *Func = M.declareCJRuntimeFunc(Callee, FT, GCLeafFunc, GCMalloc);
@@ -728,6 +761,10 @@ private:
     if (Func->getName().isSetDebugLocation())
       Func->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
     RTFuncMap[Callee] = Func;
+    if (CI->getIntrinsicID() == Intrinsic::cj_blackhole) {
+      Func->addFnAttr(Attribute::ReadNone);
+      Func->setCallingConv(CallingConv::AnyReg);
+    }
     return Func;
   }
 
@@ -758,6 +795,7 @@ private:
       AI = IRB.CreateAlloca(StructType::get(C, ElemTypes));
       Value *BC = IRB.CreateBitCast(AI, IRB.getInt8PtrTy()->getPointerTo());
       Value *GVExpr = ConstantExpr::getBitCast(GV, IRB.getInt8PtrTy());
+      IRB.SetInsertPoint(CI);
       IRB.CreateStore(GVExpr, BC);
     } else {
       StructType *ST = getTypeLayoutType(GV);
@@ -773,9 +811,9 @@ private:
       // %x.payload = getelementptr i8*, %x.i, i32 1
       // call @memset(%x.payload, 0, size)
       Value *Data = IRB.CreateGEP(IRB.getInt8PtrTy(), BC, {IRB.getInt32(1)});
+      IRB.SetInsertPoint(CI);
       IRB.CreateMemSet(Data, IRB.getInt8(0), MemSize, Align(8));
     }
-    IRB.SetInsertPoint(CI);
     Value *ASC = IRB.CreateAddrSpaceCast(AI, IRB.getInt8PtrTy(1));
     CI->replaceAllUsesWith(ASC);
     // Set terminator for invoke instruction.
@@ -924,6 +962,15 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       Lowering.replaceWithRuntimeFunc(CI, true, false);
       Changed = true;
       break;
+    case Intrinsic::cj_blackhole:
+      Lowering.replaceWithRuntimeFunc(CI, true, false);
+      CI->setCallingConv(CallingConv::AnyReg);
+      Changed = true;
+      break;
+    case Intrinsic::cj_cross_access_barrier:
+    case Intrinsic::cj_get_exported_ref:
+    case Intrinsic::cj_remove_exported_ref:
+    case Intrinsic::cj_create_export_handle:
     case Intrinsic::cj_fill_in_stack_trace:
       Lowering.replaceWithRuntimeFunc(CI, false, false);
       Changed = true;

@@ -121,6 +121,8 @@ static bool shouldRewriteStatepointsIn(Function &F);
 
 static bool rewriteCJThrowException(Module &M);
 
+static bool deleteUnusedBlackHole(Module &M);
+
 PreservedAnalyses CJRewriteStatepoint::run(Module &M,
                                            ModuleAnalysisManager &AM) {
   if (DisableCJRewrite) {
@@ -152,6 +154,7 @@ PreservedAnalyses CJRewriteStatepoint::run(Module &M,
   M.addModuleFlag(Module::Warning, "HasRewrittenStatepoint", true);
 
   Changed |= rewriteCJThrowException(M);
+  Changed |= deleteUnusedBlackHole(M);
 
   if (!Changed)
     return PreservedAnalyses::all();
@@ -2871,6 +2874,32 @@ static bool rewriteCJThrowException(Module &M) {
   }
   for (auto &DR : Replacements)
     DR.doReplacement();
+  return true;
+}
+
+void prepareBlackHoleBody(Function *F) {
+  F->setLinkage(GlobalValue::PrivateLinkage);
+  BasicBlock *BB = BasicBlock::Create(F->getContext(), "entry", F);
+  ReturnInst::Create(F->getContext(), F->getArg(0), BB);
+}
+
+static bool deleteUnusedBlackHole(Module &M) {
+  Function *F = M.getFunction("CJ_LLVM_BlackHole");
+  if (!F || F->use_empty())
+    return false;
+  prepareBlackHoleBody(F);
+  SmallVector<CallBase *, 32> Users;
+  for (auto *U : F->users()) {
+    auto *CB = dyn_cast<CallBase>(U);
+    assert(CB != nullptr &&
+           "User of CJ_LLVM_BlackHole must be call instruction");
+    Users.push_back(CB);
+  }
+  for (auto *CB : Users) {
+    if (CB->use_empty()) {
+      CB->eraseFromParent();
+    }
+  }
   return true;
 }
 

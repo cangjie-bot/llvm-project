@@ -3295,8 +3295,8 @@ bool ValueObject::GetCangjieDynamicType(
 }
 
 bool ValueObject::IsCangjieGenericType() {
-  if (GetCompilerType().GetTypeName().GetStringRef().contains("$G") ||
-    GetCompilerType().GetTypeName().GetStringRef().contains("Interface$")) {
+  if (GetTypeName().GetStringRef().contains("$G") ||
+      GetTypeName().GetStringRef().contains("Interface$")) {
     return true;
   }
   if (GetCompilerType().GetTypeClass() ==lldb::eTypeClassTypedef) {
