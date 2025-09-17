@@ -395,8 +395,6 @@ static TargetMachine* GetTargetMachine(Triple TheTriple, StringRef CPUStr,
   }
 
   if (CJPipeline && TheTriple.isARM()) {
-    DisableGCSupport = true;
-    DisableCJRewrite = true;
     EnableCJBarrierSplit = false;
   }
 
