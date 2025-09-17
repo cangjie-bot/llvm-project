@@ -27,6 +27,7 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -53,18 +54,6 @@ void Check(bool Condition, const Twine &Message) {
   }
 }
 
-// Return true if is x86, and return false if is aarch64.
-// Otherwise an error is reported.
-bool isX86Triple(MachineFunction &MF) {
-  if (MF.getTarget().getTargetTriple().isX86()) {
-    return true;
-  } else if (MF.getTarget().getTargetTriple().isAArch64()) {
-    return false;
-  } else {
-    report_fatal_error("Unsupported target type!");
-  }
-}
-
 // Parse the pointer variable in the input parameter of the function.
 void parseFuncArgPointers(MachineFunction &MF, FuncArgPointers &Data) {
   Function &F = MF.getFunction();
@@ -88,7 +77,8 @@ void parseFuncArgPointers(MachineFunction &MF, FuncArgPointers &Data) {
     Argument *Arg = F.getArg(i);
     if (Arg->hasStructRetAttr()) {
       Check(i == 0, "The sret arg position is not 0.");
-      if (isX86Triple(MF)) {
+      auto TT = MF.getTarget().getTargetTriple();
+      if (TT.isX86()) {
         MCRegister MCReg(RegList[RegIdx]);
         Data.Regs.push_back(MCReg);
         ++RegIdx;
@@ -97,9 +87,14 @@ void parseFuncArgPointers(MachineFunction &MF, FuncArgPointers &Data) {
           // location 0:rcx/xmm0, 1:rdx/xmm1, 2:r8/xmm2, 3:r9/xmm3
           ++FPNum;
         }
-      } else { // AArch64
+      } else if (TT.isAArch64()) {
         MCRegister X8Reg(TRI->getX8Register());
         Data.Regs.push_back(X8Reg);
+      } else if (TT.isARM()) {
+        MCRegister R0Reg(TRI->getR0Register());
+        Data.Regs.push_back(R0Reg);
+      } else {
+        report_fatal_error("Unsupported target type!");
       }
       continue;
     }

@@ -58,7 +58,9 @@ ARMAsmPrinter::ARMAsmPrinter(TargetMachine &TM,
                              std::unique_ptr<MCStreamer> Streamer)
     : AsmPrinter(TM, std::move(Streamer)), Subtarget(nullptr), AFI(nullptr),
       MCP(nullptr), InConstantPool(false), OptimizationGoals(-1), SM(*this),
-      CMI(*this, SM) {}
+      CMI(*this, SM) {
+  SM.setARM();
+}
 
 void ARMAsmPrinter::emitFunctionBodyEnd() {
   // Make sure to terminate any constant pools that were at the end
