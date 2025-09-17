@@ -1123,6 +1123,8 @@ public:
 
   virtual MCPhysReg getX8Register() const { return 0; }
 
+  virtual MCPhysReg getR0Register() const { return 0; }
+
   virtual const std::vector<MCPhysReg>
   getArgRegs(const MachineFunction &MF) const {
     return {};

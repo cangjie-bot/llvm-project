@@ -391,6 +391,8 @@ public:
   inline bool isX86_64() const { return IsX86_64; }
   inline void setAArch64() { IsAArch64 = true; }
   inline bool isAArch64() const { return IsAArch64; }
+  inline void setARM() { IsARM = true; }
+  inline bool isARM() const { return IsARM; }
   /// Generate a stackmap record for a stackmap instruction.
   ///
   /// MI must be a raw STACKMAP, not a PATCHPOINT.
@@ -438,6 +440,7 @@ private:
   FnInfoMap FnInfos;
   bool IsX86_64 = false;
   bool IsAArch64 = false;
+  bool IsARM = false;
 
   void processArrayType(ArrayType *ST, int64_t RefOffset,
                         LocationVec &Locations, unsigned Reg,
