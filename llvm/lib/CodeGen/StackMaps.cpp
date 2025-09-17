@@ -131,6 +131,33 @@ const std::vector<std::string> AArch64Bit2Reg = {
     "x0",  "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",  "x8",  "x9",  "x10",
     "x11", "x12", "x13", "x14", "x15", "x16", "x17", "x18", "x19", "x20", "x21",
     "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "x31"};
+const std::unordered_map<uint32_t, uint32_t> ARMCalleeSavedReg = {
+    // r4 - r11, r14
+    {4, 1 << 0},
+    {5, 1 << 1},
+    {6, 1 << 2},
+    {7, 1 << 3},
+    {8, 1 << 4},
+    {9, 1 << 5},
+    {10, 1 << 6},
+    {11, 1 << 7},
+    {14, 1 << 8},
+    // d8 - d15
+    {264, 1 << 9},
+    {265, 1 << 10},
+    {266, 1 << 11},
+    {267, 1 << 12},
+    {268, 1 << 13},
+    {269, 1 << 14},
+    {270, 1 << 15},
+    {271, 1 << 16},
+};
+const std::vector<std::string> ARMPrologueBit2Reg = {
+    "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r14(lr)",
+    "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15", };
+const std::vector<std::string> ARMBit2Reg = {
+    "r0",  "r1",  "r2",  "r3",  "r4",  "r5",  "r6",  "r7",  "r8",  "r9",  "r10",
+    "r11", "r12", "r13", "r14", "r15"};
 } // namespace
 static uint64_t getConstMetaVal(const MachineInstr &MI, unsigned Idx) {
   assert(MI.getOperand(Idx).isImm() &&
@@ -541,8 +568,8 @@ StackMaps::parseRegOperand(MachineInstr::const_mop_iterator MOI,
   const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(MOI->getReg());
   assert(!MOI->getSubReg() && "Physical subreg still around.");
 
-  // 15, 31: max general regNum of ref for x86_64 and aarch64
-  unsigned MaxRegIdx = isX86_64() ? 15 : 31;
+  // 15, 31: max general regNum of ref, x86_64:15 , aarch64:31 and arm:15
+  unsigned MaxRegIdx = isAArch64() ? 31 : 15;
   unsigned Offset = 0;
   unsigned DwarfRegNum = getDwarfRegNum(MOI->getReg(), TRI);
   unsigned LLVMRegNum = *TRI->getLLVMRegNum(DwarfRegNum, false);
@@ -1212,9 +1239,9 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
     OS.emitLabel(StackmapFunction);
     CSIdxEnd = CSIdxStart + FR.second.RecordCount;
     CompressedInfo Data(
-        (IsWindows && isX86_64())
-            ? X86WinCalleeSavedReg
-            : (isX86_64() ? X86CalleeSavedReg : AArch64CalleeSavedReg));
+        (IsWindows && isX86_64()) ? X86WinCalleeSavedReg
+            : isX86_64() ? X86CalleeSavedReg 
+            : isAArch64() ? AArch64CalleeSavedReg : ARMCalleeSavedReg);
     prepareCompressedData(Data, FR.second, CSIdxStart, CSIdxEnd);
     emitCangjieCompressedData(OS, Data);
     CSIdxStart = CSIdxEnd;
@@ -1284,7 +1311,8 @@ struct MaxWidthOfRefInfo {
 void calculateStackSlots(MaxWidthOfRefInfo &WidthInfo,
                          CompressedInfo::SlotItem &StackSlot,
                          const SmallVector<int64_t, 8> &BOffsets,
-                         int64_t MaxOffset, int64_t MinOffset) {
+                         int64_t MaxOffset, int64_t MinOffset,
+                         const StackMaps &SM) {
   StackSlot.BaseOffset = MaxOffset;
   uint32_t MaxBitIdx = (MaxOffset - MinOffset) / OffsetStepSize;
   WidthInfo.SlotBitIdx = std::max(WidthInfo.SlotBitIdx, MaxBitIdx);
@@ -1296,7 +1324,7 @@ void calculateStackSlots(MaxWidthOfRefInfo &WidthInfo,
   auto OriDataVec = std::vector<uint32_t>(OriDataVecSize, 0);
 
   for (const auto &Offset : BOffsets) {
-    if (Offset % OffsetStepSize != 0) {
+    if (!SM.isARM() && Offset % OffsetStepSize != 0) {
       report_fatal_error("Offset should be 8 aligned!");
     }
     uint32_t BitIdx = (MaxOffset - Offset) / OffsetStepSize;
@@ -1359,7 +1387,7 @@ void calculateStackSlots(MaxWidthOfRefInfo &WidthInfo,
 template <typename T>
 std::pair<unsigned, unsigned>
 addItemInfo(CompressedInfo &Data, const StackMaps::CallsiteInfo &CSI,
-            MaxWidthOfRefInfo &WidthInfo, T &Input) {
+            MaxWidthOfRefInfo &WidthInfo, T &Input, const StackMaps &SM) {
   auto Itr = Input.cbegin();
   auto EndItr = Input.cend();
   int64_t MaxOffset = INT64_MIN;
@@ -1387,7 +1415,7 @@ addItemInfo(CompressedInfo &Data, const StackMaps::CallsiteInfo &CSI,
   WidthInfo.RegBit = std::max(WidthInfo.RegBit, RegInfo.RegBit);
   // 64: use uint64_t to store bit value.
   if (!BOffsets.empty()) {
-    calculateStackSlots(WidthInfo, StackSlot, BOffsets, MaxOffset, MinOffset);
+    calculateStackSlots(WidthInfo, StackSlot, BOffsets, MaxOffset, MinOffset, SM);
   }
   unsigned BaseOffsetBytes = getMinBytesForInt(StackSlot.BaseOffset);
   WidthInfo.BaseOffsetBytes = std::max(WidthInfo.BaseOffsetBytes,
@@ -1398,7 +1426,8 @@ addItemInfo(CompressedInfo &Data, const StackMaps::CallsiteInfo &CSI,
 }
 } // end anonymous namespace
 
-static void genStackMapInfo(CompressedInfo &Data,
+static void genStackMapInfo(const StackMaps &SM,
+                            CompressedInfo &Data,
                             const StackMaps::CallsiteInfo &CSI,
                             MaxWidthOfRefInfo &WidthInfo) {
   // <base, <derives>>. use map and set to keep order
@@ -1408,7 +1437,7 @@ static void genStackMapInfo(CompressedInfo &Data,
   CompressedInfo::IdxItem &IdxInfo = Data.StackMapItem.back().second;
   // pass map<base, <derives>> to addItemInfo to process base ptrs
   std::pair<unsigned, unsigned> RefIdx =
-      addItemInfo(Data, CSI, WidthInfo, Base2Derived);
+      addItemInfo(Data, CSI, WidthInfo, Base2Derived, SM);
   IdxInfo.RegIdxPlusOne = RefIdx.first;
   IdxInfo.SlotIdxPlusOne = RefIdx.second;
 
@@ -1420,7 +1449,7 @@ static void genStackMapInfo(CompressedInfo &Data,
   while (Itr != EndItr) {
     // pass each base's set<derives> to addItemInfo to process derived ptrs
     std::pair<unsigned, unsigned> DerivedRefIdx =
-        addItemInfo(Data, CSI, WidthInfo, Itr->second);
+        addItemInfo(Data, CSI, WidthInfo, Itr->second, SM);
     if (DerivedRefIdx.first != 0 || DerivedRefIdx.second != 0) {
       IsAllIdxsInvalid = false;
     }
@@ -1440,7 +1469,7 @@ static void genStackMapInfo(CompressedInfo &Data,
     std::set<StackMaps::Location> SPLocs(CSI.StackLocations.begin(),
                                          CSI.StackLocations.end());
     std::pair<unsigned, unsigned> StackPtrIdx =
-        addItemInfo(Data, CSI, WidthInfo, SPLocs);
+        addItemInfo(Data, CSI, WidthInfo, SPLocs, SM);
     IdxInfo.SPRegIdxPlusOne = StackPtrIdx.first;
     IdxInfo.SPSlotIdxPlusOne = StackPtrIdx.second;
   }
@@ -1461,7 +1490,7 @@ void StackMaps::prepareCompressedData(CompressedInfo &Data,
     const auto &CSI = CSInfos[CSIdx++];
     Data.StackMapItem.insert(
         std::make_pair(CSI.CSOffsetExpr, CompressedInfo::IdxItem()));
-    genStackMapInfo(Data, CSI, WidthInfo);
+    genStackMapInfo(*this, Data, CSI, WidthInfo);
 
     CompressedInfo::LineNumberItem LineNumber{CSI.LineNumber};
     MaxLN = (MaxLN > LineNumber.LN) ? MaxLN : LineNumber.LN;
@@ -1555,10 +1584,11 @@ void StackMaps::emitCangjieCompressedData(MCStreamer &OS,
   bool IsWindows = TT.isOSWindows();
   DataEncoder Writer(
       OS, Data,
-      (IsWindows && isX86_64())
-          ? X86WinPrologueBit2Reg
-          : (isX86_64() ? X86PrologueBit2Reg : AArch64PrologueBit2Reg),
-      isX86_64() ? X86Bit2Reg : AArch64Bit2Reg);
+      ((IsWindows && isX86_64()) ? X86WinPrologueBit2Reg
+          : isX86_64() ? X86PrologueBit2Reg 
+          : isAArch64() ? AArch64PrologueBit2Reg : ARMPrologueBit2Reg),
+      (isX86_64() ? X86Bit2Reg 
+          : isAArch64() ? AArch64Bit2Reg : ARMBit2Reg));
   Writer.emitPrologueAndStackMapItemHeader();
   // emit PC breaks the consistency of the emit buffer
   Writer.emitStackMapItem();
