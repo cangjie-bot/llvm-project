@@ -1373,6 +1373,9 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
   assert(!convertAddSubFlagsOpcode(MI->getOpcode()) &&
          "Pseudo flag setting opcode should be expanded early");
 
+  if (tryEmitCangjieSpecificCall(MI)) {
+    return;
+  }
   // Check for manual lowerings.
   unsigned Opc = MI->getOpcode();
   switch (Opc) {
