@@ -1342,6 +1342,36 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
   }
 }
 
+bool AsmPrinter::tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
+  if (!MI->isCall()) {
+    return false;
+  }
+
+  unsigned Opcode = MI->getOpcode();
+  // statepoint call will be processed by LowerSTATEPOINT
+  if (Opcode == TargetOpcode::STATEPOINT) {
+    return false;
+  }
+
+  if (MI->getNumOperands() == 0) {
+    return false;
+  }
+
+  const MachineOperand &MOSym = MI->getOperand(0);
+  if (!MOSym.isGlobal()) {
+    return false;
+  }
+  const auto *Callee = dyn_cast<const Function>(MOSym.getGlobal());
+  if (Callee == nullptr) {
+    return false;
+  }
+  StringRef FuncName = Callee->getName();
+  // Using for debug information only, no emit instructions.
+  if (FuncName.isSetDebugLocation()) {
+    return true;
+  }
+}
+
 // Simple pseudo-instructions have their lowering (with expansion to real
 // instructions) auto-generated.
 #include "ARMGenMCPseudoLowering.inc"
@@ -1373,6 +1403,9 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
   assert(!convertAddSubFlagsOpcode(MI->getOpcode()) &&
          "Pseudo flag setting opcode should be expanded early");
 
+  if (tryEmitCangjieSpecificCallForArm(MI)) {
+    return;
+  }
   // Check for manual lowerings.
   unsigned Opc = MI->getOpcode();
   switch (Opc) {
