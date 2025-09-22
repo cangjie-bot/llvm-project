@@ -2067,6 +2067,7 @@ ARMTargetLowering::getEffectiveCallingConv(CallingConv::ID CC,
   case CallingConv::ARM_APCS:
   case CallingConv::GHC:
   case CallingConv::CFGuard_Check:
+  case CallingConv::CangjieGC:
     return CC;
   case CallingConv::PreserveMost:
     return CallingConv::PreserveMost;
@@ -2074,7 +2075,6 @@ ARMTargetLowering::getEffectiveCallingConv(CallingConv::ID CC,
   case CallingConv::Swift:
   case CallingConv::SwiftTail:
     return isVarArg ? CallingConv::ARM_AAPCS : CallingConv::ARM_AAPCS_VFP;
-  case CallingConv::CangjieGC:
   case CallingConv::C:
   case CallingConv::Tail:
     if (!Subtarget->isAAPCS_ABI())
