@@ -1578,7 +1578,9 @@ makeStatepointExplicitImpl(CallBase *Call, /* to replace */
         FieldArgs, "token");
 
     SPCall->setTailCallKind(CI->getTailCallKind());
-    SPCall->setCallingConv(CI->getCallingConv());
+    const Triple TT(Call->getModule()->getTargetTriple());
+    if (!TT.isARM())
+      SPCall->setCallingConv(CI->getCallingConv());
 
     // set up function attrs directly on statepoint and return attrs later for
     // gc_result intrinsic.
