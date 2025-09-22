@@ -1342,7 +1342,7 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
   }
 }
 
-bool AsmPrinter::tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
+bool tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
   if (!MI->isCall()) {
     return false;
   }
@@ -1370,6 +1370,7 @@ bool AsmPrinter::tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
   if (FuncName.isSetDebugLocation()) {
     return true;
   }
+  return false;
 }
 
 // Simple pseudo-instructions have their lowering (with expansion to real
