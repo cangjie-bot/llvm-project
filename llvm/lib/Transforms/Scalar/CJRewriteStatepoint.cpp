@@ -1579,7 +1579,7 @@ makeStatepointExplicitImpl(CallBase *Call, /* to replace */
 
     SPCall->setTailCallKind(CI->getTailCallKind());
     const Triple TT(Call->getModule()->getTargetTriple());
-    if (!TT.isARM())
+    if (!TT.isARM() || !Call->getCalledOperand()->getName().equals("CJ_MCC_HandleSafepoint"))
       SPCall->setCallingConv(CI->getCallingConv());
 
     // set up function attrs directly on statepoint and return attrs later for
