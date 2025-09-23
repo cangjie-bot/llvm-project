@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/CJStructTypeGCInfo.h"
+#include "llvm/ADT/Triple.h"
 
 using namespace llvm;
 
@@ -202,7 +203,7 @@ Constant *CommonBitmap::getOrInsertBitMap(const std::string &BMStr,
   }
 
   Constant *BMConst = nullptr;
-  if (BMStr.length() < 64) {
+  if (BMStr.length() < 64 && !Triple(M.getTargetTriple()).isARM()) {
     BMConst = insertBitMapU64(BMStr, CommonBMType);
   } else {
     BMConst = insertBitMapGV(KeyStr, CommonBMType, BitMapName);
