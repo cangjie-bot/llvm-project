@@ -39,12 +39,6 @@ using namespace cangjie;
 
 #define DEBUG_TYPE "cj-barrier-lowering"
 
-static cl::opt<bool> EnableTaggedPointer("enable-tagged-pointer",
-                                         cl::init(true), cl::Hidden);
-static cl::opt<bool> EnableGCPhase("enable-gc-phase", cl::init(true),
-                                   cl::Hidden);
-static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
-                                      cl::Hidden);
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
 
@@ -52,6 +46,12 @@ namespace llvm {
 extern cl::opt<bool> CangjieJIT;
 extern cl::opt<bool> DisableGCSupport;
 extern cl::opt<bool> EnableSafepointOnly;
+cl::opt<bool> EnableTaggedPointer("enable-tagged-pointer",
+                                         cl::init(true), cl::Hidden);
+cl::opt<bool> EnableGCPhase("enable-gc-phase", cl::init(true),
+                                   cl::Hidden);
+cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
+                                      cl::Hidden);
 } // namespace llvm
 
 namespace {
@@ -1128,8 +1128,8 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
         News.insert(cast<GCStatepointInst>(&I));
     }
   }
-
-  if (!News.empty()) {
+  const Triple TT(F.getParent()->getTargetTriple());
+  if (!News.empty() && !TT.isARM()) {
     Changed = doNewFastPath(F, News);
   }
 
@@ -1137,7 +1137,7 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     return Changed;
   }
 
-  if (OptLevel != CodeGenOpt::None) {
+  if (OptLevel != CodeGenOpt::None && !TT.isARM()) {
     writeBarrierFastPath(F, Barriers);
     readBarrierFastPath(F, Barriers);
   }
