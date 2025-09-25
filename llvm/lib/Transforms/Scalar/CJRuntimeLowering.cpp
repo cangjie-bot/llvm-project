@@ -751,9 +751,12 @@ private:
     Instruction *InsertPos = &*EntryBB.getFirstInsertionPt();
     IRBuilder<> IRB(InsertPos);
     auto *TIType = StructType::getTypeByName(C, "TypeInfo");
+    const Triple TT(CI->getModule()->getTargetTriple());
     if (isPrimitiveTypeInfo(GV)) {
       SmallVector<Type *> ElemTypes;
       ElemTypes.push_back(TIType->getPointerTo());
+      if (TT.isARM())
+        ElemTypes.push_back(IRB.getInt32Ty());
       ElemTypes.push_back(IRB.getInt64Ty());
       AI = IRB.CreateAlloca(StructType::get(C, ElemTypes));
       Value *BC = IRB.CreateBitCast(AI, IRB.getInt8PtrTy()->getPointerTo());
@@ -764,6 +767,8 @@ private:
       assert(ST && "alloca.generic layout info missing!");
       SmallVector<Type *> ElemTypes;
       ElemTypes.push_back(TIType->getPointerTo());
+      if (TT.isARM())
+        ElemTypes.push_back(IRB.getInt32Ty());
       ElemTypes.push_back(ST);
       AI = IRB.CreateAlloca(StructType::get(C, ElemTypes));
       Value *BC = IRB.CreateBitCast(AI, IRB.getInt8PtrTy()->getPointerTo());
