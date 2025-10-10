@@ -17,6 +17,7 @@
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Module.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -101,7 +102,13 @@ void CCState::AddAlignedCallFrameSizeMetaDataForCJFFI(
     Func->eraseMetadata(Ctx.getMDKindID(MetaName));
   }
   // MCC_XXXStub require CallFrameSize to be 16 bytes align
-  CallFrameSize = alignTo(CallFrameSize, 16);
+  const Triple TT(Func->getParent()->getTargetTriple());
+  if (TT.isARM()){
+    CallFrameSize = alignTo(CallFrameSize, 8);
+  } else {
+    CallFrameSize = alignTo(CallFrameSize, 16);
+  }
+    
   MDNode *CallFrameSizeMD =
       MDTuple::get(Ctx, ValueAsMetadata::getConstant(ConstantInt::get(
                             Type::getInt64Ty(Ctx), CallFrameSize)));
