@@ -58,6 +58,9 @@ static cl::opt<bool> EnableCompressedBitMap(
     "enable-compressed-bitmap", cl::init(true), cl::Hidden,
     cl::desc("Enable Compressed BitMap"));
 namespace llvm {
+// struct begin address align
+int32_t OffsetStepSize = 8; 
+
 extern cl::opt<bool> CJPipeline;
 extern cl::opt<bool> EnableStackGrow;
 } // namespace llvm
@@ -68,7 +71,7 @@ enum CJStackMapFormat : uint64_t {
   CJ_STACKMAP_COMPRESSED_BITMAP = 1
 };
 const int32_t RawDataWidth = 31; // for compressed stack map
-const int32_t OffsetStepSize = 8;
+
 // unordered_map<regNo, bitIdx>, regNo can be used to find callee saved reg
 // while bitIdx is used in prologue
 const std::unordered_map<uint32_t, uint32_t> X86CalleeSavedReg = {
@@ -530,7 +533,7 @@ StackMaps::parseStackPtrOperand(MachineInstr::const_mop_iterator MOI,
     int64_t Size = (++MOI)->getImm();
     Register Reg = (++MOI)->getReg();
     int64_t Imm = (++MOI)->getImm();
-    assert((Imm % OffsetStepSize == 0) && "Stack Offset should be 8 aligned!");
+    assert((Imm % OffsetStepSize == 0) && "Stack Offset align error!");
     Locations.emplace_back(StackMaps::Location::Indirect, Size,
                            getDwarfRegNum(Reg, TRI), Imm);
   } else if (MOI->getImm() == StackMaps::DirectMemRefOp) {
@@ -538,7 +541,7 @@ StackMaps::parseStackPtrOperand(MachineInstr::const_mop_iterator MOI,
     int64_t Imm = (++MOI)->getImm();
     int64_t FI = (++MOI)->getImm();
     (void)FI;
-    assert((Imm % OffsetStepSize == 0) && "Stack Offset should be 8 aligned!");
+    assert((Imm % OffsetStepSize == 0) && "Stack Offset align error!");
     Locations.emplace_back(StackMaps::Location::Indirect, 8,
                            getDwarfRegNum(Reg, TRI), Imm); // 8: pointer size
   } else {
@@ -1324,7 +1327,7 @@ void calculateStackSlots(MaxWidthOfRefInfo &WidthInfo,
   auto OriDataVec = std::vector<uint32_t>(OriDataVecSize, 0);
 
   for (const auto &Offset : BOffsets) {
-    if (!SM.isARM() && Offset % OffsetStepSize != 0) {
+    if (Offset % OffsetStepSize != 0) {
       report_fatal_error("Offset should be 8 aligned!");
     }
     uint32_t BitIdx = (MaxOffset - Offset) / OffsetStepSize;

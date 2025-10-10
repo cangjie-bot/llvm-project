@@ -135,6 +135,18 @@ private:
   bool emitPseudoExpansionLowering(MCStreamer &OutStreamer,
                                    const MachineInstr *MI);
 
+  bool tryEmitCangjieSpecificCallForArm(const MachineInstr *MI); 
+  bool tryEmitCangjieSpecificCallByMOSymForArm(
+                                                const MachineInstr *MI,
+                                                const MachineOperand &MOSym,
+                                                unsigned Opcode);
+  void emitCangjieCallStubInstImpl(const MachineInstr *MI,
+                                               const Function *F,
+                                               const MachineOperand &MOSym,
+                                               unsigned Opcode) override;
+
+  MCOperand setGAAndLower(const MachineOperand &MOSym, 
+                          const GlobalValue *GV) ;
 public:
   unsigned getISAEncoding() override {
     // ARM/Darwin adds ISA to the DWARF info for each function.
