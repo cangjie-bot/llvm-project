@@ -66,7 +66,6 @@ extern cl::opt<bool> CJPipeline;
 extern cl::opt<bool> DisableGCSupport;
 extern cl::opt<bool> EnableBarrierOnly;
 extern cl::opt<bool> EnableSafepointOnly;
-extern cl::opt<bool> DisableCJRewrite;
 extern cl::opt<bool> EnableCJBarrierSplit;
 extern cl::opt<bool> EnableTaggedPointer;
 extern cl::opt<bool> EnableGCPhase;
@@ -399,9 +398,6 @@ static TargetMachine* GetTargetMachine(Triple TheTriple, StringRef CPUStr,
 
   if (CJPipeline && TheTriple.isARM()) {
     EnableCJBarrierSplit = false;
-    EnableTaggedPointer = false;
-    EnableGCPhase = false;
-    EnableGCFastPath = false;
   }
 
   return TheTarget->createTargetMachine(

@@ -2406,6 +2406,7 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   // Get a count of how many bytes are to be pushed on the stack.
   unsigned NumBytes = CCInfo.getNextStackOffset();
+  unsigned CallFrameSizeForCJFFI = NumBytes;
 
   // SPDiff is the byte offset of the call's argument area from the callee's.
   // Stores to callee stack arguments will be placed in FixedStackSlots offset
@@ -2422,6 +2423,7 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     // popped size 16-byte aligned.
     Align StackAlign = DAG.getDataLayout().getStackAlignment();
     NumBytes = alignTo(NumBytes, StackAlign);
+    CallFrameSizeForCJFFI = NumBytes;
 
     // SPDiff will be negative if this tail call requires more space than we
     // would automatically have in our incoming argument space. Positive if we
@@ -2632,8 +2634,12 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   const TargetMachine &TM = getTargetMachine();
   const Module *Mod = MF.getFunction().getParent();
   const GlobalValue *GV = nullptr;
-  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee))
+  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)){
+    auto *CalleeFunc = dyn_cast<Function>(G->getGlobal());
+    CCInfo.AddAlignedCallFrameSizeMetaDataForCJFFI(
+        const_cast<Function *>(CalleeFunc), CallFrameSizeForCJFFI);
     GV = G->getGlobal();
+  }
   bool isStub =
       !TM.shouldAssumeDSOLocal(*Mod, GV) && Subtarget->isTargetMachO();
 
