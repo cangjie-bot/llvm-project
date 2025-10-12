@@ -147,6 +147,7 @@ private:
   CompressedInfo::ItemIdxHelper<std::string> SplitedMangledStr;
   MCSymbol *StrPoolDictOffsetsSym;
   uint64_t StrPoolIdx;
+  uint32_t FuncPtrSize;
 };
 } // namespace llvm
 #endif // LLVM_CODEGEN_CJMETADATA_H

@@ -1665,6 +1665,7 @@ void AsmPrinter::emitFunctionBody() {
       }
     }
     emitBasicBlockEnd(MBB);
+    emitCangjieCustomInst();
 
     if (CanDoExtraAnalysis) {
       // Skip empty blocks.
