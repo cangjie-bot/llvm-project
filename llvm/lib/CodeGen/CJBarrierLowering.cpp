@@ -221,36 +221,27 @@ private:
     auto isARM = TT.isARM();
     switch (II->getIntrinsicID()) {
     case Intrinsic::cj_gcwrite_struct: {
-      if (isARM) {
-        Type *ParamType[5] = {GCPtr, GCPtr, I32, GCPtr, I32};
-        FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
-      } else {
-        Type *ParamType[5] = {GCPtr, GCPtr, I64, GCPtr, I64};
-        FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
-      }
+      Type *ParamType[5] = {GCPtr, GCPtr, I64, GCPtr, I64};
+      if (isARM)
+        ParamType[2] = ParamType[4] = I32;
+      FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
       break;
     }
     case Intrinsic::cj_gcread_static_struct:
     case Intrinsic::cj_gcwrite_static_struct: {
-      if (isARM) {
-        Type *ParamType[5] = {I8Ptr, I32, I8Ptr, I32, I8Ptr};
-        FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
-      } else {
-        Type *ParamType[5] = {I8Ptr, I64, I8Ptr, I64, I8Ptr};
-        FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
-      }
+      Type *ParamType[5] = {I8Ptr, I64, I8Ptr, I64, I8Ptr};
+      if (isARM)
+        ParamType[1] = ParamType[3] = I32;
+      FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
       break;
     }
     case Intrinsic::cj_array_copy_ref:
     case Intrinsic::cj_array_copy_struct:
     case Intrinsic::cj_array_copy_generic: {
-      if (isARM) {
-        Type *ParamType[6] = {GCPtr, GCPtr, I32, GCPtr, GCPtr, I32};
-        FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
-      } else {
-        Type *ParamType[6] = {GCPtr, GCPtr, I64, GCPtr, GCPtr, I64};
-        FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
-      }
+      Type *ParamType[6] = {GCPtr, GCPtr, I64, GCPtr, GCPtr, I64};
+      if (isARM)
+        ParamType[2] = ParamType[5] = I32;
+      FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
       break;
     }
     default:
@@ -1116,6 +1107,13 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
   if (!F.hasCangjieGC())
     return false;
 
+  const Triple TT(F.getParent()->getTargetTriple());
+  if (!TT.isARM()){
+    EnableTaggedPointer = false;
+    EnableGCPhase = false;
+    EnableGCFastPath = false;
+  }
+
   bool Changed = false;
   SetVector<CallInst *> Barriers;
   SetVector<GCStatepointInst *> News;
@@ -1128,8 +1126,8 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
         News.insert(cast<GCStatepointInst>(&I));
     }
   }
-  const Triple TT(F.getParent()->getTargetTriple());
-  if (!News.empty() && !TT.isARM()) {
+
+  if (!News.empty()) {
     Changed = doNewFastPath(F, News);
   }
 
@@ -1137,7 +1135,7 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     return Changed;
   }
 
-  if (OptLevel != CodeGenOpt::None && !TT.isARM()) {
+  if (OptLevel != CodeGenOpt::None) {
     writeBarrierFastPath(F, Barriers);
     readBarrierFastPath(F, Barriers);
   }

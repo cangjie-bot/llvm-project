@@ -106,6 +106,7 @@ void CJMetadataInfo::init() {
   SplitedMangledStr.Items.clear();
   StrPoolDictOffsetsSym = Context.getOrCreateSymbol(".Lstr_pool_dict_offsets");
   StrPoolIdx = 0;
+  FuncPtrSize = SM.isARM() ? 4 : 8; // method pc size, arm: 4 byte, other: 8 byte
 }
 
 void CJMetadataInfo::recordKlass(const GlobalVariable *GV) {
@@ -594,12 +595,8 @@ void CJMetadataInfo::emitGCRoots() {
     // 8: align size, 8 bytes
     OS.emitValueToAlignment(8);
 
-  uint32_t PtrSize = 8;
-  const Triple TT(M->getTargetTriple());
-  if (TT.isARM())
-    PtrSize = 4;
   for (const auto GCRoot : GCRootTable) {
-    OS.emitValue(GCRoot, PtrSize);
+    OS.emitValue(GCRoot, FuncPtrSize);
   }
 }
 
@@ -736,11 +733,7 @@ void CJMetadataInfo::emitGlobalInitFuncTable() {
     if (FuncName != GlobalInitFuncName)
       return;
 
-    uint32_t PtrSize = 8; // 8: method pc size, 8 bytes
-    const Triple TT(M->getTargetTriple());
-    if (TT.isARM())
-      PtrSize = 4;
-    OS.emitSymbolValue(FuncBegin, PtrSize);
+    OS.emitSymbolValue(FuncBegin, FuncPtrSize);
     if (IsMachO) {
       FuncName.push_back('\0');
       OS.emitBytes(FuncName);
@@ -764,8 +757,7 @@ void CJMetadataInfo::emitSDKVersion() {
   if (TT.isOSBinFormatMachO())
     // 8: align size, 8 bytes
     OS.emitValueToAlignment(8);
-  // 8: sdk version size, 8 bytes.
-  OS.emitValue(getGVRefSymbol(Version), 8);
+  OS.emitValue(getGVRefSymbol(Version), FuncPtrSize);
 }
 
 void CJMetadataInfo::emitStackMaps() {
