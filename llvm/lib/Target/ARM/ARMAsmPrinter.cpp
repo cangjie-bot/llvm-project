@@ -54,6 +54,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
 
+namespace llvm {
+extern int32_t OffsetStepSize;
+}
+
 ARMAsmPrinter::ARMAsmPrinter(TargetMachine &TM,
                              std::unique_ptr<MCStreamer> Streamer)
     : AsmPrinter(TM, std::move(Streamer)), Subtarget(nullptr), AFI(nullptr),
@@ -1342,7 +1346,137 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
   }
 }
 
-bool tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
+MCOperand ARMAsmPrinter::setGAAndLower(const MachineOperand &MOSym, 
+                          const GlobalValue *GV) {
+    MachineOperand MOAddr(MOSym);
+    MCOperand SymAddr;
+    MOAddr.ChangeToGA(GV, 0);
+    lowerOperand(MOAddr, SymAddr);
+    return SymAddr;
+  }
+
+  //   ldr	R12, .Ltmp1
+  // .Ltmp0:
+  // 	add	R12, pc, R12
+  // 	ldr	R12, [R12]
+  // 	sub	sp, [sp, #8]
+  // 	str	R12, [sp] // func address
+  // 	mov	r12, #0
+  // 	str	R12, [sp, #4] // CallFrameSize
+  // 	bl	CJ_MCC_N2CStub
+  // .Ltmp1:
+  //   .long	.Ltmp1-(.calleefunc+8)
+void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
+                                               const Function *F,
+                                               const MachineOperand &MOSym,
+                                               unsigned Opcode) {
+  auto *AddrGV = F->getParent()->getGlobalVariable(
+      MOSym.getGlobal()->getName().str() + ".CJStubGV" , true);
+
+  MCOperand SymNewAddr = setGAAndLower(MOSym, F);
+  MCSymbol *GVSymbol = GetARMGVSymbol(AddrGV, MOSym.getTargetFlags());
+
+  auto &Ctx = OutStreamer->getContext();
+  MCSymbol *Label0 = Ctx.createTempSymbol();
+  MCSymbol *Label1 = Ctx.createTempSymbol();
+  C2NStubMap.push_back(std::make_tuple(GVSymbol, Label0, Label1));
+
+  // ldr R12, .LPCIxxx
+  MCInst LdrInst0;
+  LdrInst0.setOpcode(ARM::LDRi12);
+  LdrInst0.addOperand(MCOperand::createReg(ARM::R12));
+  const MCExpr *DotExpr = MCSymbolRefExpr::create(Label1, OutContext);
+  LdrInst0.addOperand(MCOperand::createExpr(DotExpr));
+  LdrInst0.addOperand(MCOperand::createImm(0));
+  LdrInst0.addOperand(MCOperand::createImm(ARMCC::AL));
+  LdrInst0.addOperand(MCOperand::createReg(0));
+  EmitToStreamer(*OutStreamer, LdrInst0);
+
+  // .Label0:
+  OutStreamer->emitLabel(Label0);
+
+  // add R12, pc, R12
+  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::ADDrr)
+      .addReg(ARM::R12)
+      .addReg(ARM::PC)
+      .addReg(ARM::R12)
+      .addImm(ARMCC::AL)
+      .addReg(0)
+      .addReg(0));
+
+  // ldr R12, [R12]
+  MCInst Ldr;
+  Ldr.setOpcode(ARM::LDRi12);
+  Ldr.addOperand(MCOperand::createReg(ARM::R12));
+  Ldr.addOperand(MCOperand::createReg(ARM::R12));
+  Ldr.addOperand(MCOperand::createImm(0));
+  Ldr.addOperand(MCOperand::createImm(ARMCC::AL));
+  Ldr.addOperand(MCOperand::createReg(0));
+  EmitToStreamer(*OutStreamer, Ldr);
+
+  // sub	sp, [sp, #8]
+  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::SUBri)
+      .addReg(ARM::SP)
+      .addReg(ARM::SP)
+      .addImm(8)
+      .addImm(ARMCC::AL)
+      .addReg(0)
+      .addReg(0));
+
+  // str R12, [sp]
+  MCInst StrInst1;
+  StrInst1.setOpcode(ARM::STRi12);
+  StrInst1.addOperand(MCOperand::createReg(ARM::R12));
+  StrInst1.addOperand(MCOperand::createReg(ARM::SP));
+  StrInst1.addOperand(MCOperand::createImm(0));
+  StrInst1.addOperand(MCOperand::createImm(ARMCC::AL));
+  StrInst1.addOperand(MCOperand::createReg(0));
+  EmitToStreamer(*OutStreamer, StrInst1);
+
+  // push called-addr and CallFrameSize to stack. This operation extends
+  // the sp of the caller by 16 bytes and will be fixed in MCC_XXXStub
+  const auto *OriCalled = dyn_cast<Function>(MOSym.getGlobal());
+  MDNode *Metadata = OriCalled->getMetadata("CallFrameSizeForCJFFI");
+  assert(Metadata != nullptr &&
+        "FFI Func must have CallFrameSizeForCJFFI meta!");
+  unsigned CallFrameSize =
+      dyn_cast<ConstantInt>(
+          dyn_cast<ConstantAsMetadata>(Metadata->getOperand(0).get())
+              ->getValue())
+          ->getSExtValue();
+
+  // mov r12 , #CallFrameSize
+  MCInst Mov;
+  Mov.setOpcode(ARM::MOVi);
+  Mov.addOperand(MCOperand::createReg(ARM::R12));
+  Mov.addOperand(MCOperand::createImm(CallFrameSize));
+  Mov.addOperand(MCOperand::createImm(ARMCC::AL));
+  Mov.addOperand(MCOperand::createReg(0));
+  Mov.addOperand(MCOperand::createReg(0));
+  EmitToStreamer(*OutStreamer, Mov);
+
+  // str R12, [sp, #4]
+  MCInst StrInst2;
+  StrInst2.setOpcode(ARM::STRi12);
+  StrInst2.addOperand(MCOperand::createReg(ARM::R12));
+  StrInst2.addOperand(MCOperand::createReg(ARM::SP));
+  StrInst2.addOperand(MCOperand::createImm(4));
+  StrInst2.addOperand(MCOperand::createImm(ARMCC::AL));
+  StrInst2.addOperand(MCOperand::createReg(0));
+  EmitToStreamer(*OutStreamer, StrInst2);
+
+  // bl CJ_MCC_N2CStub
+  MCInst TemInst;
+  TemInst.setOpcode(ARM::BL);
+  TemInst.addOperand(SymNewAddr);
+  EmitToStreamer(*OutStreamer, TemInst);
+
+  SM.recordCJStackMap(*MI);
+
+  return;
+}
+
+bool ARMAsmPrinter::tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
   if (!MI->isCall()) {
     return false;
   }
@@ -1358,7 +1492,14 @@ bool tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
   }
 
   const MachineOperand &MOSym = MI->getOperand(0);
-  if (!MOSym.isGlobal()) {
+  return tryEmitCangjieSpecificCallByMOSymForArm(MI, MOSym, Opcode);
+}
+
+bool ARMAsmPrinter::tryEmitCangjieSpecificCallByMOSymForArm(
+                                                const MachineInstr *MI,
+                                                const MachineOperand &MOSym,
+                                                unsigned Opcode) {
+    if (!MOSym.isGlobal()) {
     return false;
   }
   const auto *Callee = dyn_cast<const Function>(MOSym.getGlobal());
@@ -1366,8 +1507,13 @@ bool tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
     return false;
   }
   StringRef FuncName = Callee->getName();
-  // Using for debug information only, no emit instructions.
   if (FuncName.isSetDebugLocation()) {
+    return true;
+  }
+
+  const Function *NativeFunc = tryGetCangjieStubCallNativeFunc(MI, Callee);
+  if (NativeFunc != nullptr) {
+    emitCangjieCallStubInstImpl(MI, NativeFunc, MOSym, Opcode);
     return true;
   }
   return false;
@@ -2376,6 +2522,9 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
     case MachineOperand::MO_GlobalAddress:
     case MachineOperand::MO_ExternalSymbol:
       CallOpcode = ARM::BL;
+      if (tryEmitCangjieSpecificCallByMOSymForArm(MI, CallTarget, CallOpcode)) {
+        return;
+      }
       lowerOperand(CallTarget, CallTargetMCOp);
       break;
     case MachineOperand::MO_Immediate:
@@ -2387,6 +2536,7 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
       CallOpcode = ARM::BLX;
       break;
     }
+    SM.recordCJStackMap(*MI);
     EmitToStreamer(*OutStreamer, MCInstBuilder(CallOpcode).addOperand(CallTargetMCOp));
     return;
   }
