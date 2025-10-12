@@ -809,6 +809,18 @@ unsigned ARMBaseInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   }
   case TargetOpcode::STATEPOINT:
     auto NumBytes = StatepointOpers(&MI).getNumPatchBytes();
+    const MachineOperand &MO = MI.getOperand(3);
+
+    if (MO.isGlobal()){
+      const auto *Callee = dyn_cast<const Function>(MO.getGlobal());
+      if (Callee != nullptr) {
+        const auto &CallerFunc = MI.getParent()->getParent()->getFunction();
+        if (Callee->isCangjieNativeStub(CallerFunc)) {
+          // 10:intrinsics num,4 bytes per intrinsic
+          NumBytes= 10 * 4;
+        }
+      }
+    }
     assert(NumBytes % 4 == 0 && "Invalid number of NOP bytes requested!");
     // No patch bytes means a normal call inst is emitted
     if (NumBytes == 0)
