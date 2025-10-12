@@ -158,7 +158,7 @@ public:
   /// this property
   const uint32_t *getThisReturnPreservedMask(const MachineFunction &MF,
                                              CallingConv::ID) const;
-  MCPhysReg getR0Register() const override;
+
   ArrayRef<MCPhysReg>
   getIntraCallClobberedRegs(const MachineFunction *MF) const override;
 
