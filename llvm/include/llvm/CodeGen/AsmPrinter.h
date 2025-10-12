@@ -197,6 +197,7 @@ protected:
 
   std::map<const MachineInstr *, std::pair<MCSymbol *, MCSymbol *>> StackCheckMap;
   SmallVector<std::tuple<const MachineInstr *, MCSymbol *, MCSymbol *>> SafepointStackMap;
+  SmallVector<std::tuple<MCSymbol *, MCSymbol *, MCSymbol *>> C2NStubMap;
   /// A vector of all debug/EH info emitters we should use. This vector
   /// maintains ownership of the emitters.
   std::vector<HandlerInfo> Handlers;
