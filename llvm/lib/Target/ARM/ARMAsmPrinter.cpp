@@ -64,7 +64,6 @@ ARMAsmPrinter::ARMAsmPrinter(TargetMachine &TM,
       MCP(nullptr), InConstantPool(false), OptimizationGoals(-1), SM(*this),
       CMI(*this, SM) {
   SM.setARM();
-  OffsetStepSize = 4;
 }
 
 void ARMAsmPrinter::emitFunctionBodyEnd() {

@@ -1236,6 +1236,7 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
   unsigned CSIdxEnd = 0;
   const Triple TT(AP.MMI->getModule()->getTargetTriple());
   bool IsWindows = TT.isOSWindows();
+  OffsetStepSize = TT.isARM() ? 4 : 8;
   for (auto const &FR : FnInfos) {
     MCSymbol *StackmapFunction =
         OutContext.getOrCreateSymbol(".Lstack_map." + FR.first->getName());
