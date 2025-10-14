@@ -105,7 +105,6 @@
 #include "llvm/Remarks/RemarkStreamer.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
@@ -1666,6 +1665,7 @@ void AsmPrinter::emitFunctionBody() {
       }
     }
     emitBasicBlockEnd(MBB);
+    emitCangjieCustomInst();
 
     if (CanDoExtraAnalysis) {
       // Skip empty blocks.
@@ -1729,21 +1729,6 @@ void AsmPrinter::emitFunctionBody() {
     SafepointStackMap.clear();
   }
 
-  if (!C2NStubMap.empty()) {
-    // emit C2NStub
-    for (unsigned C2NStubIndex = 0; C2NStubIndex < C2NStubMap.size(); C2NStubIndex++) {
-    auto funcsymbal = std::get<0>(C2NStubMap[C2NStubIndex]);
-    auto symbal0 = std::get<1>(C2NStubMap[C2NStubIndex]);
-    auto symbal1 = std::get<2>(C2NStubMap[C2NStubIndex]);
-    OutStreamer->emitLabel(symbal1);
-
-    auto Expr2 = MCBinaryExpr::createAdd(MCSymbolRefExpr::create(symbal0,OutContext), MCConstantExpr::create(8, OutContext), OutContext);
-    auto Offset = MCBinaryExpr::createSub(MCSymbolRefExpr::create(funcsymbal,OutContext), Expr2 , OutContext);
-    OutStreamer->emitValue(Offset, 4);
-    }
-    C2NStubMap.clear();
-  }
-  
   EmittedInsts += NumInstsInFunction;
   MachineOptimizationRemarkAnalysis R(DEBUG_TYPE, "InstructionCount",
                                       MF->getFunction().getSubprogram(),

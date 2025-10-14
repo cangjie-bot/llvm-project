@@ -135,16 +135,15 @@ private:
   bool emitPseudoExpansionLowering(MCStreamer &OutStreamer,
                                    const MachineInstr *MI);
 
-  bool tryEmitCangjieSpecificCallForArm(const MachineInstr *MI); 
-  bool tryEmitCangjieSpecificCallByMOSymForArm(
-                                                const MachineInstr *MI,
-                                                const MachineOperand &MOSym,
-                                                unsigned Opcode);
+  bool tryEmitCangjieSpecificCall(const MachineInstr *MI) override;
+  bool tryEmitCangjieSpecificCallByMOSym(const MachineInstr *MI,
+                                         const MachineOperand &MOSym,
+                                         unsigned Opcode) override;
   void emitCangjieCallStubInstImpl(const MachineInstr *MI,
                                                const Function *F,
                                                const MachineOperand &MOSym,
                                                unsigned Opcode) override;
-
+  virtual void emitCangjieCustomInst() override;
   MCOperand setGAAndLower(const MachineOperand &MOSym, 
                           const GlobalValue *GV) ;
 public:
