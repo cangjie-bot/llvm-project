@@ -1376,25 +1376,19 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
   MCOperand SymNewAddr = setGAAndLower(MOSym, F);
   MCSymbol *GVSymbol = GetARMGVSymbol(AddrGV, MOSym.getTargetFlags());
 
-  auto &Ctx = OutStreamer->getContext();
-  MCSymbol *Label0 = Ctx.createTempSymbol();
-  MCSymbol *Label1 = Ctx.createTempSymbol();
+  MCSymbol *Label0 = OutContext.createTempSymbol();
+  MCSymbol *Label1 = OutContext.createTempSymbol();
   C2NStubMap.push_back(std::make_tuple(GVSymbol, Label0, Label1));
 
   // ldr R12, .LPCIxxx
-  MCInst LdrInst0;
-  LdrInst0.setOpcode(ARM::LDRi12);
-  LdrInst0.addOperand(MCOperand::createReg(ARM::R12));
-  const MCExpr *DotExpr = MCSymbolRefExpr::create(Label1, OutContext);
-  LdrInst0.addOperand(MCOperand::createExpr(DotExpr));
-  LdrInst0.addOperand(MCOperand::createImm(0));
-  LdrInst0.addOperand(MCOperand::createImm(ARMCC::AL));
-  LdrInst0.addOperand(MCOperand::createReg(0));
-  EmitToStreamer(*OutStreamer, LdrInst0);
-
+  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::LDRi12)
+      .addReg(ARM::R12)
+      .addExpr(MCSymbolRefExpr::create(Label1, OutContext))
+      .addImm(0)
+      .addImm(ARMCC::AL)
+      .addReg(0));
   // .Label0:
   OutStreamer->emitLabel(Label0);
-
   // add R12, pc, R12
   EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::ADDrr)
       .addReg(ARM::R12)
@@ -1403,17 +1397,13 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
       .addImm(ARMCC::AL)
       .addReg(0)
       .addReg(0));
-
   // ldr R12, [R12]
-  MCInst Ldr;
-  Ldr.setOpcode(ARM::LDRi12);
-  Ldr.addOperand(MCOperand::createReg(ARM::R12));
-  Ldr.addOperand(MCOperand::createReg(ARM::R12));
-  Ldr.addOperand(MCOperand::createImm(0));
-  Ldr.addOperand(MCOperand::createImm(ARMCC::AL));
-  Ldr.addOperand(MCOperand::createReg(0));
-  EmitToStreamer(*OutStreamer, Ldr);
-
+  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::LDRi12)
+    .addReg(ARM::R12)
+    .addReg(ARM::R12)
+    .addImm(0)
+    .addImm(ARMCC::AL)
+    .addReg(0));
   // sub	sp, [sp, #8]
   EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::SUBri)
       .addReg(ARM::SP)
@@ -1422,16 +1412,13 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
       .addImm(ARMCC::AL)
       .addReg(0)
       .addReg(0));
-
   // str R12, [sp]
-  MCInst StrInst1;
-  StrInst1.setOpcode(ARM::STRi12);
-  StrInst1.addOperand(MCOperand::createReg(ARM::R12));
-  StrInst1.addOperand(MCOperand::createReg(ARM::SP));
-  StrInst1.addOperand(MCOperand::createImm(0));
-  StrInst1.addOperand(MCOperand::createImm(ARMCC::AL));
-  StrInst1.addOperand(MCOperand::createReg(0));
-  EmitToStreamer(*OutStreamer, StrInst1);
+  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::STRi12)
+  .addReg(ARM::R12)
+  .addReg(ARM::SP)
+  .addImm(0)
+  .addImm(ARMCC::AL)
+  .addReg(0));
 
   // push called-addr and CallFrameSize to stack. This operation extends
   // the sp of the caller by 16 bytes and will be fixed in MCC_XXXStub

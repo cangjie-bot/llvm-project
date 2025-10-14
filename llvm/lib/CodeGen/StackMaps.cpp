@@ -58,7 +58,7 @@ static cl::opt<bool> EnableCompressedBitMap(
     "enable-compressed-bitmap", cl::init(true), cl::Hidden,
     cl::desc("Enable Compressed BitMap"));
 namespace llvm {
-// struct begin address align
+// struct start address alignment
 int32_t OffsetStepSize = 8; 
 
 extern cl::opt<bool> CJPipeline;
