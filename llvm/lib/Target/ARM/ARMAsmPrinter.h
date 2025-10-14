@@ -144,7 +144,7 @@ private:
                                                const Function *F,
                                                const MachineOperand &MOSym,
                                                unsigned Opcode) override;
-
+  virtual void emitCangjieCustomInst() override;
   MCOperand setGAAndLower(const MachineOperand &MOSym, 
                           const GlobalValue *GV) ;
 public:

@@ -1476,6 +1476,41 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
   return;
 }
 
+// C2NStub
+// C2NStub
+// b .Lable
+// .Ltmp81:
+//    .long xxx.CJStubGV-(.Ltmp80+8)
+// .Ltmp83:
+//    .long xxx.CJStubGV-(.Ltmp82+8)
+// .Lable：
+void ARMAsmPrinter::emitCangjieCustomInst() {
+  if (!C2NStubMap.empty()) {
+    MCSymbol *DotSym = OutContext.createTempSymbol();
+    const MCExpr *GVSymExpr = MCSymbolRefExpr::create(DotSym, OutContext);
+    EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::Bcc)
+      .addExpr(GVSymExpr)
+      // Add predicate operands.
+      .addImm(ARMCC::AL)
+      .addReg(0));
+    for (unsigned C2NStubIndex = 0; C2NStubIndex < C2NStubMap.size(); C2NStubIndex++) {
+      auto FuncSym = std::get<0>(C2NStubMap[C2NStubIndex]);
+      auto StartLabel = std::get<1>(C2NStubMap[C2NStubIndex]);
+      auto EndLabel = std::get<2>(C2NStubMap[C2NStubIndex]);
+      OutStreamer->emitLabel(EndLabel);
+      // .long xxx.CJStubGV-(.Ltmp82+8)
+      auto Expr2 = MCBinaryExpr::createAdd(
+          MCSymbolRefExpr::create(StartLabel, OutContext), 
+          MCConstantExpr::create(8, OutContext), OutContext);
+      auto Offset = MCBinaryExpr::createSub(
+        MCSymbolRefExpr::create(FuncSym, OutContext), Expr2 , OutContext);
+      OutStreamer->emitValue(Offset, 4);
+    }
+    OutStreamer->emitLabel(DotSym);
+    C2NStubMap.clear();
+  }
+}
+
 bool ARMAsmPrinter::tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
   if (!MI->isCall()) {
     return false;
