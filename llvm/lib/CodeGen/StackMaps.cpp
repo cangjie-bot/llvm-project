@@ -58,7 +58,7 @@ static cl::opt<bool> EnableCompressedBitMap(
     "enable-compressed-bitmap", cl::init(true), cl::Hidden,
     cl::desc("Enable Compressed BitMap"));
 namespace llvm {
-// struct begin address align
+// struct start address alignment
 int32_t OffsetStepSize = 8; 
 
 extern cl::opt<bool> CJPipeline;
@@ -1315,8 +1315,7 @@ struct MaxWidthOfRefInfo {
 void calculateStackSlots(MaxWidthOfRefInfo &WidthInfo,
                          CompressedInfo::SlotItem &StackSlot,
                          const SmallVector<int64_t, 8> &BOffsets,
-                         int64_t MaxOffset, int64_t MinOffset,
-                         const StackMaps &SM) {
+                         int64_t MaxOffset, int64_t MinOffset) {
   StackSlot.BaseOffset = MaxOffset;
   uint32_t MaxBitIdx = (MaxOffset - MinOffset) / OffsetStepSize;
   WidthInfo.SlotBitIdx = std::max(WidthInfo.SlotBitIdx, MaxBitIdx);
@@ -1391,7 +1390,7 @@ void calculateStackSlots(MaxWidthOfRefInfo &WidthInfo,
 template <typename T>
 std::pair<unsigned, unsigned>
 addItemInfo(CompressedInfo &Data, const StackMaps::CallsiteInfo &CSI,
-            MaxWidthOfRefInfo &WidthInfo, T &Input, const StackMaps &SM) {
+            MaxWidthOfRefInfo &WidthInfo, T &Input) {
   auto Itr = Input.cbegin();
   auto EndItr = Input.cend();
   int64_t MaxOffset = INT64_MIN;
@@ -1419,7 +1418,7 @@ addItemInfo(CompressedInfo &Data, const StackMaps::CallsiteInfo &CSI,
   WidthInfo.RegBit = std::max(WidthInfo.RegBit, RegInfo.RegBit);
   // 64: use uint64_t to store bit value.
   if (!BOffsets.empty()) {
-    calculateStackSlots(WidthInfo, StackSlot, BOffsets, MaxOffset, MinOffset, SM);
+    calculateStackSlots(WidthInfo, StackSlot, BOffsets, MaxOffset, MinOffset);
   }
   unsigned BaseOffsetBytes = getMinBytesForInt(StackSlot.BaseOffset);
   WidthInfo.BaseOffsetBytes = std::max(WidthInfo.BaseOffsetBytes,
@@ -1430,8 +1429,7 @@ addItemInfo(CompressedInfo &Data, const StackMaps::CallsiteInfo &CSI,
 }
 } // end anonymous namespace
 
-static void genStackMapInfo(const StackMaps &SM,
-                            CompressedInfo &Data,
+static void genStackMapInfo(CompressedInfo &Data,
                             const StackMaps::CallsiteInfo &CSI,
                             MaxWidthOfRefInfo &WidthInfo) {
   // <base, <derives>>. use map and set to keep order
@@ -1441,7 +1439,7 @@ static void genStackMapInfo(const StackMaps &SM,
   CompressedInfo::IdxItem &IdxInfo = Data.StackMapItem.back().second;
   // pass map<base, <derives>> to addItemInfo to process base ptrs
   std::pair<unsigned, unsigned> RefIdx =
-      addItemInfo(Data, CSI, WidthInfo, Base2Derived, SM);
+      addItemInfo(Data, CSI, WidthInfo, Base2Derived);
   IdxInfo.RegIdxPlusOne = RefIdx.first;
   IdxInfo.SlotIdxPlusOne = RefIdx.second;
 
@@ -1453,7 +1451,7 @@ static void genStackMapInfo(const StackMaps &SM,
   while (Itr != EndItr) {
     // pass each base's set<derives> to addItemInfo to process derived ptrs
     std::pair<unsigned, unsigned> DerivedRefIdx =
-        addItemInfo(Data, CSI, WidthInfo, Itr->second, SM);
+        addItemInfo(Data, CSI, WidthInfo, Itr->second);
     if (DerivedRefIdx.first != 0 || DerivedRefIdx.second != 0) {
       IsAllIdxsInvalid = false;
     }
@@ -1473,7 +1471,7 @@ static void genStackMapInfo(const StackMaps &SM,
     std::set<StackMaps::Location> SPLocs(CSI.StackLocations.begin(),
                                          CSI.StackLocations.end());
     std::pair<unsigned, unsigned> StackPtrIdx =
-        addItemInfo(Data, CSI, WidthInfo, SPLocs, SM);
+        addItemInfo(Data, CSI, WidthInfo, SPLocs);
     IdxInfo.SPRegIdxPlusOne = StackPtrIdx.first;
     IdxInfo.SPSlotIdxPlusOne = StackPtrIdx.second;
   }
@@ -1494,7 +1492,7 @@ void StackMaps::prepareCompressedData(CompressedInfo &Data,
     const auto &CSI = CSInfos[CSIdx++];
     Data.StackMapItem.insert(
         std::make_pair(CSI.CSOffsetExpr, CompressedInfo::IdxItem()));
-    genStackMapInfo(*this, Data, CSI, WidthInfo);
+    genStackMapInfo(Data, CSI, WidthInfo);
 
     CompressedInfo::LineNumberItem LineNumber{CSI.LineNumber};
     MaxLN = (MaxLN > LineNumber.LN) ? MaxLN : LineNumber.LN;

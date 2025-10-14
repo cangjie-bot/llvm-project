@@ -194,8 +194,6 @@ ARMBaseRegisterInfo::getThisReturnPreservedMask(const MachineFunction &MF,
                               : CSR_AAPCS_ThisReturn_RegMask;
 }
 
-MCPhysReg ARMBaseRegisterInfo::getR0Register() const { return ARM::R0; }
-
 ArrayRef<MCPhysReg> ARMBaseRegisterInfo::getIntraCallClobberedRegs(
     const MachineFunction *MF) const {
   static const MCPhysReg IntraCallClobberedRegs[] = {ARM::R12};

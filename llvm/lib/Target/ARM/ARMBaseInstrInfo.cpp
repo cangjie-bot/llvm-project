@@ -816,8 +816,8 @@ unsigned ARMBaseInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
       if (Callee != nullptr) {
         const auto &CallerFunc = MI.getParent()->getParent()->getFunction();
         if (Callee->isCangjieNativeStub(CallerFunc)) {
-          // 9:intrinsics num,4 bytes per intrinsic
-          NumBytes= 9 * 4;
+          // 10:intrinsics num,4 bytes per intrinsic
+          NumBytes= 10 * 4;
         }
       }
     }

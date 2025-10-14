@@ -197,7 +197,7 @@ protected:
 
   std::map<const MachineInstr *, std::pair<MCSymbol *, MCSymbol *>> StackCheckMap;
   SmallVector<std::tuple<const MachineInstr *, MCSymbol *, MCSymbol *>> SafepointStackMap;
-  SmallVector<std::tuple<MCSymbol *, MCSymbol *, MCSymbol *>> C2NStubMap;
+  SmallVector<std::tuple<MCSymbol *, MCSymbol *, MCSymbol *>> CangjieStubMap;
   /// A vector of all debug/EH info emitters we should use. This vector
   /// maintains ownership of the emitters.
   std::vector<HandlerInfo> Handlers;
@@ -234,10 +234,10 @@ protected:
   explicit AsmPrinter(TargetMachine &TM, std::unique_ptr<MCStreamer> Streamer);
 
   void emitCangjieStackCheck(const MachineInstr &MI);
-  bool tryEmitCangjieSpecificCall(const MachineInstr *MI);
-  bool tryEmitCangjieSpecificCallByMOSym(const MachineInstr *MI,
-                                         const MachineOperand &MOSym,
-                                         unsigned Opcode);
+  virtual bool tryEmitCangjieSpecificCall(const MachineInstr *MI);
+  virtual bool tryEmitCangjieSpecificCallByMOSym(const MachineInstr *MI,
+                                                 const MachineOperand &MOSym,
+                                                 unsigned Opcode);
 
   virtual void emitMccNewObjectFastPath(const MachineInstr *,
                                         const MachineOperand &, unsigned) {};
@@ -251,6 +251,7 @@ protected:
                                            const Function *F,
                                            const MachineOperand &MOSym,
                                            unsigned Opcode){};
+  virtual void emitCangjieCustomInst() {};
   virtual void emitGetCJThreadId() {};
 
   int64_t getAllocBufferOffsetInCJTLS() const;
