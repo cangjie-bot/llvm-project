@@ -189,13 +189,15 @@ static bool createGCSafepointPoll(Module &M) {
   Function *MCCYieldFun = cast<Function>(
       M.getOrInsertFunction(MCCYieldStr, FuncType).getCallee());
   MCCYieldFun->setUnnamedAddr(GlobalVariable::UnnamedAddr::Local);
-  MCCYieldFun->setCallingConv(CallingConv::CangjieGC);
+  if (!Triple(M.getTargetTriple()).isARM())
+    MCCYieldFun->setCallingConv(CallingConv::CangjieGC);
   MCCYieldFun->addFnAttr("gc-safepoint");
   Function *DoSafepointFun =
       cast<Function>(M.getOrInsertFunction(GCSafeStr, FuncType).getCallee());
   BasicBlock *BB = BasicBlock::Create(M.getContext(), "entry", DoSafepointFun);
   IRBuilder<> builder(BB);
-  builder.CreateCall(MCCYieldFun)->setCallingConv(CallingConv::CangjieGC);
+  if (!Triple(M.getTargetTriple()).isARM())
+    builder.CreateCall(MCCYieldFun)->setCallingConv(CallingConv::CangjieGC);
   builder.CreateRetVoid();
 
   GlobalVariable *CJFuncGV = cast<GlobalVariable>(M.getOrInsertGlobal(

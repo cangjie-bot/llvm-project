@@ -234,10 +234,10 @@ protected:
   explicit AsmPrinter(TargetMachine &TM, std::unique_ptr<MCStreamer> Streamer);
 
   void emitCangjieStackCheck(const MachineInstr &MI);
-  bool tryEmitCangjieSpecificCall(const MachineInstr *MI);
-  bool tryEmitCangjieSpecificCallByMOSym(const MachineInstr *MI,
-                                         const MachineOperand &MOSym,
-                                         unsigned Opcode);
+  virtual bool tryEmitCangjieSpecificCall(const MachineInstr *MI);
+  virtual bool tryEmitCangjieSpecificCallByMOSym(const MachineInstr *MI,
+                                                 const MachineOperand &MOSym,
+                                                 unsigned Opcode);
 
   virtual void emitMccNewObjectFastPath(const MachineInstr *,
                                         const MachineOperand &, unsigned) {};

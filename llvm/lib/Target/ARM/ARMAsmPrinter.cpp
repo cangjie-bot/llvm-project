@@ -1498,7 +1498,7 @@ void ARMAsmPrinter::emitCangjieCustomInst() {
   }
 }
 
-bool ARMAsmPrinter::tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
+bool ARMAsmPrinter::tryEmitCangjieSpecificCall(const MachineInstr *MI) {
   if (!MI->isCall()) {
     return false;
   }
@@ -1514,14 +1514,12 @@ bool ARMAsmPrinter::tryEmitCangjieSpecificCallForArm(const MachineInstr *MI) {
   }
 
   const MachineOperand &MOSym = MI->getOperand(0);
-  return tryEmitCangjieSpecificCallByMOSymForArm(MI, MOSym, Opcode);
+  return tryEmitCangjieSpecificCallByMOSym(MI, MOSym, Opcode);
 }
 
-bool ARMAsmPrinter::tryEmitCangjieSpecificCallByMOSymForArm(
-                                                const MachineInstr *MI,
-                                                const MachineOperand &MOSym,
-                                                unsigned Opcode) {
-    if (!MOSym.isGlobal()) {
+bool ARMAsmPrinter::tryEmitCangjieSpecificCallByMOSym(
+    const MachineInstr *MI, const MachineOperand &MOSym, unsigned Opcode) {
+  if (!MOSym.isGlobal()) {
     return false;
   }
   const auto *Callee = dyn_cast<const Function>(MOSym.getGlobal());
@@ -1572,7 +1570,7 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
   assert(!convertAddSubFlagsOpcode(MI->getOpcode()) &&
          "Pseudo flag setting opcode should be expanded early");
 
-  if (tryEmitCangjieSpecificCallForArm(MI)) {
+  if (tryEmitCangjieSpecificCall(MI)) {
     return;
   }
   // Check for manual lowerings.
@@ -2544,7 +2542,7 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
     case MachineOperand::MO_GlobalAddress:
     case MachineOperand::MO_ExternalSymbol:
       CallOpcode = ARM::BL;
-      if (tryEmitCangjieSpecificCallByMOSymForArm(MI, CallTarget, CallOpcode)) {
+      if (tryEmitCangjieSpecificCallByMOSym(MI, CallTarget, CallOpcode)) {
         return;
       }
       lowerOperand(CallTarget, CallTargetMCOp);
