@@ -105,7 +105,6 @@
 #include "llvm/Remarks/RemarkStreamer.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
@@ -1729,7 +1728,7 @@ void AsmPrinter::emitFunctionBody() {
     }
     SafepointStackMap.clear();
   }
-  
+
   EmittedInsts += NumInstsInFunction;
   MachineOptimizationRemarkAnalysis R(DEBUG_TYPE, "InstructionCount",
                                       MF->getFunction().getSubprogram(),
