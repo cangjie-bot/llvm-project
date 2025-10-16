@@ -1342,26 +1342,17 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
   }
 }
 
-MCOperand ARMAsmPrinter::setGAAndLower(const MachineOperand &MOSym, 
-                          const GlobalValue *GV) {
-    MachineOperand MOAddr(MOSym);
-    MCOperand SymAddr;
-    MOAddr.ChangeToGA(GV, 0);
-    lowerOperand(MOAddr, SymAddr);
-    return SymAddr;
-  }
-
-  //   ldr	R12, .Ltmp1
-  // .Ltmp0:
-  // 	add	R12, pc, R12
-  // 	ldr	R12, [R12]
-  // 	sub	sp, [sp, #8]
-  // 	str	R12, [sp] // func address
-  // 	mov	r12, #0
-  // 	str	R12, [sp, #4] // CallFrameSize
-  // 	bl	CJ_MCC_N2CStub
-  // .Ltmp1:
-  //   .long	.Ltmp1-(.calleefunc+8)
+//   ldr	R12, .Ltmp1
+// .Ltmp0:
+// 	add	R12, pc, R12
+// 	ldr	R12, [R12]
+// 	sub	sp, [sp, #8]
+// 	str	R12, [sp] // func address
+// 	mov	r12, #0
+// 	str	R12, [sp, #4] // CallFrameSize
+// 	bl	CJ_MCC_N2CStub
+// .Ltmp1:
+//   .long	.Ltmp1-(.calleefunc+8)
 void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
                                                const Function *F,
                                                const MachineOperand &MOSym,
@@ -1442,12 +1433,11 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
                                    .addImm(ARMCC::AL)
                                    .addReg(0));
 
-  MCOperand SymNewAddr;
-  lowerOperand(MOSym, SymNewAddr);
+  MCSymbol *StubGVSymbol = GetARMGVSymbol(F, 0);
   // bl CJ_MCC_N2CStub
-  EmitToStreamer(
-      *OutStreamer,
-      MCInstBuilder(ARM::BL).addReg(ARM::R12).addOperand(SymNewAddr));
+  EmitToStreamer(*OutStreamer,
+                 MCInstBuilder(ARM::BL).addOperand(MCOperand::createExpr(
+                     MCSymbolRefExpr::create(StubGVSymbol, OutContext))));
 
   SM.recordCJStackMap(*MI);
   return;
