@@ -221,31 +221,27 @@ private:
     auto isARM = TT.isARM();
     switch (II->getIntrinsicID()) {
     case Intrinsic::cj_gcwrite_struct: {
+      Type *ParamType[5] = {GCPtr, GCPtr, I64, GCPtr, I64};
       if (isARM)
-        Type *ParamType[5] = {GCPtr, GCPtr, I32, GCPtr, I32};
-      else
-        Type *ParamType[5] = {GCPtr, GCPtr, I64, GCPtr, I64};
+        ParamType[2] = ParamType[4] = I32;
       FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
       break;
     }
     case Intrinsic::cj_gcread_static_struct:
     case Intrinsic::cj_gcwrite_static_struct: {
+      Type *ParamType[5] = {I8Ptr, I64, I8Ptr, I64, I8Ptr};
       if (isARM)
-        Type *ParamType[5] = {I8Ptr, I32, I8Ptr, I32, I8Ptr};
-      else
-        Type *ParamType[5] = {I8Ptr, I64, I8Ptr, I64, I8Ptr};
+        ParamType[1] = ParamType[3] = I32;
       FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
       break;
     }
     case Intrinsic::cj_array_copy_ref:
     case Intrinsic::cj_array_copy_struct:
     case Intrinsic::cj_array_copy_generic: {
+      Type *ParamType[6] = {GCPtr, GCPtr, I64, GCPtr, GCPtr, I64};
       if (isARM)
-        Type *ParamType[6] = {GCPtr, GCPtr, I32, GCPtr, GCPtr, I32};
-      else
-        Type *ParamType[6] = {GCPtr, GCPtr, I64, GCPtr, GCPtr, I64};
+        ParamType[2] = ParamType[5] = I32;
       FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
-
       break;
     }
     default:
