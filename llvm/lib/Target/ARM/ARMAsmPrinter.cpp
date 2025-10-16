@@ -1442,12 +1442,11 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
                                    .addImm(ARMCC::AL)
                                    .addReg(0));
 
-  MCOperand SymNewAddr;
-  lowerOperand(MOSym, SymNewAddr);
+  MCSymbol *StubGVSymbol = GetARMGVSymbol(F, 0);
   // bl CJ_MCC_N2CStub
-  EmitToStreamer(
-      *OutStreamer,
-      MCInstBuilder(ARM::BL).addReg(ARM::R12).addOperand(SymNewAddr));
+  EmitToStreamer(*OutStreamer,
+                 MCInstBuilder(ARM::BL).addOperand(MCOperand::createExpr(
+                     MCSymbolRefExpr::create(StubGVSymbol, OutContext))));
 
   SM.recordCJStackMap(*MI);
   return;
