@@ -184,8 +184,10 @@ struct LowerGetFieldOffset {
     Value *ElemSizePtr = IRB.CreateGEP(KlassType, Elem, {Idxs}, "", true);
     Value *ElemSizeI32 = IRB.CreateLoad(IRB.getInt32Ty(), ElemSizePtr);
     Value *ElemSizeI64 = IRB.CreateZExt(ElemSizeI32, IRB.getInt64Ty());
+    const Triple TT(CI->getModule()->getTargetTriple());
     Value *ElemSize =
-        IRB.CreateSelect(IsRef, IRB.getInt64(8), ElemSizeI64); // 8:ref size
+        IRB.CreateSelect(IsRef, TT.isARM() ? IRB.getInt64(4) : IRB.getInt64(8),
+                         ElemSizeI64); // 4|8:ref size
     Offset = IRB.CreateMul(ElemSize, FieldIndex);
     return IRB.CreateAdd(Offset, IRB.getInt64(AttachedInt));
   }
