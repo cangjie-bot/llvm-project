@@ -293,7 +293,7 @@ macro(load_llvm_config)
   set(FOUND_LLVM_CMAKE_DIR FALSE)
   if (LLVM_CONFIG_PATH)
     execute_process(
-      COMMAND ${LLVM_CONFIG_PATH} "--obj-root" "--bindir" "--libdir" "--src-root" "--includedir"
+      COMMAND ${LLVM_CONFIG_PATH} "--obj-root" "--bindir" "--libdir" "--includedir"
       RESULT_VARIABLE HAD_ERROR
       OUTPUT_VARIABLE CONFIG_OUTPUT)
     if (HAD_ERROR)

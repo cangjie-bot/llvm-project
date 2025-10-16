@@ -2,7 +2,9 @@
 #define __extension__ /* Undefine GCC keyword to make Swig happy when processing glibc's stdint.h. */
 /* The ISO C99 standard specifies that in C++ implementations limit macros such
    as INT32_MAX should only be defined if __STDC_LIMIT_MACROS is. */
+#ifndef __STDC_LIMIT_MACROS
 #define __STDC_LIMIT_MACROS
+#endif
 %include "stdint.i"
 
 %include "lldb/lldb-defines.h"
