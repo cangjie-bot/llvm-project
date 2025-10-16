@@ -54,10 +54,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
 
-namespace llvm {
-extern int32_t OffsetStepSize;
-}
-
 ARMAsmPrinter::ARMAsmPrinter(TargetMachine &TM,
                              std::unique_ptr<MCStreamer> Streamer)
     : AsmPrinter(TM, std::move(Streamer)), Subtarget(nullptr), AFI(nullptr),
@@ -1371,61 +1367,60 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
                                                const MachineOperand &MOSym,
                                                unsigned Opcode) {
   auto *AddrGV = F->getParent()->getGlobalVariable(
-      MOSym.getGlobal()->getName().str() + ".CJStubGV" , true);
+      MOSym.getGlobal()->getName().str() + ".CJStubGV", true);
 
-  MCOperand SymNewAddr = setGAAndLower(MOSym, F);
   MCSymbol *GVSymbol = GetARMGVSymbol(AddrGV, MOSym.getTargetFlags());
-
   MCSymbol *Label0 = OutContext.createTempSymbol();
   MCSymbol *Label1 = OutContext.createTempSymbol();
-  C2NStubMap.push_back(std::make_tuple(GVSymbol, Label0, Label1));
+  CangjieStubMap.push_back(std::make_tuple(GVSymbol, Label0, Label1));
 
   // ldr R12, .LPCIxxx
-  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::LDRi12)
-      .addReg(ARM::R12)
-      .addExpr(MCSymbolRefExpr::create(Label1, OutContext))
-      .addImm(0)
-      .addImm(ARMCC::AL)
-      .addReg(0));
+  EmitToStreamer(*OutStreamer,
+                 MCInstBuilder(ARM::LDRi12)
+                     .addReg(ARM::R12)
+                     .addExpr(MCSymbolRefExpr::create(Label1, OutContext))
+                     .addImm(0)
+                     .addImm(ARMCC::AL)
+                     .addReg(0));
   // .Label0:
   OutStreamer->emitLabel(Label0);
   // add R12, pc, R12
   EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::ADDrr)
-      .addReg(ARM::R12)
-      .addReg(ARM::PC)
-      .addReg(ARM::R12)
-      .addImm(ARMCC::AL)
-      .addReg(0)
-      .addReg(0));
+                                   .addReg(ARM::R12)
+                                   .addReg(ARM::PC)
+                                   .addReg(ARM::R12)
+                                   .addImm(ARMCC::AL)
+                                   .addReg(0)
+                                   .addReg(0));
   // ldr R12, [R12]
   EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::LDRi12)
-    .addReg(ARM::R12)
-    .addReg(ARM::R12)
-    .addImm(0)
-    .addImm(ARMCC::AL)
-    .addReg(0));
+                                   .addReg(ARM::R12)
+                                   .addReg(ARM::R12)
+                                   .addImm(0)
+                                   .addImm(ARMCC::AL)
+                                   .addReg(0));
   // sub	sp, [sp, #8]
   EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::SUBri)
-      .addReg(ARM::SP)
-      .addReg(ARM::SP)
-      .addImm(8)
-      .addImm(ARMCC::AL)
-      .addReg(0)
-      .addReg(0));
+                                   .addReg(ARM::SP)
+                                   .addReg(ARM::SP)
+                                   .addImm(8)
+                                   .addImm(ARMCC::AL)
+                                   .addReg(0)
+                                   .addReg(0));
   // str R12, [sp]
   EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::STRi12)
-  .addReg(ARM::R12)
-  .addReg(ARM::SP)
-  .addImm(0)
-  .addImm(ARMCC::AL)
-  .addReg(0));
+                                   .addReg(ARM::R12)
+                                   .addReg(ARM::SP)
+                                   .addImm(0)
+                                   .addImm(ARMCC::AL)
+                                   .addReg(0));
 
   // push called-addr and CallFrameSize to stack. This operation extends
   // the sp of the caller by 16 bytes and will be fixed in MCC_XXXStub
   const auto *OriCalled = dyn_cast<Function>(MOSym.getGlobal());
   MDNode *Metadata = OriCalled->getMetadata("CallFrameSizeForCJFFI");
   assert(Metadata != nullptr &&
-        "FFI Func must have CallFrameSizeForCJFFI meta!");
+         "FFI Func must have CallFrameSizeForCJFFI meta!");
   unsigned CallFrameSize =
       dyn_cast<ConstantInt>(
           dyn_cast<ConstantAsMetadata>(Metadata->getOperand(0).get())
@@ -1433,33 +1428,28 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
           ->getSExtValue();
 
   // mov r12 , #CallFrameSize
-  MCInst Mov;
-  Mov.setOpcode(ARM::MOVi);
-  Mov.addOperand(MCOperand::createReg(ARM::R12));
-  Mov.addOperand(MCOperand::createImm(CallFrameSize));
-  Mov.addOperand(MCOperand::createImm(ARMCC::AL));
-  Mov.addOperand(MCOperand::createReg(0));
-  Mov.addOperand(MCOperand::createReg(0));
-  EmitToStreamer(*OutStreamer, Mov);
-
+  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::MOVi)
+                                   .addReg(ARM::R12)
+                                   .addImm(CallFrameSize)
+                                   .addImm(ARMCC::AL)
+                                   .addReg(0)
+                                   .addReg(0));
   // str R12, [sp, #4]
-  MCInst StrInst2;
-  StrInst2.setOpcode(ARM::STRi12);
-  StrInst2.addOperand(MCOperand::createReg(ARM::R12));
-  StrInst2.addOperand(MCOperand::createReg(ARM::SP));
-  StrInst2.addOperand(MCOperand::createImm(4));
-  StrInst2.addOperand(MCOperand::createImm(ARMCC::AL));
-  StrInst2.addOperand(MCOperand::createReg(0));
-  EmitToStreamer(*OutStreamer, StrInst2);
+  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::STRi12)
+                                   .addReg(ARM::R12)
+                                   .addReg(ARM::SP)
+                                   .addImm(4)
+                                   .addImm(ARMCC::AL)
+                                   .addReg(0));
 
+  MCOperand SymNewAddr;
+  lowerOperand(MOSym, SymNewAddr);
   // bl CJ_MCC_N2CStub
-  MCInst TemInst;
-  TemInst.setOpcode(ARM::BL);
-  TemInst.addOperand(SymNewAddr);
-  EmitToStreamer(*OutStreamer, TemInst);
+  EmitToStreamer(
+      *OutStreamer,
+      MCInstBuilder(ARM::BL).addReg(ARM::R12).addOperand(SymNewAddr));
 
   SM.recordCJStackMap(*MI);
-
   return;
 }
 
@@ -1472,29 +1462,28 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
 //    .long xxx.CJStubGV-(.Ltmp82+8)
 // .Lable：
 void ARMAsmPrinter::emitCangjieCustomInst() {
-  if (!C2NStubMap.empty()) {
+  if (!CangjieStubMap.empty()) {
     MCSymbol *DotSym = OutContext.createTempSymbol();
     const MCExpr *GVSymExpr = MCSymbolRefExpr::create(DotSym, OutContext);
-    EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::Bcc)
-      .addExpr(GVSymExpr)
-      // Add predicate operands.
-      .addImm(ARMCC::AL)
-      .addReg(0));
-    for (unsigned C2NStubIndex = 0; C2NStubIndex < C2NStubMap.size(); C2NStubIndex++) {
-      auto FuncSym = std::get<0>(C2NStubMap[C2NStubIndex]);
-      auto StartLabel = std::get<1>(C2NStubMap[C2NStubIndex]);
-      auto EndLabel = std::get<2>(C2NStubMap[C2NStubIndex]);
+    EmitToStreamer(
+        *OutStreamer,
+        MCInstBuilder(ARM::Bcc).addExpr(GVSymExpr).addImm(ARMCC::AL).addReg(0));
+    for (unsigned C2NStubIndex = 0; C2NStubIndex < CangjieStubMap.size();
+         C2NStubIndex++) {
+      auto FuncSym = std::get<0>(CangjieStubMap[C2NStubIndex]);
+      auto StartLabel = std::get<1>(CangjieStubMap[C2NStubIndex]);
+      auto EndLabel = std::get<2>(CangjieStubMap[C2NStubIndex]);
       OutStreamer->emitLabel(EndLabel);
       // .long xxx.CJStubGV-(.Ltmp82+8)
       auto Expr2 = MCBinaryExpr::createAdd(
-          MCSymbolRefExpr::create(StartLabel, OutContext), 
+          MCSymbolRefExpr::create(StartLabel, OutContext),
           MCConstantExpr::create(8, OutContext), OutContext);
       auto Offset = MCBinaryExpr::createSub(
-        MCSymbolRefExpr::create(FuncSym, OutContext), Expr2 , OutContext);
+          MCSymbolRefExpr::create(FuncSym, OutContext), Expr2, OutContext);
       OutStreamer->emitValue(Offset, 4);
     }
     OutStreamer->emitLabel(DotSym);
-    C2NStubMap.clear();
+    CangjieStubMap.clear();
   }
 }
 

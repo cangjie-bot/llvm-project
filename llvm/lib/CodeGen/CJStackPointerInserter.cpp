@@ -100,7 +100,7 @@ void parseFuncArgPointers(MachineFunction &MF, FuncArgPointers &Data) {
       } else { // AArch64
         MCRegister X8Reg(TRI->getX8Register());
         Data.Regs.push_back(X8Reg);
-      } 
+      }
       continue;
     }
 
