@@ -1559,7 +1559,8 @@ static uint8_t getOsAbi(const Triple &t) {
 }
 
 BitcodeFile::BitcodeFile(MemoryBufferRef mb, StringRef archiveName,
-                         uint64_t offsetInArchive, bool lazy)
+                         uint64_t offsetInArchive, bool lazy,
+                         bool ExportSym = true)
     : InputFile(BitcodeKind, mb) {
   this->archiveName = archiveName;
   this->lazy = lazy;
@@ -1586,6 +1587,7 @@ BitcodeFile::BitcodeFile(MemoryBufferRef mb, StringRef archiveName,
   ekind = getBitcodeELFKind(t);
   emachine = getBitcodeMachineKind(mb.getBufferIdentifier(), t);
   osabi = getOsAbi(t);
+  ExportSymbols = ExportSym;
 }
 
 static uint8_t mapVisibility(GlobalValue::VisibilityTypes gvVisibility) {
@@ -1625,7 +1627,7 @@ createBitcodeSymbol(Symbol *&sym, const std::vector<bool> &keptComdats,
                               objSym.getCommonSize()});
   } else {
     Defined newSym(&f, StringRef(), binding, visibility, type, 0, 0, nullptr);
-    if (objSym.canBeOmittedFromSymbolTable())
+    if (!f.ExportSymbols || objSym.canBeOmittedFromSymbolTable())
       newSym.exportDynamic = false;
     sym->resolve(newSym);
   }

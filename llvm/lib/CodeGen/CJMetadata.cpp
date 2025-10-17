@@ -720,17 +720,22 @@ void CJMetadataInfo::emitGlobalInitFuncTable() {
     // 8: align size, 8 bytes
     OS.emitValueToAlignment(8);
   NamedMDNode *PkgInitFuncMD = M->getNamedMetadata("pkg_init_func");
+  std::set<std::string> GlobalInitFuncNameSet;
   std::string GlobalInitFuncName;
   if (PkgInitFuncMD != nullptr) {
-    MDTuple *PkgInitFuncTuple = dyn_cast<MDTuple>(PkgInitFuncMD->getOperand(0));
-    GlobalInitFuncName =
-        dyn_cast<MDString>(PkgInitFuncTuple->getOperand(0))->getString().str();
-    if (IsMachO)
-      GlobalInitFuncName = "_" + GlobalInitFuncName;
+    for (unsigned I = 0; I < PkgInitFuncMD->getNumOperands(); I++) {
+      MDTuple *PkgInitFuncTuple =
+          dyn_cast<MDTuple>(PkgInitFuncMD->getOperand(I));
+      GlobalInitFuncName =
+          dyn_cast<MDString>(PkgInitFuncTuple->getOperand(0))->getString().str();
+      if (IsMachO)
+        GlobalInitFuncName = "_" + GlobalInitFuncName;
+      GlobalInitFuncNameSet.insert(GlobalInitFuncName);
+    }
   }
   auto EmitData = [&](const MCSymbol *FuncSym, const MCSymbol *FuncBegin) {
     std::string FuncName = FuncSym->getName().str();
-    if (FuncName != GlobalInitFuncName)
+    if (!GlobalInitFuncNameSet.count(FuncName))
       return;
 
     OS.emitSymbolValue(FuncBegin, FuncPtrSize);
