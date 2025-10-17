@@ -18,7 +18,9 @@
 #define LLVM_TRANSFORMS_IPO_GLOBALDCE_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/PassManager.h"
 #include <unordered_map>
@@ -70,6 +72,44 @@ private:
   void ScanVTableLoad(Function *Caller, Metadata *TypeId, uint64_t CallOffset);
 
   void ComputeDependencies(Value *V, SmallPtrSetImpl<GlobalValue *> &U);
+
+  friend struct CangjieVFE;
+};
+
+struct CangjieVFE {
+  struct GenericFuncInfo {
+    bool IsValid= false;
+    GenericFuncInfo *Prev = nullptr;
+    // Save all func tables with current type.
+    SmallPtrSet<GlobalVariable *, 4> FuncTables;
+    DenseMap<GlobalVariable *, GenericFuncInfo *> Next;
+  };
+
+  GlobalDCEPass &DCE;
+  GenericFuncInfo *Root;
+
+  CangjieVFE() = delete;
+  CangjieVFE(GlobalDCEPass &DCE) : DCE(DCE) { Root = new GenericFuncInfo; }
+  ~CangjieVFE();
+
+  GenericFuncInfo *insertInstance(const SmallVectorImpl<GlobalVariable *> &,
+                                  GlobalVariable *FT);
+
+  GenericFuncInfo *
+  findTargetInstance(const SmallVectorImpl<GlobalVariable *> &);
+
+  // Parse metadata and return the corresponding GFI.
+  GenericFuncInfo *resolveVFEMeta(Metadata *, Module &);
+
+  void addCangjieVirtualFunctionDependencies(Module &);
+
+  // Obtain the function table FT that achieves P from C, return {C, P, FT}.
+  std::tuple<GlobalVariable *, GlobalVariable *, GlobalVariable *>
+  scanVTable(GlobalVariable &);
+
+  // Add dependencies between caller and callee.
+  void updateDependencies(Function *,
+                          DenseMap<GenericFuncInfo *, SmallSet<uint64_t, 4>> &);
 };
 
 }

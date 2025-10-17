@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TypeMetadataUtils.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
@@ -25,6 +26,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include "llvm/Transforms/Utils/CtorUtils.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
 
@@ -32,9 +34,17 @@ using namespace llvm;
 
 #define DEBUG_TYPE "globaldce"
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+} // namespace llvm
+
 static cl::opt<bool>
     ClEnableVFE("enable-vfe", cl::Hidden, cl::init(true),
                 cl::desc("Enable virtual function elimination"));
+
+static cl::opt<bool>
+    ClEnableCJVFE("enable-cangjie-vfe", cl::Hidden, cl::init(true),
+                cl::desc("Enable cangjie virtual function elimination"));
 
 STATISTIC(NumAliases  , "Number of global aliases removed");
 STATISTIC(NumFunctions, "Number of functions removed");
@@ -318,6 +328,11 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
   // might call, if we have that information.
   AddVirtualFunctionDependencies(M);
 
+  if (CJPipeline && ClEnableCJVFE) {
+    CangjieVFE CVFE(*this);
+    CVFE.addCangjieVirtualFunctionDependencies(M);
+  }
+
   // Loop over the module, adding globals which are obviously necessary.
   for (GlobalObject &GO : M.global_objects()) {
     GO.removeDeadConstantUsers();
@@ -466,4 +481,208 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
   if (Changed)
     return PreservedAnalyses::none();
   return PreservedAnalyses::all();
+}
+
+CangjieVFE::GenericFuncInfo *
+CangjieVFE::insertInstance(const SmallVectorImpl<GlobalVariable *> &Path,
+                           GlobalVariable *FT = nullptr) {
+  GenericFuncInfo *CurRoot = this->Root;
+  for (GlobalVariable *GV : Path) {
+    auto It = CurRoot->Next.find(GV);
+    if (It != CurRoot->Next.end()) {
+      CurRoot = It->second;
+      continue;
+    }
+    auto *GFI = new GenericFuncInfo;
+    GFI->Prev = CurRoot;
+    CurRoot->Next[GV] = GFI;
+    CurRoot = GFI;
+  }
+  CurRoot->IsValid = true;
+  if (FT)
+    CurRoot->FuncTables.insert(FT);
+  return CurRoot;
+}
+
+CangjieVFE::GenericFuncInfo *
+CangjieVFE::findTargetInstance(const SmallVectorImpl<GlobalVariable *> &Path) {
+  GenericFuncInfo *Root = this->Root;
+  for (GlobalVariable *GV : Path) {
+    auto It = Root->Next.find(GV);
+    if (It == Root->Next.end())
+      return nullptr;
+    Root = It->second;
+  }
+  return Root->IsValid ? Root : nullptr;
+}
+
+CangjieVFE::GenericFuncInfo *CangjieVFE::resolveVFEMeta(Metadata *MD,
+                                                        Module &M) {
+  SmallVector<GlobalVariable *, 4> Path;
+  MDNode *N;
+  while ((N = dyn_cast_or_null<MDNode>(MD))) {
+    auto *GV = M.getNamedGlobal(
+        dyn_cast<MDString>(N->getOperand(0).get())->getString());
+    // Some vcall may encounter situations where the target types does not appear
+    // in the current module. In such cases, it can be ensured that the virtual
+    // function being called is definitely not defined in the current module.
+    if (!GV)
+      return nullptr;
+    Path.push_back(GV);
+    // Layout of MD:
+    //  {1.tt, [offset]}
+    //  {1.tt, 2.ti, [offset]}
+    //  {1.tt, !2, [offset]}, !2 = new MD
+    MD = N->getNumOperands() >= 2 ? N->getOperand(1)
+                                  : static_cast<Metadata *>(nullptr);
+  }
+  if (auto *MDS = dyn_cast_or_null<MDString>(MD))
+    Path.push_back(M.getNamedGlobal(MDS->getString()));
+  return insertInstance(Path);
+}
+
+// Obtain the function table FT that achieves P from C, return {C, P, FT}.
+std::tuple<GlobalVariable *, GlobalVariable *, GlobalVariable *>
+CangjieVFE::scanVTable(GlobalVariable &GV) {
+  assert(GV.hasInitializer());
+  assert(GV.getType()->getNonOpaquePointerElementType()->getStructName() ==
+         "ExtensionDef");
+  Constant *C = GV.getInitializer();
+  GlobalVariable *FT = dyn_cast<GlobalVariable>(
+      C->getOperand(ExtensionDefFieldType::ET_FUNC_TABLE)->stripPointerCasts());
+  if (!FT)
+    return {nullptr, nullptr, nullptr};
+  GlobalVariable *TI =
+      cast<GlobalVariable>(C->getOperand(ExtensionDefFieldType::ET_TARGET_TYPE)
+                               ->stripPointerCasts());
+  assert(GV.hasMetadata("inheritedType"));
+  GlobalVariable *IF = GV.getParent()->getNamedGlobal(
+      dyn_cast<MDString>(GV.getMetadata("inheritedType")->getOperand(0))
+          ->getString());
+
+#ifndef NDEBUG
+  // Verify that the interface type obtained from metadata matches the one
+  // parsed from global variable.
+  Value *O = C->getOperand(ExtensionDefFieldType::ET_INTERFACE_FN)
+                 ->stripPointerCasts();
+  if (auto *F = dyn_cast<Function>(O)) {
+    auto *CB = dyn_cast<CallBase>(F->back().getTerminator()->getPrevNode());
+    assert(CB->getCalledFunction()->getName() == "CJ_MCC_GetOrCreateTypeInfo");
+    O = CB->getArgOperand(0)->stripPointerCasts();
+  } else {
+    // O is typeinfo
+    auto *TT = cast<GlobalVariable>(O)
+                   ->getInitializer()
+                   ->getOperand(CalssInfoFieldType::CIT_GENERIC_FROM)
+                   ->stripPointerCasts();
+    O = isa<ConstantPointerNull>(TT) ? O : TT;
+  }
+  assert(IF == O);
+#endif
+
+  return {TI, IF, FT};
+}
+
+void CangjieVFE::updateDependencies(
+    Function *Caller,
+    DenseMap<GenericFuncInfo *, SmallSet<uint64_t, 4>> &Relation) {
+  auto Mark = [Caller, this](SmallPtrSetImpl<GlobalVariable *> &FTs,
+                             uint64_t Offset) {
+    for (auto *FT : FTs) {
+      auto *C = FT->getInitializer();
+      if (C->getNumOperands() <= Offset)
+        continue;
+      Function *Callee = dyn_cast_or_null<Function>(
+          C->getOperand(Offset)->stripPointerCasts());
+      if (!Callee)
+        continue;
+      assert(Callee != nullptr);
+      this->DCE.GVDependencies[Caller].insert(Callee);
+    }
+  };
+  for (auto &[GFI, Offsets] : Relation) {
+    for (auto I : Offsets) {
+      // 1. Mark all child nodes.
+      SmallVector<GenericFuncInfo *, 8> Worklist = {GFI};
+      while (!Worklist.empty()) {
+        auto *Child = Worklist.pop_back_val();
+        for (auto [_, N] : Child->Next) {
+          Mark(N->FuncTables, I);
+          Worklist.push_back(N);
+        }
+      }
+      // 2. Recursively mark all parent nodes.
+      while (GFI != Root) {
+        auto &FTs = GFI->FuncTables;
+        GFI = GFI->Prev;
+        Mark(FTs, I);
+      }
+    }
+  }
+}
+
+void CangjieVFE::addCangjieVirtualFunctionDependencies(Module &M) {
+  // For cangjie, it has the following rules:
+  //  - If A implements I, then apart from extend, the visibility of I must be
+  //  greater than or equal to that of A.
+  //  - If A extends I, then the visibility of I may be less than or equal to
+  //  that of A. In this case, external packages cannot call I's methods through
+  //  A.
+  // Therefore, for VFE, it is only necessary to be concerned with the
+  // visibility of the implemented type. As long as I is internal, optimization
+  // can be performed.
+  for (auto &GV : M.globals()) {
+    // If typeArgs >= 2, skip it.
+    if (!GV.hasAttribute("CFileMTable") || !GV.hasMetadata("inheritedType"))
+      continue;
+    if (!GV.hasInitializer())
+      report_fatal_error("ExtensionDef must be initialized.");
+    auto [TIC, TII, FT] = scanVTable(GV);
+    if (!TIC || !TII || !FT)
+      continue;
+    if (GlobalValue::isLocalLinkage(TII->getLinkage())) {
+      auto *GFI = resolveVFEMeta(GV.getMetadata("inheritedType"), M);
+      assert(GFI);
+      GFI->FuncTables.insert(FT);
+      DCE.VFESafeVTables.insert(FT);
+    }
+  }
+
+  for (Function &F : M) {
+    // Value: offsets
+    DenseMap<GenericFuncInfo *, SmallSet<uint64_t, 4>> RelatedGV;
+    for (auto &I : instructions(F)) {
+      // There is an overlap between MD_obj_type and MD_intro_type, which needs
+      // to be considered for merging in the future.
+      auto *MD = I.getMetadata(LLVMContext::MD_obj_type);
+      if (!MD)
+        continue;
+      assert(isa<LoadInst>(&I));
+      auto *GFI = resolveVFEMeta(MD, M);
+      if (!GFI)
+        continue;
+      if (!I.hasMetadata(LLVMContext::MD_func_table))
+        report_fatal_error("Missing metadata");
+      auto Offset =
+          mdconst::extract<ConstantInt>(
+              I.getMetadata(LLVMContext::MD_func_table)->getOperand(0))
+              ->getZExtValue();
+      // The last operand is the index of functable.
+      RelatedGV[GFI].insert(Offset);
+    }
+    updateDependencies(&F, RelatedGV);
+  }
+}
+
+CangjieVFE::~CangjieVFE() {
+  SmallVector<GenericFuncInfo *> Worklist = {Root};
+  SmallVector<GenericFuncInfo *> Stack;
+  while (!Worklist.empty()) {
+    auto *GFI = Worklist.pop_back_val();
+    Stack.push_back(GFI);
+    for (auto [_, N] : GFI->Next)
+      Worklist.push_back(N);
+  }
+  while (!Stack.empty())
+    delete Stack.pop_back_val();
 }

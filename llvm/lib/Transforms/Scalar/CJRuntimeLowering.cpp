@@ -576,6 +576,8 @@ public:
                                      CB->getArgOperand(2)))}));
     LI3->setMetadata(LLVMContext::MD_invariant_load,
                      MDNode::get(CB->getContext(), {}));
+    LI3->setMetadata(LLVMContext::MD_obj_type,
+                     CB->getMetadata(LLVMContext::MD_obj_type));
     CB->replaceAllUsesWith(LI3);
     CB->eraseFromParent();
   }
@@ -600,6 +602,8 @@ public:
     LI->setMetadata("FuncTable",
                     MDNode::get(C, {ConstantAsMetadata::get(cast<ConstantInt>(
                                        CB->getArgOperand(2)))}));
+    LI->setMetadata(LLVMContext::MD_obj_type,
+                    CB->getMetadata(LLVMContext::MD_obj_type));
     CB->replaceAllUsesWith(LI);
     CB->eraseFromParent();
   }
