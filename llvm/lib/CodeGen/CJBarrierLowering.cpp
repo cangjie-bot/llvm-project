@@ -39,6 +39,12 @@ using namespace cangjie;
 
 #define DEBUG_TYPE "cj-barrier-lowering"
 
+static cl::opt<bool> EnableTaggedPointer("enable-tagged-pointer",
+                                         cl::init(true), cl::Hidden);
+static cl::opt<bool> EnableGCPhase("enable-gc-phase", cl::init(true),
+                                   cl::Hidden);
+static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
+                                      cl::Hidden);
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
 
@@ -46,12 +52,6 @@ namespace llvm {
 extern cl::opt<bool> CangjieJIT;
 extern cl::opt<bool> DisableGCSupport;
 extern cl::opt<bool> EnableSafepointOnly;
-cl::opt<bool> EnableTaggedPointer("enable-tagged-pointer",
-                                         cl::init(true), cl::Hidden);
-cl::opt<bool> EnableGCPhase("enable-gc-phase", cl::init(true),
-                                   cl::Hidden);
-cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
-                                      cl::Hidden);
 } // namespace llvm
 
 namespace {
