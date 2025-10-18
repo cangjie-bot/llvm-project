@@ -746,15 +746,12 @@ void CJMetadataInfo::emitSDKVersion() {
     return;
 
   OS.switchSection(TD[SDKVersionIdx].TableSection);
-<<<<<<< HEAD
-  // 8: sdk version size, 8 bytes.
-  OS.emitValue(getGVRefSymbol(Version), 8);
-=======
+
   if (TT.isOSBinFormatMachO())
     // 8: align size, 8 bytes
     OS.emitValueToAlignment(8);
+
   OS.emitValue(getGVRefSymbol(Version), FuncPtrSize);
->>>>>>> 00cb4af5c68f (feat: adapt c2n/n2c and stackmaps)
 }
 
 void CJMetadataInfo::emitStackMaps() {
