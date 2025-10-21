@@ -1284,7 +1284,7 @@ static void LoadCjFormatterSummary(lldb::TypeCategoryImplSP cpp_category_sp) {
 
   // Applies only to the enum type without parameters.
   AddCXXSummary(cpp_category_sp, lldb_private::formatters::EnumSummaryProvider,
-      "Range summary provider", ConstString("^(.+)?E0\\$(.+)$"), cj_flags, true);
+      "Enum0 summary provider", ConstString("^(.+)?E0\\$(.+)$"), cj_flags, true);
 
   AddCXXSummary(cpp_category_sp, lldb_private::formatters::Enum2SummaryProvider,
       "Enum2 summary provider", ConstString("(.+)?E2\\$"), cj_flags, true);

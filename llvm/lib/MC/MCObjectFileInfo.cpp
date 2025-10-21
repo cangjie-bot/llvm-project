@@ -899,7 +899,7 @@ void MCObjectFileInfo::initCOFFMCObjectFileInfo(const Triple &T) {
       SectionKind::getData());
 
   XDataSection = Ctx->getCOFFSection(
-      ".xdata", COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ,
+      ".xdata", COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ | COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
 
   SXDataSection = Ctx->getCOFFSection(".sxdata", COFF::IMAGE_SCN_LNK_INFO,
