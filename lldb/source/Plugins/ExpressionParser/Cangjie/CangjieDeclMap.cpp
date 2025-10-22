@@ -81,8 +81,7 @@ lldb::VariableSP CangjieDeclMap::GetVariableByName(const std::string& sname, Var
 }
 
 CompilerType CangjieDeclMap::GetVariableType(lldb::VariableSP var) {
-      CompilerType type = var->GetType()->GetFullCompilerType();
-    bool isLet = type.IsConst();
+    CompilerType type = var->GetType()->GetFullCompilerType();
     ReplaceTypeDefWithInterfaceType(type);
     std::string type_name = type.GetTypeName().GetCString();
     if (CangjieASTBuiler::IsFunctionType(type.GetTypeName())) {
@@ -423,6 +422,7 @@ std::vector<CangjieDeclMap::CompilerTypeInfo> CangjieDeclMap::LookUpFunction(std
     }
     std::string funcNameWithPkg = sym_ctx.function->GetNameNoArguments().GetCString();
     if (funcNameWithPkg.find(m_current_pkgname) == std::string::npos) {
+      builder.m_type_names.insert(funcNameWithPkg);
       continue;
     }
     CompilerDeclContext decl_ctx = sym_ctx.function->GetDeclContext();
@@ -485,7 +485,7 @@ CompilerType CangjieDeclMap::LookUpType(std::string name)
         enumType = LookUpType(E3_PREFIX_NAME + enumName);
       }
       if (!enumType.IsValid()) {
-        return CompilerType();
+        continue;
       }
       if (m_parsed_types.find(name) != m_parsed_types.end()) {
         auto var_type = m_parsed_types[name];
@@ -494,7 +494,7 @@ CompilerType CangjieDeclMap::LookUpType(std::string name)
           m_parsed_types[name] = enumType;
         }
       } else {
-        m_parsed_types.insert({name, enumType});
+        m_parsed_types.insert({type.GetTypeName().AsCString(), enumType});
       }
       return enumType;
     }
@@ -908,6 +908,9 @@ void CangjieDeclMap::CreateStructMemberDecls(CompilerType type, Ptr<AST::Decl> &
 }
 
 Ptr<AST::Decl> CangjieDeclMap::CreateEnumDecl(CompilerType type, std::string prefix) {
+  if (type.IsPointerType()) {
+    type = type.GetPointeeType();
+  }
   auto decl = builder.CreateEnumDecl(type);
   std::string typeName = type.GetTypeName().GetCString();
   builder.CreateDeclGeneric(decl.get(), typeName);
@@ -986,6 +989,8 @@ Ptr<AST::Decl> CangjieDeclMap::CreateTypeDecl(CompilerType type) {
     // If the type is not from the current package, no need to create decl.
     if (typeName.find("::") < typeName.find("<")) {
       builder.m_type_names.insert(typeName);
+      typeName = DeletePrefixOfType(typeName);
+      m_parsed_types.insert({typeName, type});
     }
     return nullptr;
   }
@@ -1164,12 +1169,10 @@ CompilerType CangjieDeclMap::GetEnumerationType(const CompilerType& type, bool h
       CJC_ASSERT(member_name == "constructor");
       return ctorFuncType;
     }
-    CJC_ASSERT(member_name == "EnumClass$");
     if (ctorFuncType.IsPointerType()) {
       ctorFuncType = ctorFuncType.GetPointeeType();
     }
     enumType = ctorFuncType.GetFieldAtIndex(0, member_name, nullptr, nullptr, nullptr);
-    CJC_ASSERT(member_name == "constructor");
   }
   return enumType;
 }
@@ -1378,7 +1381,18 @@ void CangjieDeclMap::AddImportSpec(OwnedPtr<Cangjie::AST::File>& file, std::stri
       continue;
     }
     auto import = MakeOwned<ImportSpec>();
-    import->content.prefixPaths = Utils::SplitQualifiedName(fullpkg);
+    auto pos = fullpkg.find(":");
+    if (pos != std::string::npos) {
+      // fullpkg: "org:a"
+      import->content.hasDoubleColon = true;
+      import->content.prefixPaths.emplace_back(fullpkg.substr(0, pos));
+      std::vector<std::string> paths = Utils::SplitQualifiedName(fullpkg.substr(pos + 1));
+      for (auto path : paths) {
+        import->content.prefixPaths.emplace_back(path);
+      }
+    } else {
+      import->content.prefixPaths = Utils::SplitQualifiedName(fullpkg);
+    }
     const size_t prefixLen = import->content.prefixPaths.size();
     import->content.prefixPoses.resize(prefixLen);
     import->content.prefixDotPoses.resize(prefixLen);
@@ -1394,13 +1408,27 @@ void CangjieDeclMap::AddImportSpec(OwnedPtr<Cangjie::AST::File>& file, std::stri
 void CangjieDeclMap::CollectImportPkgName()
 {
   std::for_each(builder.m_type_names.begin(), builder.m_type_names.end(), [&](auto& name) {
-    auto pos = name.find(PACKAGE_SUFFIX);
-    if (pos == std::string::npos || pos > name.find("(") || pos > name.find("<")) {
+    auto pkgname = name;
+    auto pos = pkgname.find("<");
+    if (pos != std::string::npos) {
+      pkgname = pkgname.substr(0, pos);
+    }
+    pos = pkgname.find("(");
+    if (pos != std::string::npos) {
+      pkgname = pkgname.substr(0, pos);
+    }
+    pos = pkgname.rfind(PACKAGE_SUFFIX);
+    if (pos == std::string::npos) {
       return;
     }
-    auto pkgname = name.substr(0, pos);
+    pkgname = pkgname.substr(0, pos);
     if (pkgname.empty() || pkgname == "std") {
       return;
+    }
+    pos = pkgname.find(PACKAGE_SUFFIX);
+    if (pos != std::string::npos) {
+      // "org::a" -> "org:a"
+      pkgname.replace(pos, 1, "");
     }
     m_fullpkgs.insert(pkgname);
     Log *log = GetLog(LLDBLog::Expressions);
