@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/Constants.h"
@@ -294,6 +295,19 @@ public:
     return {DstPtr, SrcPtr};
   }
 
+  bool isPtrEnumOrOption(Value *Ptr) {
+    if (AllocaInst *AI = dyn_cast<AllocaInst>(Ptr)) {
+      Type *AllocatedType = AI->getAllocatedType();
+ 
+      if (StructType *ST = dyn_cast<StructType>(AllocatedType)) {
+        StringRef Name = ST->getName();
+        return Name.contains("Option") || Name.contains("enum");
+      }
+    }
+ 
+    return false;
+  }
+
   void createReadRefByOffset(uint64_t RefPos) {
     auto [DstPtr, SrcPtr] = maybeCreateGEPByOffset(RefPos);
     Type *Int8AS1Ty = IRB.getInt8PtrTy(1);
@@ -309,6 +323,12 @@ public:
           Intrinsic::getDeclaration(M, Intrinsic::cj_gcread_static_ref);
       ReadRef = IRB.CreateCall(Callee, {SrcCast});
     }
+
+    if (isPtrEnumOrOption(getUnderlyingObject(DstPtr))) {
+      ReadRef->setMetadata(LLVMContext::MD_untrusted_ref,
+                           MDNode::get(ReadRef->getContext(), {}));
+    }
+
     updateTBAA(DL, ReadRef);
 
     ReadRef->setDebugLoc(Barrier->getDebugLoc());
