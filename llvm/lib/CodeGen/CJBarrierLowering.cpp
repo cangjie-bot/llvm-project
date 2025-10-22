@@ -124,6 +124,7 @@ public:
     GCPtr = Type::getInt8PtrTy(C, 1);
     I8Ptr = Type::getInt8PtrTy(C);
     I64 = Type::getInt64Ty(C);
+    I32 = Type::getInt32Ty(C);
   }
 
   ~BarrierMaker() = default;
@@ -199,6 +200,7 @@ private:
   Type *GCPtr;
   Type *I8Ptr;
   Type *I64;
+  Type *I32;
 
   StringRef getRuntimeFuncName(IntrinsicInst *II) {
     Intrinsic::ID IID = II->getIntrinsicID();
@@ -215,15 +217,21 @@ private:
       return Itr->second;
     // add dstLen to runtime API
     FunctionType *FuncType = nullptr;
+    const Triple TT(II->getModule()->getTargetTriple());
+    auto isARM = TT.isARM();
     switch (II->getIntrinsicID()) {
     case Intrinsic::cj_gcwrite_struct: {
       Type *ParamType[5] = {GCPtr, GCPtr, I64, GCPtr, I64};
+      if (isARM)
+        ParamType[2] = ParamType[4] = I32;
       FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
       break;
     }
     case Intrinsic::cj_gcread_static_struct:
     case Intrinsic::cj_gcwrite_static_struct: {
       Type *ParamType[5] = {I8Ptr, I64, I8Ptr, I64, I8Ptr};
+      if (isARM)
+        ParamType[1] = ParamType[3] = I32;
       FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
       break;
     }
@@ -231,6 +239,8 @@ private:
     case Intrinsic::cj_array_copy_struct:
     case Intrinsic::cj_array_copy_generic: {
       Type *ParamType[6] = {GCPtr, GCPtr, I64, GCPtr, GCPtr, I64};
+      if (isARM)
+        ParamType[2] = ParamType[5] = I32;
       FuncType = FunctionType::get(Type::getVoidTy(C), ParamType, false);
       break;
     }
@@ -1096,6 +1106,13 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
   // Quick exit for functions that do not use Cangjie GC.
   if (!F.hasCangjieGC())
     return false;
+
+  const Triple TT(F.getParent()->getTargetTriple());
+  if (TT.isARM()){
+    EnableTaggedPointer = false;
+    EnableGCPhase = false;
+    EnableGCFastPath = false;
+  }
 
   bool Changed = false;
   SetVector<CallInst *> Barriers;

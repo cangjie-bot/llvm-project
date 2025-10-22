@@ -1838,6 +1838,7 @@ CCAssignFn *ARMFastISel::CCAssignFnForCall(CallingConv::ID CC,
       return (Return ? RetCC_ARM_AAPCS_VFP : CC_ARM_AAPCS_VFP);
     }
     LLVM_FALLTHROUGH;
+  case CallingConv::CangjieGC:
   case CallingConv::C:
   case CallingConv::CXX_FAST_TLS:
     // Use target triple & subtarget features to do actual dispatch.
@@ -2384,7 +2385,14 @@ bool ARMFastISel::SelectCall(const Instruction *I,
   if (!ProcessCallArgs(Args, ArgRegs, ArgVTs, ArgFlags,
                        RegArgs, CC, NumBytes, isVarArg))
     return false;
-
+  if (Callee) {
+    SmallVector<CCValAssign, 16> ArgLocs;
+    CCState CCInfo(CC, isVarArg, *FuncInfo.MF, ArgLocs, *Context);
+    CCInfo.AnalyzeCallOperands(ArgVTs, ArgFlags,
+                              CCAssignFnForCall(CC, false, isVarArg));
+    CCInfo.AddAlignedCallFrameSizeMetaDataForCJFFI(
+        const_cast<Function *>(dyn_cast<Function>(Callee)), NumBytes);
+  }
   bool UseReg = false;
   const GlobalValue *GV = dyn_cast<GlobalValue>(Callee);
   if (!GV || Subtarget->genLongCalls()) UseReg = true;

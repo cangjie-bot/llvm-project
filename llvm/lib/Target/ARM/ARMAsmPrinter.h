@@ -11,6 +11,8 @@
 
 #include "ARMSubtarget.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/CJMetadata.h"
+#include "llvm/CodeGen/StackMaps.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
@@ -64,6 +66,10 @@ class LLVM_LIBRARY_VISIBILITY ARMAsmPrinter : public AsmPrinter {
   /// We need to emit labels even for promoted globals so that DWARF
   /// debug info can link properly.
   SmallPtrSet<const GlobalVariable*,2> EmittedPromotedGlobalLabels;
+
+  StackMaps SM;
+  CJMetadataInfo CMI;
+
 
 public:
   explicit ARMAsmPrinter(TargetMachine &TM,
@@ -129,6 +135,17 @@ private:
   bool emitPseudoExpansionLowering(MCStreamer &OutStreamer,
                                    const MachineInstr *MI);
 
+  bool tryEmitCangjieSpecificCall(const MachineInstr *MI) override;
+  bool tryEmitCangjieSpecificCallByMOSym(const MachineInstr *MI,
+                                         const MachineOperand &MOSym,
+                                         unsigned Opcode) override;
+  void emitCangjieCallStubInstImpl(const MachineInstr *MI,
+                                               const Function *F,
+                                               const MachineOperand &MOSym,
+                                               unsigned Opcode) override;
+  virtual void emitCangjieCustomInst() override;
+  MCOperand setGAAndLower(const MachineOperand &MOSym, 
+                          const GlobalValue *GV) ;
 public:
   unsigned getISAEncoding() override {
     // ARM/Darwin adds ISA to the DWARF info for each function.

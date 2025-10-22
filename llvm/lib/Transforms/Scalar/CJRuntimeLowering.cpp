@@ -38,8 +38,6 @@
 
 using namespace llvm;
 
-static cl::opt<bool> EnableCJNewArrayFast("enable-cangjie-new-array-fastpath",
-                                          cl::init(true), cl::ReallyHidden);
 namespace llvm {
 extern cl::opt<bool> CJLTOOpt;
 extern cl::opt<bool> CangjieJIT;
@@ -51,6 +49,8 @@ cl::opt<std::string> InputFileName("cj-ic-input-file",
                                    cl::desc("Specify the input file"),
                                    cl::value_desc("filename"),
                                    cl::init("./ProfileOutput.txt"));
+cl::opt<bool> EnableCJNewArrayFast("enable-cangjie-new-array-fastpath",
+                                   cl::init(true), cl::ReallyHidden);
 } // namespace llvm
 
 namespace {
@@ -184,8 +184,10 @@ struct LowerGetFieldOffset {
     Value *ElemSizePtr = IRB.CreateGEP(KlassType, Elem, {Idxs}, "", true);
     Value *ElemSizeI32 = IRB.CreateLoad(IRB.getInt32Ty(), ElemSizePtr);
     Value *ElemSizeI64 = IRB.CreateZExt(ElemSizeI32, IRB.getInt64Ty());
+    const Triple TT(CI->getModule()->getTargetTriple());
     Value *ElemSize =
-        IRB.CreateSelect(IsRef, IRB.getInt64(8), ElemSizeI64); // 8:ref size
+        IRB.CreateSelect(IsRef, TT.isARM() ? IRB.getInt64(4) : IRB.getInt64(8),
+                         ElemSizeI64); // 4|8:ref size
     Offset = IRB.CreateMul(ElemSize, FieldIndex);
     return IRB.CreateAdd(Offset, IRB.getInt64(AttachedInt));
   }
@@ -787,9 +789,12 @@ private:
     Instruction *InsertPos = &*EntryBB.getFirstInsertionPt();
     IRBuilder<> IRB(InsertPos);
     auto *TIType = StructType::getTypeByName(C, "TypeInfo");
+    const Triple TT(CI->getModule()->getTargetTriple());
     if (isPrimitiveTypeInfo(GV)) {
       SmallVector<Type *> ElemTypes;
       ElemTypes.push_back(TIType->getPointerTo());
+      if (TT.isARM())
+        ElemTypes.push_back(IRB.getInt32Ty());
       ElemTypes.push_back(IRB.getInt64Ty());
       AI = IRB.CreateAlloca(StructType::get(C, ElemTypes));
       Value *BC = IRB.CreateBitCast(AI, IRB.getInt8PtrTy()->getPointerTo());
@@ -801,6 +806,8 @@ private:
       assert(ST && "alloca.generic layout info missing!");
       SmallVector<Type *> ElemTypes;
       ElemTypes.push_back(TIType->getPointerTo());
+      if (TT.isARM())
+        ElemTypes.push_back(IRB.getInt32Ty());
       ElemTypes.push_back(ST);
       AI = IRB.CreateAlloca(StructType::get(C, ElemTypes));
       Value *BC = IRB.CreateBitCast(AI, IRB.getInt8PtrTy()->getPointerTo());

@@ -106,6 +106,7 @@ void CJMetadataInfo::init() {
   SplitedMangledStr.Items.clear();
   StrPoolDictOffsetsSym = Context.getOrCreateSymbol(".Lstr_pool_dict_offsets");
   StrPoolIdx = 0;
+  FuncPtrSize = SM.isARM() ? 4 : 8; // method pc size, arm: 4 byte, other: 8 byte
 }
 
 void CJMetadataInfo::recordKlass(const GlobalVariable *GV) {
@@ -590,11 +591,13 @@ void CJMetadataInfo::emitGCRoots() {
     return;
 
   OS.switchSection(TD[GCRootsTableIdx].TableSection);
+
   if (TT.isOSBinFormatMachO())
     // 8: align size, 8 bytes
     OS.emitValueToAlignment(8);
+
   for (const auto GCRoot : GCRootTable) {
-    OS.emitValue(GCRoot, 8);
+    OS.emitValue(GCRoot, FuncPtrSize);
   }
 }
 
@@ -731,8 +734,7 @@ void CJMetadataInfo::emitGlobalInitFuncTable() {
     if (FuncName != GlobalInitFuncName)
       return;
 
-    // 8: method pc size, 8 bytes
-    OS.emitSymbolValue(FuncBegin, 8);
+    OS.emitSymbolValue(FuncBegin, FuncPtrSize);
     if (IsMachO) {
       FuncName.push_back('\0');
       OS.emitBytes(FuncName);
@@ -753,11 +755,12 @@ void CJMetadataInfo::emitSDKVersion() {
     return;
 
   OS.switchSection(TD[SDKVersionIdx].TableSection);
+
   if (TT.isOSBinFormatMachO())
     // 8: align size, 8 bytes
     OS.emitValueToAlignment(8);
-  // 8: sdk version size, 8 bytes.
-  OS.emitValue(getGVRefSymbol(Version), 8);
+
+  OS.emitValue(getGVRefSymbol(Version), FuncPtrSize);
 }
 
 void CJMetadataInfo::emitStackMaps() {

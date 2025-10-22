@@ -2067,6 +2067,7 @@ ARMTargetLowering::getEffectiveCallingConv(CallingConv::ID CC,
   case CallingConv::ARM_APCS:
   case CallingConv::GHC:
   case CallingConv::CFGuard_Check:
+  case CallingConv::CangjieGC:
     return CC;
   case CallingConv::PreserveMost:
     return CallingConv::PreserveMost;
@@ -2116,6 +2117,8 @@ CCAssignFn *ARMTargetLowering::CCAssignFnForNode(CallingConv::ID CC,
   switch (getEffectiveCallingConv(CC, isVarArg)) {
   default:
     report_fatal_error("Unsupported calling convention");
+  case CallingConv::CangjieGC:
+    return Return ? RetCC_ARM_AAPCS : CC_ARM_AAPCS;
   case CallingConv::ARM_APCS:
     return (Return ? RetCC_ARM_APCS : CC_ARM_APCS);
   case CallingConv::ARM_AAPCS:
@@ -2403,6 +2406,7 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   // Get a count of how many bytes are to be pushed on the stack.
   unsigned NumBytes = CCInfo.getNextStackOffset();
+  unsigned CallFrameSizeForCJFFI = NumBytes;
 
   // SPDiff is the byte offset of the call's argument area from the callee's.
   // Stores to callee stack arguments will be placed in FixedStackSlots offset
@@ -2419,6 +2423,7 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     // popped size 16-byte aligned.
     Align StackAlign = DAG.getDataLayout().getStackAlignment();
     NumBytes = alignTo(NumBytes, StackAlign);
+    CallFrameSizeForCJFFI = NumBytes;
 
     // SPDiff will be negative if this tail call requires more space than we
     // would automatically have in our incoming argument space. Positive if we
@@ -2629,8 +2634,12 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   const TargetMachine &TM = getTargetMachine();
   const Module *Mod = MF.getFunction().getParent();
   const GlobalValue *GV = nullptr;
-  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee))
+  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)){
+    auto *CalleeFunc = dyn_cast<Function>(G->getGlobal());
+    CCInfo.AddAlignedCallFrameSizeMetaDataForCJFFI(
+        const_cast<Function *>(CalleeFunc), CallFrameSizeForCJFFI);
     GV = G->getGlobal();
+  }
   bool isStub =
       !TM.shouldAssumeDSOLocal(*Mod, GV) && Subtarget->isTargetMachO();
 
@@ -11757,6 +11766,14 @@ ARMTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     MI.print(errs());
     llvm_unreachable("Unexpected instr type to insert");
   }
+
+  case TargetOpcode::STATEPOINT:
+    MI.addOperand(*MI.getMF(),
+                  MachineOperand::CreateReg(
+                      ARM::LR, /*isDef*/ true,
+                      /*isImp*/ true, /*isKill*/ false, /*isDead*/ true,
+                      /*isUndef*/ false, /*isEarlyClobber*/ true));
+    return emitPatchPoint(MI, BB);
 
   // Thumb1 post-indexed loads are really just single-register LDMs.
   case ARM::tLDR_postidx: {
@@ -21193,7 +21210,12 @@ Value *ARMTargetLowering::emitLoadLinked(IRBuilderBase &Builder, Type *ValueTy,
         IsAcquire ? Intrinsic::arm_ldaexd : Intrinsic::arm_ldrexd;
     Function *Ldrex = Intrinsic::getDeclaration(M, Int);
 
-    Addr = Builder.CreateBitCast(Addr, Type::getInt8PtrTy(M->getContext()));
+    if (Builder.GetInsertBlock()->getParent()->hasCangjieGC())
+      // It is safe to cast addrspace.
+      Addr = Builder.CreatePointerBitCastOrAddrSpaceCast(
+          Addr, Type::getInt8PtrTy(M->getContext()));
+    else
+      Addr = Builder.CreateBitCast(Addr, Type::getInt8PtrTy(M->getContext()));
     Value *LoHi = Builder.CreateCall(Ldrex, Addr, "lohi");
 
     Value *Lo = Builder.CreateExtractValue(LoHi, 0, "lo");
@@ -21243,7 +21265,11 @@ Value *ARMTargetLowering::emitStoreConditional(IRBuilderBase &Builder,
     Value *Hi = Builder.CreateTrunc(Builder.CreateLShr(Val, 32), Int32Ty, "hi");
     if (!Subtarget->isLittle())
       std::swap(Lo, Hi);
-    Addr = Builder.CreateBitCast(Addr, Type::getInt8PtrTy(M->getContext()));
+    if (Builder.GetInsertBlock()->getParent()->hasCangjieGC())
+      Addr = Builder.CreatePointerBitCastOrAddrSpaceCast(
+          Addr, Type::getInt8PtrTy(M->getContext()));
+    else
+      Addr = Builder.CreateBitCast(Addr, Type::getInt8PtrTy(M->getContext()));
     return Builder.CreateCall(Strex, {Lo, Hi, Addr});
   }
 

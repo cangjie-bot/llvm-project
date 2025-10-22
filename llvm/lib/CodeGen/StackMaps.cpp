@@ -58,6 +58,9 @@ static cl::opt<bool> EnableCompressedBitMap(
     "enable-compressed-bitmap", cl::init(true), cl::Hidden,
     cl::desc("Enable Compressed BitMap"));
 namespace llvm {
+// struct start address alignment
+int32_t OffsetStepSize = 8; 
+
 extern cl::opt<bool> CJPipeline;
 extern cl::opt<bool> EnableStackGrow;
 } // namespace llvm
@@ -68,7 +71,7 @@ enum CJStackMapFormat : uint64_t {
   CJ_STACKMAP_COMPRESSED_BITMAP = 1
 };
 const int32_t RawDataWidth = 31; // for compressed stack map
-const int32_t OffsetStepSize = 8;
+
 // unordered_map<regNo, bitIdx>, regNo can be used to find callee saved reg
 // while bitIdx is used in prologue
 const std::unordered_map<uint32_t, uint32_t> X86CalleeSavedReg = {
@@ -131,6 +134,33 @@ const std::vector<std::string> AArch64Bit2Reg = {
     "x0",  "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",  "x8",  "x9",  "x10",
     "x11", "x12", "x13", "x14", "x15", "x16", "x17", "x18", "x19", "x20", "x21",
     "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "x31"};
+const std::unordered_map<uint32_t, uint32_t> ARMCalleeSavedReg = {
+    // r4 - r11, r14
+    {4, 1 << 0},
+    {5, 1 << 1},
+    {6, 1 << 2},
+    {7, 1 << 3},
+    {8, 1 << 4},
+    {9, 1 << 5},
+    {10, 1 << 6},
+    {11, 1 << 7},
+    {14, 1 << 8},
+    // d8 - d15
+    {264, 1 << 9},
+    {265, 1 << 10},
+    {266, 1 << 11},
+    {267, 1 << 12},
+    {268, 1 << 13},
+    {269, 1 << 14},
+    {270, 1 << 15},
+    {271, 1 << 16},
+};
+const std::vector<std::string> ARMPrologueBit2Reg = {
+    "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r14(lr)",
+    "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15", };
+const std::vector<std::string> ARMBit2Reg = {
+    "r0",  "r1",  "r2",  "r3",  "r4",  "r5",  "r6",  "r7",  "r8",  "r9",  "r10",
+    "r11", "r12", "r13", "r14", "r15"};
 } // namespace
 static uint64_t getConstMetaVal(const MachineInstr &MI, unsigned Idx) {
   assert(MI.getOperand(Idx).isImm() &&
@@ -503,7 +533,7 @@ StackMaps::parseStackPtrOperand(MachineInstr::const_mop_iterator MOI,
     int64_t Size = (++MOI)->getImm();
     Register Reg = (++MOI)->getReg();
     int64_t Imm = (++MOI)->getImm();
-    assert((Imm % OffsetStepSize == 0) && "Stack Offset should be 8 aligned!");
+    assert((Imm % OffsetStepSize == 0) && "Stack Offset align error!");
     Locations.emplace_back(StackMaps::Location::Indirect, Size,
                            getDwarfRegNum(Reg, TRI), Imm);
   } else if (MOI->getImm() == StackMaps::DirectMemRefOp) {
@@ -511,7 +541,7 @@ StackMaps::parseStackPtrOperand(MachineInstr::const_mop_iterator MOI,
     int64_t Imm = (++MOI)->getImm();
     int64_t FI = (++MOI)->getImm();
     (void)FI;
-    assert((Imm % OffsetStepSize == 0) && "Stack Offset should be 8 aligned!");
+    assert((Imm % OffsetStepSize == 0) && "Stack Offset align error!");
     Locations.emplace_back(StackMaps::Location::Indirect, 8,
                            getDwarfRegNum(Reg, TRI), Imm); // 8: pointer size
   } else {
@@ -541,8 +571,8 @@ StackMaps::parseRegOperand(MachineInstr::const_mop_iterator MOI,
   const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(MOI->getReg());
   assert(!MOI->getSubReg() && "Physical subreg still around.");
 
-  // 15, 31: max general regNum of ref for x86_64 and aarch64
-  unsigned MaxRegIdx = isX86_64() ? 15 : 31;
+  // 15, 31: max general regNum of ref, x86_64:15 , aarch64:31 and arm:15
+  unsigned MaxRegIdx = isAArch64() ? 31 : 15;
   unsigned Offset = 0;
   unsigned DwarfRegNum = getDwarfRegNum(MOI->getReg(), TRI);
   unsigned LLVMRegNum = *TRI->getLLVMRegNum(DwarfRegNum, false);
@@ -1206,15 +1236,16 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
   unsigned CSIdxEnd = 0;
   const Triple TT(AP.MMI->getModule()->getTargetTriple());
   bool IsWindows = TT.isOSWindows();
+  OffsetStepSize = TT.isARM() ? 4 : 8;
   for (auto const &FR : FnInfos) {
     MCSymbol *StackmapFunction =
         OutContext.getOrCreateSymbol(".Lstack_map." + FR.first->getName());
     OS.emitLabel(StackmapFunction);
     CSIdxEnd = CSIdxStart + FR.second.RecordCount;
     CompressedInfo Data(
-        (IsWindows && isX86_64())
-            ? X86WinCalleeSavedReg
-            : (isX86_64() ? X86CalleeSavedReg : AArch64CalleeSavedReg));
+        (IsWindows && isX86_64()) ? X86WinCalleeSavedReg
+            : isX86_64() ? X86CalleeSavedReg 
+            : isAArch64() ? AArch64CalleeSavedReg : ARMCalleeSavedReg);
     prepareCompressedData(Data, FR.second, CSIdxStart, CSIdxEnd);
     emitCangjieCompressedData(OS, Data);
     CSIdxStart = CSIdxEnd;
@@ -1555,10 +1586,11 @@ void StackMaps::emitCangjieCompressedData(MCStreamer &OS,
   bool IsWindows = TT.isOSWindows();
   DataEncoder Writer(
       OS, Data,
-      (IsWindows && isX86_64())
-          ? X86WinPrologueBit2Reg
-          : (isX86_64() ? X86PrologueBit2Reg : AArch64PrologueBit2Reg),
-      isX86_64() ? X86Bit2Reg : AArch64Bit2Reg);
+      ((IsWindows && isX86_64()) ? X86WinPrologueBit2Reg
+          : isX86_64() ? X86PrologueBit2Reg 
+          : isAArch64() ? AArch64PrologueBit2Reg : ARMPrologueBit2Reg),
+      (isX86_64() ? X86Bit2Reg 
+          : isAArch64() ? AArch64Bit2Reg : ARMBit2Reg));
   Writer.emitPrologueAndStackMapItemHeader();
   // emit PC breaks the consistency of the emit buffer
   Writer.emitStackMapItem();

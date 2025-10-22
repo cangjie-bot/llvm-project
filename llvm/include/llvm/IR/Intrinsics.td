@@ -438,14 +438,14 @@ def int_cj_gcwrite_ref              : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptrgcptr_ty],
                                                 [IntrArgMemOnly, NoCapture<ArgIndex<1>>, NoCapture<ArgIndex<2>>]>;
 def int_cj_gcwrite_struct           : Intrinsic<[],
-                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyptr_ty, llvm_i64_ty],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyptr_ty, llvm_anyint_ty],
                                                 [IntrArgMemOnly, NoCapture<ArgIndex<1>>, NoCapture<ArgIndex<2>>, NoAlias<ArgIndex<1>>,
                                                  NoAlias<ArgIndex<2>>, WriteOnly<ArgIndex<1>>, ReadOnly<ArgIndex<2>>]>;
 def int_cj_gcwrite_static_ref       : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_ptrgcptr_ty],
                                                 [IntrArgMemOnly, NoCapture<ArgIndex<1>>]>;
 def int_cj_gcwrite_static_struct    : Intrinsic<[],
-                                                [llvm_ptr_ty, llvm_ptr_ty, llvm_i64_ty],
+                                                [llvm_ptr_ty, llvm_ptr_ty, llvm_anyint_ty],
                                                 [IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>,
                                                  NoAlias<ArgIndex<0>>, NoAlias<ArgIndex<1>>, WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<1>>]>;
 def int_cj_gcread_ref               : Intrinsic<[llvm_gcptr_ty],
@@ -456,22 +456,22 @@ def int_cj_gcread_weakref           : Intrinsic<[llvm_gcptr_ty],
                                                 [IntrReadMem, IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>]>;
 
 def int_cj_gcread_struct            : Intrinsic<[],
-                                                [llvm_ptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty],
+                                                [llvm_ptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyint_ty],
                                                 [IntrArgMemOnly, NoCapture<ArgIndex<1>>, NoCapture<ArgIndex<2>>, NoAlias<ArgIndex<1>>,
                                                  NoAlias<ArgIndex<2>>, WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<2>>]>;
 def int_cj_gcread_static_ref        : Intrinsic<[llvm_gcptr_ty],
                                                 [llvm_ptrgcptr_ty],
                                                 [IntrReadMem, IntrArgMemOnly, NoCapture<ArgIndex<0>>]>;
 def int_cj_gcread_static_struct     : Intrinsic<[],
-                                                [llvm_ptr_ty, llvm_ptr_ty, llvm_i64_ty],
+                                                [llvm_ptr_ty, llvm_ptr_ty, llvm_anyint_ty],
                                                 [IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>,
                                                  NoAlias<ArgIndex<0>>, NoAlias<ArgIndex<1>>, WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<1>>]>;
 def int_cj_array_copy_ref           : Intrinsic<[],
-                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyint_ty]>;
 def int_cj_array_copy_struct        : Intrinsic<[],
-                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyint_ty]>;
 def int_cj_copy_struct_field        : Intrinsic<[],
-                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyint_ty]>;
 def int_cj_cross_access_barrier    : Intrinsic<[], [llvm_i64_ty]>;
 def int_cj_get_exported_ref        : Intrinsic<[llvm_gcptr_ty],
                                                 [llvm_i64_ty]>;
@@ -506,7 +506,7 @@ def int_cj_division_check_urem                 : Intrinsic<[llvm_anyint_ty],
                                                            [llvm_anyint_ty, llvm_anyint_ty],
                                                            [Throws]>;
 def int_cj_acquire_rawdata                     : Intrinsic<[llvm_ptr_ty],
-                                                           [llvm_gcptr_ty, llvm_i64_ty]>;
+                                                           [llvm_gcptr_ty, llvm_ptr_ty]>;
 def int_cj_release_rawdata                     : Intrinsic<[],
                                                            [llvm_gcptr_ty, llvm_ptr_ty, llvm_i32_ty]>;
 def int_cj_post_throw_exception                : Intrinsic<[llvm_gcptr_ty],
@@ -522,25 +522,25 @@ def int_cj_pre_initialize_package              : Intrinsic<[],
                                                            [llvm_ptr_ty]>;
 def int_cj_fill_in_stack_trace                 : Intrinsic<[llvm_gcptr_ty],
                                                            [llvm_ptr_ty, llvm_gcptr_ty]>;
-def int_cj_get_real_heap_size                  : Intrinsic<[llvm_i64_ty],
+def int_cj_get_real_heap_size                  : Intrinsic<[llvm_anyint_ty],
                                                            []>;
-def int_cj_get_allocated_heap_size             : Intrinsic<[llvm_i64_ty],
+def int_cj_get_allocated_heap_size             : Intrinsic<[llvm_anyint_ty],
                                                            []>;
-def int_cj_get_max_heap_size                   : Intrinsic<[llvm_i64_ty],
+def int_cj_get_max_heap_size                   : Intrinsic<[llvm_anyint_ty],
                                                            []>;
 def int_cj_dump_heap_data                      : Intrinsic<[llvm_i1_ty],
                                                            [llvm_i32_ty]>;
-def int_cj_get_thread_number                   : Intrinsic<[llvm_i64_ty],
+def int_cj_get_thread_number                   : Intrinsic<[llvm_anyint_ty],
                                                            []>;
-def int_cj_get_blocking_thread_number          : Intrinsic<[llvm_i64_ty],
+def int_cj_get_blocking_thread_number          : Intrinsic<[llvm_anyint_ty],
                                                            []>;
-def int_cj_get_native_thread_number            : Intrinsic<[llvm_i64_ty],
+def int_cj_get_native_thread_number            : Intrinsic<[llvm_anyint_ty],
                                                            []>;
-def int_cj_get_gc_count                        : Intrinsic<[llvm_i64_ty],
+def int_cj_get_gc_count                        : Intrinsic<[llvm_anyint_ty],
                                                            []>;
 def int_cj_get_gc_time_us                      : Intrinsic<[llvm_i64_ty],
                                                            []>;
-def int_cj_get_gc_freed_size                   : Intrinsic<[llvm_i64_ty],
+def int_cj_get_gc_freed_size                   : Intrinsic<[llvm_anyint_ty],
                                                            []>;
 def int_cj_start_cpu_profiling                 : Intrinsic<[llvm_i1_ty],
                                                            []>;
@@ -620,7 +620,7 @@ def int_cj_malloc_array_generic     : Intrinsic<[llvm_gcptr_ty],
                                                 [llvm_ptr_ty, llvm_i64_ty],
                                                 [Throws]>;
 def int_cj_array_copy_generic       : Intrinsic<[],
-                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyint_ty]>;
 def int_cj_gcwrite_generic_payload  : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_ptr_ty, llvm_i32_ty]>;
 

@@ -270,6 +270,10 @@ def CSR_FPRegs : CalleeSavedRegs<(add (sequence "D%u", 0, 31))>;
 def CSR_AAPCS : CalleeSavedRegs<(add LR, R11, R10, R9, R8, R7, R6, R5, R4,
                                      (sequence "D%u", 15, 8))>;
 
+def CSR_CangjieGC
+    : CalleeSavedRegs<(add LR, SP, (sequence "R%u", 12, 1),
+                      (sequence "D%u", 31, 0))>;
+
 // The Windows Control Flow Guard Check function preserves the same registers as
 // AAPCS, and also preserves all floating point registers.
 def CSR_Win_AAPCS_CFGuard_Check : CalleeSavedRegs<(add LR, R11, R10, R9, R8, R7,

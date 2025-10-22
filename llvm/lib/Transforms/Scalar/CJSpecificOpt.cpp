@@ -380,7 +380,9 @@ static bool runOnFunction(Function &F, unsigned OptLevel) {
   Changed |= markfastCall(F);
   Changed |= deadAllocaElimination(F);
   Changed |= replaceInvalidAddrpaceCast(F);
-  Changed |= insertStackCheck(F);
+  const Triple TT(F.getParent()->getTargetTriple());
+  if (!TT.isARM())
+    Changed |= insertStackCheck(F);
   Changed |= insertResetFPState(F, OptLevel);
   return Changed;
 }
