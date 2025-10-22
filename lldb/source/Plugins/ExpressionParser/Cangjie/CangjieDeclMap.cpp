@@ -324,7 +324,7 @@ std::vector<lldb_private::CangjieDeclMap::CompilerTypeInfo> CangjieDeclMap::Look
                                 sym_ctx.GetFunctionName(Mangled::NamePreference::ePreferMangled).AsCString());
       tempInfo.SetDeclInfo(DeclKind::FuncDecl, funcName, true);
       if (log) {
-        LLDB_LOGF(log, "add func [%s] 's type %s to m_parsed_functions. \n",
+        LLDB_LOGF(log, "lookup add func [%s] 's type %s to m_parsed_functions. \n",
                   ConstString(name).AsCString(), type.GetTypeName().AsCString());
       }
       result.emplace_back(tempInfo);
@@ -689,7 +689,7 @@ CompilerType CangjieDeclMap::GetSuperClassDefinedType(CompilerType& type) {
 }
 
 void CangjieDeclMap::SetGenericDeclBySubclass(Ptr<AST::RefType> refType, std::string name,
-                                              Ptr<AST::ClassLikeDecl>& subclass) {
+                                              Ptr<AST::InheritableDecl>& subclass) {
   if (!subclass->generic) {
     return;
   }
@@ -731,7 +731,7 @@ void CangjieDeclMap::ReplaceTypeDefWithInterfaceType(CompilerType& type) {
   }
 }
 
-void CangjieDeclMap::CreateClassLikeParentDecls(CompilerType type, Ptr<AST::ClassLikeDecl> id) {
+void CangjieDeclMap::CreateClassLikeParentDecls(CompilerType type, Ptr<AST::InheritableDecl> id) {
   Log *log = GetLog(LLDBLog::Expressions);
   for (size_t i = 0; i < type.GetNumDirectBaseClasses(); i++) {
     auto superType = type.GetDirectBaseClassAtIndex(i, nullptr);
@@ -904,6 +904,7 @@ void CangjieDeclMap::CreateStructMemberDecls(CompilerType type, Ptr<AST::Decl> &
   if (!sd->body->decls.empty()) {
     return;
   }
+  CreateClassLikeParentDecls(type, sd);
   CreateMemberDecls(type, decl, sd->body->decls);
 }
 
