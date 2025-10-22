@@ -270,33 +270,36 @@ Ptr<Ty> CangjieCompilerInstance::GetTyFromASTType(Decl& decl, const std::vector<
 {
   switch (decl.astKind) {
     case ASTKind::CLASS_DECL: {
-      auto cd = StaticAs<ASTKind::CLASS_DECL>(&decl);
+      auto cd = As<ASTKind::CLASS_DECL>(&decl);
       for (auto& it : cd->inheritedTypes) {
         CheckTypeAndAddTy(it);
       }
       return typeManager->GetClassTy(*cd, typeArgs);
     }
     case ASTKind::INTERFACE_DECL: {
-      auto id = StaticAs<ASTKind::INTERFACE_DECL>(&decl);
+      auto id = As<ASTKind::INTERFACE_DECL>(&decl);
       for (auto& it : id->inheritedTypes) {
         CheckTypeAndAddTy(it);
       }
       return typeManager->GetInterfaceTy(*id, typeArgs);
     }
     case ASTKind::STRUCT_DECL: {
-      auto sd = StaticAs<ASTKind::STRUCT_DECL>(&decl);
+      auto sd = As<ASTKind::STRUCT_DECL>(&decl);
+      for (auto& it : sd->inheritedTypes) {
+        CheckTypeAndAddTy(it);
+      }      
       return typeManager->GetStructTy(*sd, typeArgs);
     }
     case ASTKind::ENUM_DECL: {
-      auto ed = StaticAs<ASTKind::ENUM_DECL>(&decl);
+      auto ed = As<ASTKind::ENUM_DECL>(&decl);
       return typeManager->GetEnumTy(*ed, typeArgs);
     }
     case ASTKind::TYPE_ALIAS_DECL: {
-      auto tad = StaticAs<ASTKind::TYPE_ALIAS_DECL>(&decl);
+      auto tad = As<ASTKind::TYPE_ALIAS_DECL>(&decl);
       return typeManager->GetTypeAliasTy(*tad, typeArgs);
     }
     case ASTKind::GENERIC_PARAM_DECL: {
-      auto gpd = StaticAs<ASTKind::GENERIC_PARAM_DECL>(&decl);
+      auto gpd = As<ASTKind::GENERIC_PARAM_DECL>(&decl);
       return typeManager->GetGenericsTy(*gpd);
     }
     default:
@@ -381,7 +384,7 @@ void CangjieCompilerInstance::CreateTyAndDefaultCtor(
 {
   switch (decl.astKind) {
     case ASTKind::CLASS_DECL: {
-      auto cd = StaticAs<ASTKind::CLASS_DECL>(&decl);
+      auto cd = As<ASTKind::CLASS_DECL>(&decl);
       for (auto& it : cd->inheritedTypes) {
         if (it->astKind == AST::ASTKind::REF_TYPE && it->GetTypeArgs().empty()) {
           continue;
@@ -397,20 +400,29 @@ void CangjieCompilerInstance::CreateTyAndDefaultCtor(
       break;
     }
     case ASTKind::INTERFACE_DECL: {
-      auto id = StaticAs<ASTKind::INTERFACE_DECL>(&decl);
+      auto id = As<ASTKind::INTERFACE_DECL>(&decl);
       decl.ty = typeManager->GetInterfaceTy(*id, typeArgs);
       UpdateDeclTyByGeneric(&decl);
       break;
     }
     case ASTKind::STRUCT_DECL: {
-      auto sd = StaticAs<ASTKind::STRUCT_DECL>(&decl);
+      auto sd = As<ASTKind::STRUCT_DECL>(&decl);
+      for (auto& it : sd->inheritedTypes) {
+        if (it->astKind == AST::ASTKind::REF_TYPE && it->GetTypeArgs().empty()) {
+          continue;
+        }
+        auto rt = RawStaticCast<AST::RefType *>(it.get());
+        if (rt->ref.target) {
+          CreateTyAndDefaultCtor(*rt->ref.target, {});
+        }
+      }      
       decl.ty = typeManager->GetStructTy(*sd, typeArgs);
       UpdateDeclTyByGeneric(&decl);
       CreateDefaultCtor(decl);
       break;
     }
     case ASTKind::ENUM_DECL: {
-      auto ed = StaticAs<ASTKind::ENUM_DECL>(&decl);
+      auto ed = As<ASTKind::ENUM_DECL>(&decl);
       decl.ty = typeManager->GetEnumTy(*ed, typeArgs);
       UpdateDeclTyByGeneric(&decl);
       for (size_t i = 0; i < ed->constructors.size(); i++) {
@@ -420,22 +432,22 @@ void CangjieCompilerInstance::CreateTyAndDefaultCtor(
       break;
     }
     case ASTKind::TYPE_ALIAS_DECL: {
-      auto tad = StaticAs<ASTKind::TYPE_ALIAS_DECL>(&decl);
+      auto tad = As<ASTKind::TYPE_ALIAS_DECL>(&decl);
       decl.ty = typeManager->GetTypeAliasTy(*tad, typeArgs);
       break;
     }
     case ASTKind::GENERIC_PARAM_DECL: {
-      auto gpd = StaticAs<ASTKind::GENERIC_PARAM_DECL>(&decl);
+      auto gpd = As<ASTKind::GENERIC_PARAM_DECL>(&decl);
       decl.ty = typeManager->GetGenericsTy(*gpd);
       break;
     }
     case ASTKind::FUNC_DECL: {
-      auto fd = StaticAs<ASTKind::FUNC_DECL>(&decl);
+      auto fd = As<ASTKind::FUNC_DECL>(&decl);
       CreateFuncdeclTy(*fd);
       break;
     }
     case ASTKind::VAR_DECL: {
-      auto vd = StaticAs<ASTKind::VAR_DECL>(&decl);
+      auto vd = As<ASTKind::VAR_DECL>(&decl);
       UpdateDeclTyByGeneric(&decl);
       if (vd->type) {
         CheckTypeAndAddTy(vd->type);
@@ -462,7 +474,7 @@ std::vector<OwnedPtr<FuncArg>> CangjieCompilerInstance::CreateFuncArgsFromCaptur
   std::vector<OwnedPtr<FuncArg>> funcargs;
   for (auto& decl: m_tryExpr_result->curFile->decls) {
     if (decl->astKind == AST::ASTKind::CLASS_DECL && decl->identifier == ident) {
-      auto cd = StaticAs<AST::ASTKind::CLASS_DECL>(decl.get());
+      auto cd = As<AST::ASTKind::CLASS_DECL>(decl.get());
       for (auto& d : cd->body->decls) {
         if (d->astKind == AST::ASTKind::VAR_DECL &&
             d->identifier.Val().find("$Captured") == std::string::npos) {
