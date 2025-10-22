@@ -162,8 +162,8 @@ private:
     void CreateGenericConstraints(Ptr<AST::Decl>& decl, CompilerType& type);
     std::set<CompilerType> GetGenericTypeWithConstraints(CompilerType& type);
     void CreateStructMemberDecls(CompilerType type, Ptr<AST::Decl> &decl);
-    void CreateClassLikeParentDecls(CompilerType type, Ptr<AST::ClassLikeDecl> decl);
-    void SetGenericDeclBySubclass(Ptr<AST::RefType> refType, std::string name,  Ptr<AST::ClassLikeDecl>& base);
+    void CreateClassLikeParentDecls(CompilerType type, Ptr<AST::InheritableDecl> decl);
+    void SetGenericDeclBySubclass(Ptr<AST::RefType> refType, std::string name,  Ptr<AST::InheritableDecl>& base);
     CompilerType GetSuperClassDefinedType(CompilerType& type);
     void SetMemberDeclParent(Ptr<AST::FuncDecl> funcdecl, Ptr<AST::Decl> decl);
     void CreateInterfaceMemberDecls(Ptr<AST::Decl> &decl, CompilerType type);
