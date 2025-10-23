@@ -442,11 +442,17 @@ void CJMetadataInfo::emitStackTraceInfo(const MCSymbol *FuncSym,
   OS.emitValue(getOrInsertStrPoolOffset(MethodNameStrIndex, DescSym), StrSize);
   OS.emitValue(getOrInsertStrPoolOffset(DirStrIndex, DescSym), StrSize);
   OS.emitValue(getOrInsertStrPoolOffset(FileNameStrIndex, DescSym), StrSize);
-  OS.emitValue(
-      MCBinaryExpr::createSub(
-          MCSymbolRefExpr::create(StrPoolDictOffsetsSym, AP.OutContext),
-          MCSymbolRefExpr::create(DescSym, AP.OutContext), AP.OutContext),
-      StrSize);
+
+  if (MethodCompressedCode.empty() && DirCompressedCode.empty() &&
+      FileCompressedCode.empty()) {
+    OS.emitIntValue(0, 4);
+  } else {
+    OS.emitValue(
+        MCBinaryExpr::createSub(
+            MCSymbolRefExpr::create(StrPoolDictOffsetsSym, AP.OutContext),
+            MCSymbolRefExpr::create(DescSym, AP.OutContext), AP.OutContext),
+        4);
+  }
   return;
 }
 
@@ -705,6 +711,9 @@ void CJMetadataInfo::emitGlobalInitFuncTable() {
     return;
 
   OS.switchSection(TD[GlobalInitFuncIdx].TableSection);
+  if (TT.isOSBinFormatMachO())
+    // 8: align size, 8 bytes
+    OS.emitValueToAlignment(8);
   NamedMDNode *PkgInitFuncMD = M->getNamedMetadata("pkg_init_func");
   std::string GlobalInitFuncName;
   if (PkgInitFuncMD != nullptr) {
