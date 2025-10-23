@@ -592,10 +592,6 @@ void CJMetadataInfo::emitGCRoots() {
 
   OS.switchSection(TD[GCRootsTableIdx].TableSection);
 
-  if (TT.isOSBinFormatMachO())
-    // 8: align size, 8 bytes
-    OS.emitValueToAlignment(8);
-
   for (const auto GCRoot : GCRootTable) {
     OS.emitValue(GCRoot, FuncPtrSize);
   }

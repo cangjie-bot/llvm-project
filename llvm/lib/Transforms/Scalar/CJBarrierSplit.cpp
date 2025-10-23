@@ -328,6 +328,7 @@ public:
       ReadRef->setMetadata(LLVMContext::MD_untrusted_ref,
                            MDNode::get(ReadRef->getContext(), {}));
     }
+
     updateTBAA(DL, ReadRef);
 
     ReadRef->setDebugLoc(Barrier->getDebugLoc());

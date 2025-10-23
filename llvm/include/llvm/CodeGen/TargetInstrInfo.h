@@ -342,6 +342,10 @@ public:
     return false;
   }
 
+  virtual bool isADDXrr(const MachineInstr &MI) const {
+    return false;
+  }
+
   virtual bool isORRXri(const MachineInstr &MI) const {
     return false;
   }

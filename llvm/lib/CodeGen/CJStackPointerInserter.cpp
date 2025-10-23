@@ -349,7 +349,8 @@ public:
           Register DstReg = getLoadReg(MI);
           Tmp.insert(getSPData(DstReg));
         }
-      } else if (TII->isLEA64r(MI) || TII->isADDXri(MI) || TII->isORRXri(MI)) {
+      } else if (TII->isLEA64r(MI) || TII->isADDXri(MI) || TII->isADDXri(MI) || 
+                 TII->isORRXri(MI)) {
         MachineOperand &RegMO = MI.getOperand(0);
         MachineOperand &SrcMO = MI.getOperand(1);
         if (SrcMO.isFI()) {
