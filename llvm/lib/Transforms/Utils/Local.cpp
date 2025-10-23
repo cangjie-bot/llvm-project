@@ -2659,6 +2659,7 @@ void llvm::copyMetadataForLoad(LoadInst &Dest, const LoadInst &Source) {
     case LLVMContext::MD_intro_type:
     case LLVMContext::MD_func_table:
     case LLVMContext::MD_untrusted_ref:
+    case LLVMContext::MD_obj_type:
       // All of these directly apply.
       Dest.setMetadata(ID, N);
       break;
