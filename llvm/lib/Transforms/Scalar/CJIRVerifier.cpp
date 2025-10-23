@@ -321,11 +321,10 @@ public:
       if (auto *II = dyn_cast<IntrinsicInst>(U))
         if (II->getIntrinsicID() == Intrinsic::cj_blackhole)
           return;
+      if (auto *II = dyn_cast<IntrinsicInst>(I.getOperand(0)))
+        if (II->getIntrinsicID() == Intrinsic::cj_blackhole)
+          return;
     }
-
-    if (auto *II = dyn_cast<IntrinsicInst>(I.getOperand(0)))
-      if (II->getIntrinsicID() == Intrinsic::cj_blackhole)
-        return;
 
     for (const User *U : I.users()) {
       Assert(isa<StoreInst>(U) || isa<CallBase>(U),

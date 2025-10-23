@@ -421,17 +421,12 @@ void CangjieIRForTarget::SetPlatformInfo() {
       m_module->setDataLayout("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128");
     }
   }
-  if (ostype == llvm::Triple::Darwin || ostype == llvm::Triple::MacOSX) {
+  if (ostype == llvm::Triple::Darwin) {
     if (archtype == llvm::Triple::ArchType::aarch64) {
-      m_module->setTargetTriple(arch.GetTriple().str().c_str());
       m_module->setDataLayout("e-m:o-i64:64-i128:128-n32:64-S128");
     } else if (archtype == llvm::Triple::ArchType::x86_64) {
       m_module->setDataLayout("e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128");
     }
-  }
-  if (ostype == llvm::Triple::IOS && archtype == llvm::Triple::ArchType::aarch64) {
-    m_module->setTargetTriple(arch.GetTriple().str().c_str());
-    m_module->setDataLayout("e-m:o-i64:64-i128:128-n32:64-S128-Fn32");
   }
 }
 

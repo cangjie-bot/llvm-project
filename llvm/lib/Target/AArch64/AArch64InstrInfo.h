@@ -68,8 +68,6 @@ public:
 
   bool isADDXri(const MachineInstr &MI) const override;
 
-  bool isADDXrr(const MachineInstr &MI) const override;
-
   bool isORRXri(const MachineInstr &MI) const override;
 
   /// Does this instruction set its full destination register to zero?

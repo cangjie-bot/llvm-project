@@ -1017,8 +1017,7 @@ void StructLiveAnalysis::addGCFieldsByValue(Value *V,
     if (AI->getAllocatedType()->isStructTy()) {
       assert(AllocaData.StructLayoutGCPtrMap.count(Base) &&
              "StructLayoutGCPtrMap lacks AllocaInst information.");
-      if (Field->Offset == -1 ||
-          AllocaData.StructLayoutGCPtrMap[Base][Field->Offset]) {
+      if (AllocaData.StructLayoutGCPtrMap[Base][Field->Offset]) {
         Set.insert(Field);
       }
     } else if (AI->getAllocatedType()->isPointerTy()) {

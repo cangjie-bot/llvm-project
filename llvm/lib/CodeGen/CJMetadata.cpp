@@ -443,17 +443,11 @@ void CJMetadataInfo::emitStackTraceInfo(const MCSymbol *FuncSym,
   OS.emitValue(getOrInsertStrPoolOffset(MethodNameStrIndex, DescSym), StrSize);
   OS.emitValue(getOrInsertStrPoolOffset(DirStrIndex, DescSym), StrSize);
   OS.emitValue(getOrInsertStrPoolOffset(FileNameStrIndex, DescSym), StrSize);
-
-  if (MethodCompressedCode.empty() && DirCompressedCode.empty() &&
-      FileCompressedCode.empty()) {
-    OS.emitIntValue(0, 4);
-  } else {
-    OS.emitValue(
-        MCBinaryExpr::createSub(
-            MCSymbolRefExpr::create(StrPoolDictOffsetsSym, AP.OutContext),
-            MCSymbolRefExpr::create(DescSym, AP.OutContext), AP.OutContext),
-        4);
-  }
+  OS.emitValue(
+      MCBinaryExpr::createSub(
+          MCSymbolRefExpr::create(StrPoolDictOffsetsSym, AP.OutContext),
+          MCSymbolRefExpr::create(DescSym, AP.OutContext), AP.OutContext),
+      StrSize);
   return;
 }
 
@@ -591,6 +585,10 @@ void CJMetadataInfo::emitGCRoots() {
     return;
 
   OS.switchSection(TD[GCRootsTableIdx].TableSection);
+
+  if (TT.isOSBinFormatMachO())
+    // 8: align size, 8 bytes
+    OS.emitValueToAlignment(8);
 
   for (const auto GCRoot : GCRootTable) {
     OS.emitValue(GCRoot, FuncPtrSize);
@@ -748,6 +746,11 @@ void CJMetadataInfo::emitSDKVersion() {
     return;
 
   OS.switchSection(TD[SDKVersionIdx].TableSection);
+
+  if (TT.isOSBinFormatMachO())
+    // 8: align size, 8 bytes
+    OS.emitValueToAlignment(8);
+
   OS.emitValue(getGVRefSymbol(Version), FuncPtrSize);
 }
 

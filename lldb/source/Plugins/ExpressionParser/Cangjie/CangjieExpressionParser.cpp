@@ -117,22 +117,12 @@ bool CangjieExpressionParser::Parse(ExecutionContext &exeCtx, const std::string 
     LLDB_LOGF(log, "CANGJIE_HOME is not set!");
     return false;
   }
-  auto cangjie_path = getenv("CANGJIE_PATH");
-  if (cangjie_path != nullptr) {
-    std::stringstream sstream(cangjie_path);
-    std::string tmp_path;
-    while (std::getline(sstream, tmp_path, ':')) {
-      LLDB_LOGF(log, "add [%s] to env CANGJIE_PATH\n", tmp_path.c_str());
-      invocation->globalOptions.environment.cangjiePaths.emplace_back(tmp_path);
-    }
-  }
   Cangjie::Triple::Info target_triple;
   ArchSpec target_arch = exeCtx.GetTargetSP()->GetArchitecture();
   auto triple = target_arch.GetTriple();
   SetTripleInfoIfNeed(target_arch, target_triple);
-  LLDB_LOGF(log, "using target triple %s %s %s %s %s\n", triple.str().c_str(),
-            triple.getArchName().data(), triple.getVendorName().data(),
-            triple.getOSName().data(), triple.getEnvironmentName().data());
+  LLDB_LOGF(log, "using target triple %s %s\n", triple.str().c_str(),
+            target_arch.GetTriple().getEnvironmentName().data());
   invocation->globalOptions.target = target_triple;
   invocation->globalOptions.environment.cangjieHome = cangjie_home;
   invocation->globalOptions.srcFiles.push_back(cangjieExprTempFile);

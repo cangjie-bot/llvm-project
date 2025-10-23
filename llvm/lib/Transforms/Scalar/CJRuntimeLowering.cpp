@@ -764,7 +764,8 @@ private:
       Func->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
     RTFuncMap[Callee] = Func;
     if (CI->getIntrinsicID() == Intrinsic::cj_blackhole) {
-      Func->addFnAttr(Attribute::ReadOnly);
+      Func->addFnAttr(Attribute::ReadNone);
+      Func->setCallingConv(CallingConv::AnyReg);
     }
     return Func;
   }
@@ -965,8 +966,12 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
     case Intrinsic::cj_set_gc_threshold:
     case Intrinsic::cj_post_throw_exception:
     case Intrinsic::cj_register_implicit_exception_raisers:
+      Lowering.replaceWithRuntimeFunc(CI, true, false);
+      Changed = true;
+      break;
     case Intrinsic::cj_blackhole:
       Lowering.replaceWithRuntimeFunc(CI, true, false);
+      CI->setCallingConv(CallingConv::AnyReg);
       Changed = true;
       break;
     case Intrinsic::cj_cross_access_barrier:
