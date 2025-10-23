@@ -25,7 +25,7 @@ extern std::unique_ptr<class LinkerDriver> driver;
 class LinkerDriver {
 public:
   void linkerMain(ArrayRef<const char *> args);
-  void addFile(StringRef path, bool withLOption);
+  void addFile(StringRef path, bool withLOption, bool exportSymbol = false);
   void addLibrary(StringRef name);
 
 private:
