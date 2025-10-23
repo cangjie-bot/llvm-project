@@ -190,6 +190,10 @@ defm execute_only: BB<"execute-only",
     "Mark executable sections unreadable",
     "Mark executable sections readable (default)">;
 
+defm export_bc_only: Eq<"export-bc", "export bc symbols only">, MetaVarName<"file">;
+
+def compile_as_exe: Flag<["--"], "compile-as-exe">, HelpText<"hidden all symbol">;
+
 defm export_dynamic: B<"export-dynamic",
     "Put symbols in the dynamic symbol table",
     "Do not put symbols in the dynamic symbol table (default)">;
