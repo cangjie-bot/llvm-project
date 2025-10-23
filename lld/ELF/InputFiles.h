@@ -318,13 +318,14 @@ private:
 class BitcodeFile : public InputFile {
 public:
   BitcodeFile(MemoryBufferRef m, StringRef archiveName,
-              uint64_t offsetInArchive, bool lazy);
+              uint64_t offsetInArchive, bool lazy, bool ExportSym);
   static bool classof(const InputFile *f) { return f->kind() == BitcodeKind; }
   template <class ELFT> void parse();
   void parseLazy();
   void postParse();
   std::unique_ptr<llvm::lto::InputFile> obj;
   std::vector<bool> keptComdats;
+  bool ExportSymbols;
 };
 
 // .so file.
