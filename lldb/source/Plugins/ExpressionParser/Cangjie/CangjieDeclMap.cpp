@@ -1525,7 +1525,7 @@ void CangjieDeclMap::LookUpTypeByName(const std::string& name, std::vector<Compi
   }
   // Find structDecl, enumDecl, classDecl, interfaceDecl.
   auto userDefinedType = LookUpType(name);
-  if (!userDefinedType.IsValid()) {
+  if (!userDefinedType.IsValid() || userDefinedType.GetTypeName().GetStringRef().contains("MapleRuntime::MemMap")) {
     userDefinedType = GetGenericTypeByPartName(name);
     if (userDefinedType.IsValid()) {
       LLDB_LOGF(log, "[Generic]: find type decl with generic param by part name[%s] -> [%s]. \n",
