@@ -935,12 +935,48 @@ static void declareRuntimeFunc(Module &M) {
   M.declareCJRuntimeFunc(FinalizerStr, FinalizerFT, true);
 }
 
+// The following instruction is redundant because the runtime has already done
+// it when the catch type is unique.
+//  landing_pad_bb:
+//    ...
+//    %x = call i1 @llvm.cj.is.subtype(...)
+//    br i1 %x, label %succ0, %succ1
+static bool simplifyLandingPad(SmallVectorImpl<LandingPadInst *> &LPS) {
+  if (LPS.empty())
+    return false;
+  bool Changed = false;
+  for (LandingPadInst *LP : LPS) {
+    // Catch type should be unique.
+    if (LP->getNumOperands() != 1 ||
+        isa<ConstantPointerNull>(LP->getOperand(0)))
+      continue;
+    auto *BI = dyn_cast<BranchInst>(LP->getParent()->getTerminator());
+    if (!BI || !BI->isConditional())
+      continue;
+    auto *CB = dyn_cast<CallBase>(BI->getCondition());
+    if (!CB || !CB->getCalledFunction()->hasName() ||
+        CB->getCalledFunction()->getName() !=
+            RuntimeMap.at(Intrinsic::cj_is_subtype))
+      continue;
+    CB->replaceAllUsesWith(
+        ConstantInt::getTrue(Type::getInt1Ty(LP->getContext())));
+    Changed = true;
+  }
+  return Changed;
+}
+
 static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
   bool Changed = false;
   EscapeScope ES(F);
+  SmallVector<LandingPadInst *, 8> LPS;
 
   for (auto I = inst_begin(F); I != inst_end(F);) {
-    auto *CI = dyn_cast<CallBase>(&*I++);
+    Instruction *Inst = &*I++;
+    if (auto *LPI = dyn_cast<LandingPadInst>(Inst)) {
+      LPS.push_back(LPI);
+      continue;
+    }
+    auto *CI = dyn_cast<CallBase>(Inst);
     if (!CI || CI->getCalledFunction() == nullptr) {
       continue;
     }
@@ -1061,6 +1097,7 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
     }
   }
   Lowering.finishAll();
+  Changed |= simplifyLandingPad(LPS);
   return Changed;
 }
 
