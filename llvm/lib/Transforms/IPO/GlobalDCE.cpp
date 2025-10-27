@@ -573,7 +573,7 @@ CangjieVFE::scanVTable(GlobalVariable &GV) {
     // O is typeinfo
     auto *TT = cast<GlobalVariable>(O)
                    ->getInitializer()
-                   ->getOperand(CalssInfoFieldType::CIT_GENERIC_FROM)
+                   ->getOperand(ClassInfoFieldType::CIT_GENERIC_FROM)
                    ->stripPointerCasts();
     O = isa<ConstantPointerNull>(TT) ? O : TT;
   }

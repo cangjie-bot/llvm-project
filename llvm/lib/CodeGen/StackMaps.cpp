@@ -59,7 +59,8 @@ static cl::opt<bool> EnableCompressedBitMap(
     cl::desc("Enable Compressed BitMap"));
 namespace llvm {
 // struct start address alignment
-int32_t OffsetStepSize = 8; 
+int32_t OffsetStepSize = 8;
+int32_t FuncPtrSize = 8;
 
 extern cl::opt<bool> CJPipeline;
 extern cl::opt<bool> EnableStackGrow;
@@ -371,8 +372,9 @@ void StackMaps::processArrayType(ArrayType *AT, int64_t RefOffset,
   if (isa<PointerType>(ElementType)) {
     for (unsigned Index = 0; Index < Size; Index++) {
       Locations.emplace_back(StackMaps::Location::Indirect,
-                             8, // 8: size of the register
-                             getDwarfRegNum(Reg, TRI), RefOffset + Index * 8);
+                             FuncPtrSize, // size of the register
+                             getDwarfRegNum(Reg, TRI),
+                             RefOffset + Index * FuncPtrSize);
     }
   } else if (StructType *ArrayStruct = dyn_cast<StructType>(ElementType)) {
     int64_t DerivedOffset = DL.getStructLayout(ArrayStruct)->getSizeInBytes();
@@ -395,7 +397,7 @@ void StackMaps::processAllocaStructType(StructType *ST, int64_t RefOffset,
         continue;
       }
       Locations.emplace_back(StackMaps::Location::Indirect,
-                             8, // 8: size of the register
+                             FuncPtrSize, // size of the register
                              getDwarfRegNum(Reg, TRI), Offset);
     } else if (StructType *EST = dyn_cast<StructType>(ST->getElementType(i))) {
       processAllocaStructType(EST, Offset, Locations, Reg, GS);
@@ -455,7 +457,7 @@ StackMaps::parseStructArgsOperand(MachineInstr::const_mop_iterator MOI,
                                   LocationVec &FOLocations,
                                   unsigned Offset) const {
   assert(MOI->isImm() && "MOI is not a Imm when parseStructArgsOperand!");
-  assert((Offset % OffsetStepSize == 0) && "Struct Offset should be 8 aligned!");
+  assert((Offset % OffsetStepSize == 0) && "Struct Offset should be aligned!");
   const TargetRegisterInfo *TRI = AP.MF->getSubtarget().getRegisterInfo();
   if (MOI->getImm() == StackMaps::DirectMemRefOp) {
     Register Reg = (++MOI)->getReg();
@@ -1237,6 +1239,7 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
   const Triple TT(AP.MMI->getModule()->getTargetTriple());
   bool IsWindows = TT.isOSWindows();
   OffsetStepSize = TT.isARM() ? 4 : 8;
+  FuncPtrSize = TT.isARM() ? 4 : 8;
   for (auto const &FR : FnInfos) {
     MCSymbol *StackmapFunction =
         OutContext.getOrCreateSymbol(".Lstack_map." + FR.first->getName());
@@ -1328,7 +1331,7 @@ void calculateStackSlots(MaxWidthOfRefInfo &WidthInfo,
 
   for (const auto &Offset : BOffsets) {
     if (Offset % OffsetStepSize != 0) {
-      report_fatal_error("Offset should be 8 aligned!");
+      report_fatal_error("Offset should be aligned!");
     }
     uint32_t BitIdx = (MaxOffset - Offset) / OffsetStepSize;
     // 64: uint64_t
@@ -1810,8 +1813,8 @@ void DataEncoder::emitCommentForSlots(raw_svector_ostream &Comment,
     (Comment << " 0x").write_hex(SlotBit) << "[";
     for (unsigned Idx = 0; Idx < Width; ++Idx) { // 64: uint64_t
       if (SlotBit & ((uint64_t)1 << Idx)) {
-        // 8: Each bit represents 8 Byte offsets
-        int32_t Off = BaseOffset - Idx * 8;
+        // Each bit represents 4 or 8 Byte offsets
+        int32_t Off = BaseOffset - Idx * FuncPtrSize;
         Comment << " " << Off;
       }
     }
