@@ -201,8 +201,9 @@ static bool createGCSafepointPoll(Module &M) {
       cast<Function>(M.getOrInsertFunction(GCSafeStr, FuncType).getCallee());
   BasicBlock *BB = BasicBlock::Create(M.getContext(), "entry", DoSafepointFun);
   IRBuilder<> builder(BB);
+  CallInst *Call = builder.CreateCall(MCCYieldFun);
   if (!Triple(M.getTargetTriple()).isARM())
-    builder.CreateCall(MCCYieldFun)->setCallingConv(CallingConv::CangjieGC);
+    Call->setCallingConv(CallingConv::CangjieGC);
   builder.CreateRetVoid();
   return true;
 }
