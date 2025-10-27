@@ -4740,7 +4740,19 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     InFlag = Chain.getValue(1);
   }
 
-  if (DAG.getTarget().getCodeModel() == CodeModel::Large) {
+  bool IsCangjieSafepoint = [Callee] {
+    // Which register will be used to store the global address is uncertain,
+    // that may lead to a violation of the calling convention.
+    if (const auto *G = dyn_cast<GlobalAddressSDNode>(Callee);
+        G && isa<Function>(G->getGlobal())) {
+      const Function *F = cast<Function>(G->getGlobal());
+      return F->isCangjieSafepointStub() || F->isCangjieSafePoint();
+    }
+    return false;
+  }();
+
+  if (DAG.getTarget().getCodeModel() == CodeModel::Large &&
+      !IsCangjieSafepoint) {
     assert(Is64Bit && "Large code model is only legal in 64-bit mode.");
     // In the 64-bit large code model, we have to make all calls
     // through a register, since the call instruction's 32-bit
