@@ -1431,7 +1431,7 @@ int ARMFrameLowering::ResolveFrameIndexReference(const MachineFunction &MF,
   int Offset = MFI.getObjectOffset(FI) + MFI.getStackSize();
   int FPOffset = Offset - AFI->getFramePtrSpillOffset();
   bool isFixed = MFI.isFixedObjectIndex(FI);
-
+  bool hasCJGC = MF.getFunction().hasCangjieGC();
   FrameReg = ARM::SP;
   Offset += SPAdj;
 
@@ -1443,7 +1443,7 @@ int ARMFrameLowering::ResolveFrameIndexReference(const MachineFunction &MF,
   // parameters, and the stack/base pointer for locals.
   if (RegInfo->hasStackRealignment(MF)) {
     assert(hasFP(MF) && "dynamic stack realignment without a FP!");
-    if (isFixed) {
+    if (isFixed || hasCJGC) {
       FrameReg = RegInfo->getFrameRegister(MF);
       Offset = FPOffset;
     } else if (hasMovingSP) {
@@ -1459,7 +1459,7 @@ int ARMFrameLowering::ResolveFrameIndexReference(const MachineFunction &MF,
   if (hasFP(MF) && AFI->hasStackFrame()) {
     // Use frame pointer to reference fixed objects. Use it for locals if
     // there are VLAs (and thus the SP isn't reliable as a base).
-    if (isFixed || (hasMovingSP && !RegInfo->hasBasePointer(MF))) {
+    if (isFixed || (hasMovingSP && !RegInfo->hasBasePointer(MF)) || hasCJGC) {
       FrameReg = RegInfo->getFrameRegister(MF);
       return FPOffset;
     } else if (hasMovingSP) {
