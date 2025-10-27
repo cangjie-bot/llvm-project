@@ -186,6 +186,9 @@ void CangjieDeclMap::LookUpMemberVariable(CompilerType& type, std::vector<Compil
     if (member_name == "$ti" || member_name == "$ti*" || !child_type.IsValid()) {
       continue;
     }
+    if (child_type.GetTypeClass() == lldb::eTypeClassPointer) {
+      child_type = child_type.GetPointeeType();
+    }
     if (child_type.GetTypeClass() != lldb::eTypeClassStruct && type.GetTypeClass() != lldb::eTypeClassClass) {
       continue;
     }
@@ -1525,7 +1528,7 @@ void CangjieDeclMap::LookUpTypeByName(const std::string& name, std::vector<Compi
   }
   // Find structDecl, enumDecl, classDecl, interfaceDecl.
   auto userDefinedType = LookUpType(name);
-  if (!userDefinedType.IsValid()) {
+  if (!userDefinedType.IsValid() || userDefinedType.GetTypeName().GetStringRef().contains("MapleRuntime::MemMap")) {
     userDefinedType = GetGenericTypeByPartName(name);
     if (userDefinedType.IsValid()) {
       LLDB_LOGF(log, "[Generic]: find type decl with generic param by part name[%s] -> [%s]. \n",
