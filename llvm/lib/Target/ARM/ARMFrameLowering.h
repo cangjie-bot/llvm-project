@@ -52,7 +52,8 @@ public:
   StackOffset getFrameIndexReference(const MachineFunction &MF, int FI,
                                      Register &FrameReg) const override;
   int ResolveFrameIndexReference(const MachineFunction &MF, int FI,
-                                 Register &FrameReg, int SPAdj) const;
+                                 Register &FrameReg, int SPAdj,
+                                 bool PreFerFP = false) const;
 
   void getCalleeSaves(const MachineFunction &MF,
                       BitVector &SavedRegs) const override;
