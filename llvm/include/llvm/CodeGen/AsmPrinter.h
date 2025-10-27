@@ -196,7 +196,6 @@ protected:
   MCSymbol *CurrentFnBegin = nullptr;
 
   std::map<const MachineInstr *, std::pair<MCSymbol *, MCSymbol *>> StackCheckMap;
-  SmallVector<std::tuple<const MachineInstr *, MCSymbol *, MCSymbol *>> SafepointStackMap;
   SmallVector<std::tuple<MCSymbol *, MCSymbol *, MCSymbol *>> CangjieStubMap;
   /// A vector of all debug/EH info emitters we should use. This vector
   /// maintains ownership of the emitters.
@@ -253,6 +252,7 @@ protected:
                                            unsigned Opcode){};
   virtual void emitCangjieCustomInst() {};
   virtual void emitGetCJThreadId() {};
+  virtual void emitCJSafepointStub() {};
 
   int64_t getAllocBufferOffsetInCJTLS() const;
   int64_t getMutatorOffsetInCJTLS() const;
@@ -576,11 +576,7 @@ public:
 
   virtual int emitStackGrow(const MachineInstr &) { return 0; }
 
-  virtual void emitCangjieSafepoint(const MachineInstr &) {}
-
   virtual void emitGcStateCheck() {}
-
-  virtual int emitSafePointDirectCall(unsigned Index) { return 0; }
 
   virtual void emitMetadataAddress() {}
 
