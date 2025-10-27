@@ -139,10 +139,6 @@ public:
 
   int emitStackGrow(const MachineInstr &MI) override;
 
-  void emitCangjieSafepoint(const MachineInstr &MI) override;
-
-  int emitSafePointDirectCall(unsigned Index) override;
-
   void emitMetadataAddress() override;
 
   void emitGcStateCheck() override;
@@ -176,6 +172,7 @@ public:
     return ShouldEmitWeakSwiftAsyncExtendedFramePointerFlags;
   }
   void emitGetCJTLSData(int64_t Offset);
+  void emitCJSafepointStub() override;
 
 private:
   void emitCangjieCallStubInstImpl(const MachineInstr *MI, const Function *F,
