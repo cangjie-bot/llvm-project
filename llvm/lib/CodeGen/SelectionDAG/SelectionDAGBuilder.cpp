@@ -1924,6 +1924,10 @@ void SelectionDAGBuilder::visitRet(const ReturnInst &I) {
   SmallVector<ISD::OutputArg, 8> Outs;
   SmallVector<SDValue, 8> OutVals;
 
+  // Skip dead return instruction.
+  if (I.getParent()->getParent()->isCangjieSafepointStub())
+    return;
+
   // Calls to @llvm.experimental.deoptimize don't generate a return value, so
   // lower
   //
