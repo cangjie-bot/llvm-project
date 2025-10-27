@@ -14,6 +14,7 @@
 #include "MCTargetDesc/X86ATTInstPrinter.h"
 #include "MCTargetDesc/X86BaseInfo.h"
 #include "MCTargetDesc/X86InstComments.h"
+#include "MCTargetDesc/X86MCTargetDesc.h"
 #include "MCTargetDesc/X86ShuffleDecode.h"
 #include "MCTargetDesc/X86TargetStreamer.h"
 #include "X86AsmPrinter.h"
@@ -1479,70 +1480,38 @@ void X86AsmPrinter::emitGcStateCheck() {
   OutStreamer->emitInstruction(LoadPollingPageInst, getSubtargetInfo());
 }
 
-// load tls data
-//   cmpq   $0, %rax
-//   jne    Label
-void X86AsmPrinter::emitCangjieSafepoint(const MachineInstr &MI) {
-  emitGetCJTLSData(getSafepointCheckAddrOffsetInCJTLS());
-  // create label
-  auto &Ctx = OutStreamer->getContext();
-  MCSymbol *MILabel = Ctx.createTempSymbol();
-  MCSymbol *MILabel1 = Ctx.createTempSymbol();
-  const MCSymbolRefExpr *MILabelExpr =
-      MCSymbolRefExpr::create(MILabel, OutContext);
-  MCInst CmpInst;
-  CmpInst.setOpcode(X86::CMP64ri32);
-  CmpInst.addOperand(MCOperand::createReg(X86::RAX));
-  CmpInst.addOperand(MCOperand::createImm(0));
-  OutStreamer->emitInstruction(CmpInst, getSubtargetInfo());
-  MCInst JccInst;
-  JccInst.setOpcode(X86::JCC_1);
-  JccInst.addOperand(MCOperand::createExpr(MILabelExpr));
-  JccInst.addOperand(MCOperand::createImm(X86::COND_NE));
-  OutStreamer->emitInstruction(JccInst, getSubtargetInfo());
-
-  OutStreamer->emitLabel(MILabel1);
-  SafepointStackMap.push_back(std::make_tuple(&MI, MILabel, MILabel1));
-}
-
-// mov  CJ_MCC_HandleSafepoint.CJStubGV(%rip), %r9
-// call %r9
-// jmp  Label1
-int X86AsmPrinter::emitSafePointDirectCall(unsigned Index) {
-  auto *AddrGV = MF->getFunction().getParent()->
-      getGlobalVariable("CJ_MCC_HandleSafepoint.CJStubGV", true);
-  MachineOperand MOAddr = MachineOperand::CreateGA(AddrGV, 0);
-  X86MCInstLower MCInstLowering(*MF, *this);
-  const MCSymbolRefExpr *Sym =
-      MCSymbolRefExpr::create(MCInstLowering.GetSymbolFromOperand(MOAddr),
-                              OutStreamer->getContext());
-  auto SS = SafepointStackMap[Index];
-  MCSymbol *MILabel = std::get<1>(SS);
-  MCSymbol *MILabel1 = std::get<2>(SS);
-  OutStreamer->emitLabel(MILabel);
-
-  MCInst MovGVToRAX = MCInstBuilder(X86::MOV64rm)
-                          .addReg(X86::RAX)
-                          .addReg(X86::RIP)
-                          .addImm(1)
-                          .addReg(0)
-                          .addExpr(Sym)
-                          .addReg(0);
-  OutStreamer->emitInstruction(MovGVToRAX, getSubtargetInfo());
-  MCInst CallSafepointInst;
-  CallSafepointInst.setOpcode(X86::CALL64r);
-  CallSafepointInst.addOperand(MCOperand::createReg(X86::RAX));
-  OutStreamer->emitInstruction(CallSafepointInst, getSubtargetInfo());
-  SM.recordCJStackMap(*std::get<0>(SS), true);
-
-  const MCSymbolRefExpr *MILabelExpr =
-      MCSymbolRefExpr::create(MILabel1, OutContext);
-  MCInst JccInst;
-  JccInst.setOpcode(X86::JMP_1);
-  JccInst.addOperand(MCOperand::createExpr(MILabelExpr));
-  OutStreamer->emitInstruction(JccInst, getSubtargetInfo());
-  // 3: instruction nums.
-  return 3;
+void X86AsmPrinter::emitCJSafepointStub() {
+  MCSymbol *Label = OutContext.createTempSymbol();
+  MCSymbol *StubGV =
+      OutContext.getOrCreateSymbol("CJ_MCC_HandleSafepoint.CJStubGV");
+  MCInst CMP = MCInstBuilder(X86::CMP64mi32)
+                   .addReg(X86::R15)
+                   .addImm(1)
+                   .addReg(0)
+                   .addImm(getSafepointCheckAddrOffsetInCJTLS())
+                   .addReg(0)
+                   .addImm(0);
+  MCInst JNE = MCInstBuilder(X86::JCC_1)
+                   .addExpr(MCSymbolRefExpr::create(Label, OutContext))
+                   .addImm(X86::COND_NE);
+  MCInst JMP = MCInstBuilder(X86::JMP64m)
+                   .addReg(X86::RIP)
+                   .addImm(1)
+                   .addReg(0)
+                   .addExpr(MCSymbolRefExpr::create(StubGV, OutContext))
+                   .addReg(0);
+  MCInst RET = MCInstBuilder(X86::RET64);
+  auto &STI = getSubtargetInfo();
+  //   cmpq    $0, SafePollingAddrOffsetInCJTLS(%r15)
+  //   jne .Ltmp0
+  //   retq
+  // .Ltmp0:
+  //   jmpq *CJ_MCC_HandleSafepoint.CJStubGV(%rip)
+  OutStreamer->emitInstruction(CMP, STI);
+  OutStreamer->emitInstruction(JNE, STI);
+  OutStreamer->emitInstruction(RET, STI);
+  OutStreamer->emitLabel(Label);
+  OutStreamer->emitInstruction(JMP, STI);
 }
 
 void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
@@ -1555,10 +1524,6 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
   const MachineOperand &CallTarget = SOpers.getCallTarget();
   if (CJPipeline) {
     uint64_t ID = SOpers.getID();
-    if (ID == Cangjie::CJStatepointID::Safepoint) {
-      emitCangjieSafepoint(MI);
-      return;
-    }
     if (ID == Cangjie::CJStatepointID::StackCheck) {
       emitCangjieStackCheck(MI);
       return;
@@ -1616,6 +1581,9 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
     CallInst.addOperand(CallTargetMCOp);
     OutStreamer->emitInstruction(CallInst, getSubtargetInfo());
   }
+
+  if (SOpers.getID() == Cangjie::CJStatepointID::Safepoint)
+    return SM.recordCJStackMap(MI, true);
 
   // Record our statepoint node in the same section used by STACKMAP
   // and PATCHPOINT
