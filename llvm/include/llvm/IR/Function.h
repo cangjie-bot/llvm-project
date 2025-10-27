@@ -902,6 +902,10 @@ public:
     return getName().equals("CJ_MCC_HandleSafepoint");
   }
 
+  bool isCangjieSafepointStub() const {
+    return getName().equals("CJ_Safepoint_Stub");
+  }
+
   bool isGetCJThreadId() const {
     return getName().equals("GetCJThreadIdForMutexOpt");
   }

@@ -57,6 +57,7 @@ extern cl::opt<bool> EnableSafepointOnly;
 namespace {
 const static StringRef NewObjFastStr = "CJ_MCC_NewObjectFast";
 const static StringRef NewObjFinalizerFastStr = "CJ_MCC_NewFinalizerFast";
+constexpr StringRef SafepointStub = "CJ_Safepoint_Stub";
 template <typename KeyT, typename ValT>
 using StdMap = std::unordered_map<KeyT, ValT>;
 const static StdMap<unsigned, StringRef> IntrinsicMap{
@@ -1102,6 +1103,46 @@ static bool isNewObj(Instruction *I) {
   return false;
 }
 
+static bool isSafepointCall(Instruction *I) {
+  if (auto *CI = dyn_cast<GCStatepointInst>(I)) {
+    Function *Callee = CI->getActualCalledFunction();
+    if (Callee && Callee->getName().isCangjieSafepoint())
+      return true;
+  }
+  return false;
+}
+
+static Function *getOrInsertSafepointStub(Module *M, FUnction *Callee) {
+  if (Function *F = M->getFunction(SafepointStubStr))
+    return F;
+  FunctionType *FuncType =
+      FunctionType::get(Type::getVoidTy(M->getContext()), false);
+  Function *F = cast<Function>(
+      M->getOrInsertFunction(SafepointStub, FuncType).getCallee());
+  F->addFnAttr(Attribute::NoInline);
+  F->addFnAttr(Attribute::Naked);
+  F->setLinkage(GlobalValue::PrivateLinkage);
+  // Create function body.
+  BasicBlock *BB = BasicBlock::Create(M->getContext(), "", F);
+  IRBuilder<> IRB(BB);
+  IRB.CreateCall(Callee);
+  // Ret does not need to be generated, but the verification fails.
+  IRB.CreateRetVoid();
+  return F;
+}
+
+static bool combineSafepointStub(Module &M,
+                                 SetVector<GCStatepointInst *> &Safepoints) {
+  if (Safepoints.empty())
+    return false;
+  Function *F = getOrInsertSafepointStub(
+      M, Safepoints.front()->getActualCalledFunction());
+  for (auto *SI : Safepoints)
+    // Although the callee is replaced, the call is still a safepoint.
+    SI->setArgOperand(GCStatepointInst::CalledFunctionPos, F);
+  return true;
+}
+
 bool CJBarrierLowering::runOnFunction(Function &F) {
   // Quick exit for functions that do not use Cangjie GC.
   if (!F.hasCangjieGC())
@@ -1117,19 +1158,25 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
   bool Changed = false;
   SetVector<CallInst *> Barriers;
   SetVector<GCStatepointInst *> News;
+  SetVector<GCStatepointInst *> Safepoints;
 
   for (BasicBlock &BB : F) {
     for (Instruction &I : llvm::make_early_inc_range(BB)) {
       if (isCJBarrier(&I))
         Barriers.insert(cast<CallInst>(&I));
-      if (EnableGCFastPath && isNewObj(&I))
+      else if (EnableGCFastPath && isNewObj(&I))
         News.insert(cast<GCStatepointInst>(&I));
+      else if (isSafepointCall(&I))
+        Safepoints.insert(cast<GCStatepointInst>(&I));
     }
   }
 
   if (!News.empty()) {
     Changed = doNewFastPath(F, News);
   }
+
+  if (!Safepoints.empty())
+    Changed |= combineSafepointStub(F.getParent(), Safepoints);
 
   if (Barriers.empty()) {
     return Changed;
