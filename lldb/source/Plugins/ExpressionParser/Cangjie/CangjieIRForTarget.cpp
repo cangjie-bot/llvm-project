@@ -253,14 +253,7 @@ bool CangjieIRForTarget::IsReferenceType(const lldb_private::CompilerType &ty) {
   }
   if (ty.GetTypeClass() == lldb::eTypeClassStruct &&
       type_name.find(lldb_private::E2_PREFIX_NAME_OPTION_LIKE) != std::string::npos) {
-    // Option like enum's ref is based on args type.
-    for (uint32_t i = 0; i < ty.GetNumFields(); i++) {
-      std::string member_name;
-      auto child_type = ty.GetFieldAtIndex(i, member_name, nullptr, nullptr, nullptr);
-      if (member_name == "val") {
-        return IsReferenceType(child_type);
-      }
-    }
+    return false;
   }
   std::vector<std::string> value_type = {"Float64", "Float32", "Float16", "Int64", "Int32", "Int16", "Int8",
                                           "UInt64", "UInt32", "UInt16", "UInt8", "Bool", "Unit", "IntNative",
