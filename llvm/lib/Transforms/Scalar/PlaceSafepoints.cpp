@@ -186,12 +186,17 @@ static bool createGCSafepointPoll(Module &M) {
   }
   FunctionType *FuncType =
       FunctionType::get(Type::getVoidTy(M.getContext()), false);
-  Function *MCCYieldFun = cast<Function>(
-      M.getOrInsertFunction(MCCYieldStr, FuncType).getCallee());
+  Function *MCCYieldFun =
+      cast<Function>(M.getOrInsertFunction(MCCYieldStr, FuncType).getCallee());
   MCCYieldFun->setUnnamedAddr(GlobalVariable::UnnamedAddr::Local);
   if (!Triple(M.getTargetTriple()).isARM())
     MCCYieldFun->setCallingConv(CallingConv::CangjieGC);
   MCCYieldFun->addFnAttr("gc-safepoint");
+  GlobalVariable *CJFuncGV = cast<GlobalVariable>(M.getOrInsertGlobal(
+      "CJ_MCC_HandleSafepoint.CJStubGV", MCCYieldFun->getType()));
+  CJFuncGV->setInitializer(MCCYieldFun);
+  CJFuncGV->setLinkage(GlobalVariable::InternalLinkage);
+  CJFuncGV->addAttribute("cj-native");
   Function *DoSafepointFun =
       cast<Function>(M.getOrInsertFunction(GCSafeStr, FuncType).getCallee());
   BasicBlock *BB = BasicBlock::Create(M.getContext(), "entry", DoSafepointFun);
@@ -200,12 +205,6 @@ static bool createGCSafepointPoll(Module &M) {
   if (!Triple(M.getTargetTriple()).isARM())
     Call->setCallingConv(CallingConv::CangjieGC);
   builder.CreateRetVoid();
-
-  GlobalVariable *CJFuncGV = cast<GlobalVariable>(M.getOrInsertGlobal(
-      "CJ_MCC_HandleSafepoint.CJStubGV", MCCYieldFun->getType()));
-  CJFuncGV->setInitializer(MCCYieldFun);
-  CJFuncGV->setLinkage(GlobalVariable::InternalLinkage);
-  CJFuncGV->addAttribute("cj-native");
   return true;
 }
 
