@@ -1482,8 +1482,10 @@ void X86AsmPrinter::emitGcStateCheck() {
 
 void X86AsmPrinter::emitCJSafepointStub() {
   MCSymbol *Label = OutContext.createTempSymbol();
-  MCSymbol *StubGV =
-      OutContext.getOrCreateSymbol("CJ_MCC_HandleSafepoint.CJStubGV");
+  StringRef Name = getSubtargetInfo().getTargetTriple().isOSBinFormatMachO()
+                       ? "_CJ_MCC_HandleSafepoint.CJStubGV"
+                       : "CJ_MCC_HandleSafepoint.CJStubGV";
+  MCSymbol *StubGV = OutContext.getOrCreateSymbol(Name);
   MCInst CMP = MCInstBuilder(X86::CMP64mi32)
                    .addReg(X86::R15)
                    .addImm(1)
