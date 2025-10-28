@@ -331,47 +331,47 @@ void MCObjectFileInfo::initMachOMCObjectFileInfo(const Triple &T) {
   // Cangjie File(CFile) specific sections
   // RW section
   CJTypeTemplateSection = Ctx->getMachOSection("__CJ_METADATA", "__cjtemplate",
-                                               0, SectionKind::getReadOnly());
+                                               MachO::S_ATTR_NO_DEAD_STRIP, SectionKind::getReadOnly());
   CJStaticGenericTISection = Ctx->getMachOSection(
-      "__CJ_METADATA", "__cjstatic_gi", 0, SectionKind::getReadOnly());
-  CJTypeInfoSection = Ctx->getMachOSection("__CJ_METADATA", "__cjtypeinfo", 0,
+      "__CJ_METADATA", "__cjstatic_gi", MachO::S_ATTR_NO_DEAD_STRIP, SectionKind::getReadOnly());
+  CJTypeInfoSection = Ctx->getMachOSection("__CJ_METADATA", "__cjtypeinfo", MachO::S_ATTR_NO_DEAD_STRIP,
                                            SectionKind::getReadOnly());
-  CJTypeFieldsSection = Ctx->getMachOSection("__CJ_METADATA", "__cj_fields", 0,
+  CJTypeFieldsSection = Ctx->getMachOSection("__CJ_METADATA", "__cj_fields", MachO::S_ATTR_NO_DEAD_STRIP,
                                              SectionKind::getReadOnly());
 
-  CJMtableSection = Ctx->getMachOSection("__CJ_METADATA", "__cjmtable", 0,
+  CJMtableSection = Ctx->getMachOSection("__CJ_METADATA", "__cjmtable", MachO::S_ATTR_NO_DEAD_STRIP,
                                          SectionKind::getReadOnly());
   CJInnerTypeExtensionsSection = Ctx->getMachOSection(
-      "__CJ_METADATA", "__cjinnerty_eds", 0, SectionKind::getReadOnly());
+      "__CJ_METADATA", "__cjinnerty_eds", MachO::S_ATTR_NO_DEAD_STRIP, SectionKind::getReadOnly());
   CJOuterTypeExtensionsSection = Ctx->getMachOSection(
-      "__CJ_METADATA", "__cjouterty_eds", 0, SectionKind::getReadOnly());
+      "__CJ_METADATA", "__cjouterty_eds", MachO::S_ATTR_NO_DEAD_STRIP, SectionKind::getReadOnly());
 
   CJReflectPkgInfoSection = Ctx->getMachOSection(
-      "__CJ_METADATA", "__cjref_pkginfo", 0, SectionKind::getReadOnly());
-  CJReflectGVSection = Ctx->getMachOSection("__CJ_METADATA", "__cjref_gv", 0,
+      "__CJ_METADATA", "__cjref_pkginfo", MachO::S_ATTR_NO_DEAD_STRIP, SectionKind::getReadOnly());
+  CJReflectGVSection = Ctx->getMachOSection("__CJ_METADATA", "__cjref_gv", MachO::S_ATTR_NO_DEAD_STRIP,
                                             SectionKind::getReadOnly());
   CJReflectGenericTISection = Ctx->getMachOSection(
-      "__CJ_METADATA", "__cjref_gi", 0, SectionKind::getReadOnly());
+      "__CJ_METADATA", "__cjref_gi", MachO::S_ATTR_NO_DEAD_STRIP, SectionKind::getReadOnly());
 
   CJMethodInfoSection = Ctx->getMachOSection("__CJ_METADATA", "__cjmethodinfo",
-                                             0, SectionKind::getReadOnly());
-  CJStackMapSection = Ctx->getMachOSection("__CJ_METADATA", "__cjstackmap", 0,
+                                             MachO::S_ATTR_NO_DEAD_STRIP, SectionKind::getReadOnly());
+  CJStackMapSection = Ctx->getMachOSection("__CJ_METADATA", "__cjstackmap", MachO::S_ATTR_NO_DEAD_STRIP,
                                            SectionKind::getReadOnly());
-  CJGCTibSection = Ctx->getMachOSection("__CJ_METADATA", "__cjgctib", 0,
+  CJGCTibSection = Ctx->getMachOSection("__CJ_METADATA", "__cjgctib", MachO::S_ATTR_NO_DEAD_STRIP,
                                         SectionKind::getReadOnly());
-  CJGCRootSection = Ctx->getMachOSection("__CJ_METADATA", "__cjgcroots", 0,
+  CJGCRootSection = Ctx->getMachOSection("__CJ_METADATA", "__cjgcroots", MachO::S_ATTR_NO_DEAD_STRIP,
                                          SectionKind::getReadOnly());
-  CJGCFlagsSection = Ctx->getMachOSection("__CJ_METADATA", "__cjgcflags", 0,
+  CJGCFlagsSection = Ctx->getMachOSection("__CJ_METADATA", "__cjgcflags", MachO::S_ATTR_NO_DEAD_STRIP,
                                           SectionKind::getReadOnly());
 
   CJSDKVersionSection = Ctx->getMachOSection("__CJ_METADATA", "__cjsdkversion",
-                                             0, SectionKind::getReadOnly());
+                                             MachO::S_ATTR_NO_DEAD_STRIP, SectionKind::getReadOnly());
   CJStringPoolDictSection = Ctx->getMachOSection(
-      "__CJ_METADATA", "__cjstrpooldict", 0, SectionKind::getReadOnly());
-  CJStringPoolSection = Ctx->getMachOSection("__CJ_METADATA", "__cjstrpool", 0,
+      "__CJ_METADATA", "__cjstrpooldict", MachO::S_ATTR_NO_DEAD_STRIP, SectionKind::getReadOnly());
+  CJStringPoolSection = Ctx->getMachOSection("__CJ_METADATA", "__cjstrpool", MachO::S_ATTR_NO_DEAD_STRIP,
                                              SectionKind::getReadOnly());
   CJGlobalInitFuncSection = Ctx->getMachOSection(
-      "__CJ_METADATA", "__cjglobalFunc", 0, SectionKind::getReadOnly());
+      "__CJ_METADATA", "__cjglobalFunc", MachO::S_ATTR_NO_DEAD_STRIP, SectionKind::getReadOnly());
 
   TLSExtraDataSection = TLSTLVSection;
 }
