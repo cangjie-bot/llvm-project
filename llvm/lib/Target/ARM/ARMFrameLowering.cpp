@@ -169,6 +169,10 @@ static cl::opt<bool>
 SpillAlignedNEONRegs("align-neon-spills", cl::Hidden, cl::init(true),
                      cl::desc("Align ARM NEON spills in prolog and epilog"));
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
+
 static MachineBasicBlock::iterator
 skipAlignedDPRCS2Spills(MachineBasicBlock::iterator MI,
                         unsigned NumAlignedDPRCS2Regs);
@@ -1418,12 +1422,14 @@ void ARMFrameLowering::emitEpilogue(MachineFunction &MF,
 StackOffset ARMFrameLowering::getFrameIndexReference(const MachineFunction &MF,
                                                      int FI,
                                                      Register &FrameReg) const {
-  return StackOffset::getFixed(ResolveFrameIndexReference(MF, FI, FrameReg, 0));
+  return StackOffset::getFixed(
+      ResolveFrameIndexReference(MF, FI, FrameReg, 0, CJPipeline));
 }
 
 int ARMFrameLowering::ResolveFrameIndexReference(const MachineFunction &MF,
                                                  int FI, Register &FrameReg,
-                                                 int SPAdj) const {
+                                                 int SPAdj,
+                                                 bool PreFerFP) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   const ARMBaseRegisterInfo *RegInfo = static_cast<const ARMBaseRegisterInfo *>(
       MF.getSubtarget().getRegisterInfo());
@@ -1431,7 +1437,7 @@ int ARMFrameLowering::ResolveFrameIndexReference(const MachineFunction &MF,
   int Offset = MFI.getObjectOffset(FI) + MFI.getStackSize();
   int FPOffset = Offset - AFI->getFramePtrSpillOffset();
   bool isFixed = MFI.isFixedObjectIndex(FI);
-  bool hasCJGC = MF.getFunction().hasCangjieGC();
+  PreFerFP = MF.getFunction().hasCangjieGC() && PreFerFP;
   FrameReg = ARM::SP;
   Offset += SPAdj;
 
@@ -1443,7 +1449,7 @@ int ARMFrameLowering::ResolveFrameIndexReference(const MachineFunction &MF,
   // parameters, and the stack/base pointer for locals.
   if (RegInfo->hasStackRealignment(MF)) {
     assert(hasFP(MF) && "dynamic stack realignment without a FP!");
-    if (isFixed || hasCJGC) {
+    if (isFixed || PreFerFP) {
       FrameReg = RegInfo->getFrameRegister(MF);
       Offset = FPOffset;
     } else if (hasMovingSP) {
@@ -1459,7 +1465,7 @@ int ARMFrameLowering::ResolveFrameIndexReference(const MachineFunction &MF,
   if (hasFP(MF) && AFI->hasStackFrame()) {
     // Use frame pointer to reference fixed objects. Use it for locals if
     // there are VLAs (and thus the SP isn't reliable as a base).
-    if (isFixed || (hasMovingSP && !RegInfo->hasBasePointer(MF)) || hasCJGC) {
+    if (isFixed || (hasMovingSP && !RegInfo->hasBasePointer(MF)) || PreFerFP) {
       FrameReg = RegInfo->getFrameRegister(MF);
       return FPOffset;
     } else if (hasMovingSP) {
