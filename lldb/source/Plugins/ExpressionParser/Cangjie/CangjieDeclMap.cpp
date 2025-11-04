@@ -885,6 +885,7 @@ Ptr<AST::Decl> CangjieDeclMap::CreateClassDecl(CompilerType type, std::string pr
   Ptr<AST::Decl> cla = RawStaticCast<AST::Decl *>(decl.get());
   CreateGenericConstraints(cla, type);
   decl->EnableAttr(Attribute::PUBLIC, Attribute::GLOBAL);
+  decl->EnableAttr(Attribute::OPEN);
   auto target = GetSameGlobalDecl(std::move(decl), true);
   CreateClassMemberDecls(type, target);
   return target;
