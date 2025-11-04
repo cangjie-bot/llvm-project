@@ -720,7 +720,31 @@ void CangjieDeclMap::SetGenericDeclBySubclass(Ptr<AST::RefType> refType, std::st
   }
 }
 
+CompilerType CangjieDeclMap::GetLambdaReturnType(CompilerType& type) {
+  bool isLambda = type.GetTypeName().GetStringRef().contains("->");
+  if (isLambda && type.IsValid() && type.GetTypeClass() == lldb::eTypeClassClass) {
+    // get member ptr
+    for (uint32_t i = 0; i < type.GetNumFields(); i++) {
+      std::string member_name;
+      auto child_type = type.GetFieldAtIndex(i, member_name, nullptr, nullptr, nullptr);
+      if (member_name != "ptr") {
+        continue;
+      }
+      if (!child_type.IsPointerType()) {
+        break;
+      }
+      child_type = child_type.GetPointeeType();
+      if (child_type.GetTypeClass() != lldb::eTypeClassFunction) {
+        break;
+      }
+      return child_type.GetFunctionReturnType();
+    }
+  }
+  return type;
+}
+
 void CangjieDeclMap::ReplaceTypeDefWithInterfaceType(CompilerType& type) {
+  type = GetLambdaReturnType(type);
   bool isTypeDef = type.IsValid() && type.GetTypeClass() == lldb::eTypeClassTypedef;
   if (!isTypeDef) {
     return;

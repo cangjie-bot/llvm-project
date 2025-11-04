@@ -174,6 +174,7 @@ private:
     Ptr<AST::Decl> CreateTypeDecl(CompilerType type);
     std::vector<ConstString> GetEnumeratorName(CompilerType& type);
     CompilerType GetEnumerationType(const CompilerType& type, bool hasArgs);
+    CompilerType GetLambdaReturnType(CompilerType& type);
     void ReplaceTypeDefWithInterfaceType(CompilerType& type);
     void CacheParsedVars(ConstString name, lldb::VariableSP& var, VariableKind kind);
     void CreateEnumConstructors(OwnedPtr<AST::EnumDecl> &decl, const CompilerType& type);
