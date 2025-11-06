@@ -264,7 +264,7 @@ public:
 static void
 InsertSafepointPoll(Instruction *InsertBefore,
                     std::vector<CallBase *> &ParsePointsNeeded /*rval*/,
-                    const TargetLibraryInfo &TLI);
+                    const TargetLibraryInfo &TLI, bool isEntry);
 
 static bool isCangjieFunc(const Function *F) {
   if (F != nullptr) {
@@ -700,7 +700,7 @@ bool placeSafepoint(Function &F, const TargetLibraryInfo &TLI) {
   DominatorTree DT;
   DT.recalculate(F);
 
-  SmallVector<Instruction *, 16> PollsNeeded;
+  SmallVector<std::pair<Instruction *, bool> , 16> PollsNeeded;
   std::vector<CallBase *> ParsePointNeeded;
 
   if (enableBackedgeSafepoints(F)) {
@@ -766,12 +766,12 @@ bool placeSafepoint(Function &F, const TargetLibraryInfo &TLI) {
         SetVector<BasicBlock *> SplitBackedges;
         for (BasicBlock *Header : Headers) {
           BasicBlock *NewBB = SplitEdge(Term->getParent(), Header, &DT);
-          PollsNeeded.push_back(NewBB->getTerminator());
+          PollsNeeded.emplace_back(NewBB->getTerminator(), false);
           NumBackedgeSafepoints++;
         }
       } else {
         // Split the latch block itself, right before the terminator.
-        PollsNeeded.push_back(Term);
+        PollsNeeded.emplace_back(Term, false);
         NumBackedgeSafepoints++;
       }
     }
@@ -779,7 +779,7 @@ bool placeSafepoint(Function &F, const TargetLibraryInfo &TLI) {
 
   if (enableEntrySafepoints(F)) {
     if (Instruction *Location = findLocationForEntrySafepoint(F, DT)) {
-      PollsNeeded.push_back(Location);
+      PollsNeeded.emplace_back(Location, true);
       Modified = true;
       NumEntrySafepoints++;
     }
@@ -789,12 +789,12 @@ bool placeSafepoint(Function &F, const TargetLibraryInfo &TLI) {
 
   // Now that we've identified all the needed safepoint poll locations, insert
   // safepoint polls themselves.
-  for (Instruction *PollLocation : PollsNeeded) {
+  for (auto &[PollLocation, isEntry] : PollsNeeded) {
     if (InvokeGC) {
       InsertFunctionCheck(PollLocation, InvokeGCStr);
     }
     std::vector<CallBase *> RuntimeCalls;
-    InsertSafepointPoll(PollLocation, RuntimeCalls, TLI);
+    InsertSafepointPoll(PollLocation, RuntimeCalls, TLI, isEntry);
     llvm::append_range(ParsePointNeeded, RuntimeCalls);
   }
 
@@ -854,7 +854,7 @@ INITIALIZE_PASS_END(PlaceSafepointsLegacyPass, "place-safepoints",
 static void
 InsertSafepointPoll(Instruction *InsertBefore,
                     std::vector<CallBase *> &ParsePointsNeeded /*rval*/,
-                    const TargetLibraryInfo &TLI) {
+                    const TargetLibraryInfo &TLI, bool isEntry) {
   BasicBlock *OrigBB = InsertBefore->getParent();
   Module *M = InsertBefore->getModule();
   assert(M && "must be part of a module");
@@ -870,6 +870,10 @@ InsertSafepointPoll(Instruction *InsertBefore,
          "gc.safepoint_poll declared with wrong type");
   assert(!F->empty() && "gc.safepoint_poll must be a non-empty function");
   CallInst *PollCall = CallInst::Create(F, "", InsertBefore);
+  if(!isEntry) {
+    auto loc = InsertBefore->getDebugLoc() ;
+    PollCall -> setDebugLoc(loc);
+  }
   BasicBlock::iterator FindDL(PollCall);
   auto *DL = FindDL->getDebugLoc().get();
   while (!DL) {
@@ -891,6 +895,16 @@ InsertSafepointPoll(Instruction *InsertBefore,
 
   After++;
   assert(After != OrigBB->end() && "must have successor");
+
+  if(CJPipeline) {
+    auto I = After ;
+    while(I != OrigBB -> end()) {
+      if(I++->hasMetadata(LLVMContext::MD_dbg) ) {
+        PollCall -> setDebugLoc(After -> getDebugLoc()) ;
+        break;
+      }
+    }
+  }
 
   // Do the actual inlining
   InlineFunctionInfo IFI;
