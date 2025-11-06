@@ -287,7 +287,10 @@ ConstString GetTypeName(Process& process, TypeInfo& typeInfo) {
     // type_name: "default:A"  ==> "default::A"
     while (pos != std::string::npos) {
       // type_name: "default:$Captured_Int64"  ==> "default::$Captured_Int64"
-      temp_name.replace(pos, 1, "::");
+      if (pos != temp_name.find("::")) {
+        // type_name: "org::default:C1", if type_name has org, no need to replace ":" with "::"
+        temp_name.replace(pos, 1, "::");
+      }
       pos = temp_name.find(":", pos + 2); // size of "::" is 2
     }
 
