@@ -748,7 +748,7 @@ CjHashSetSyntheticFrontEnd::CjHashSetSyntheticFrontEnd(ValueObjectSP valobj_sp)
 }
 
 bool CjHashSetSyntheticFrontEnd::Update() {
-  m_map = new CjHashMapSyntheticFrontEnd(m_backend.GetChildMemberWithName(ConstString("map"), true));
+  m_map = new CjHashMapSyntheticFrontEnd(m_backend.GetChildMemberWithName(ConstString("myMap"), true));
   if (m_map) {
     // Mark the map(HashMap) is a child of HashSet.
     m_map->SetIsInternalType(true);
