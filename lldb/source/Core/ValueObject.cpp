@@ -3268,7 +3268,7 @@ bool ValueObject::GetCangjieDynamicType(
   llvm::DenseSet<SymbolFile *> searched_symbol_files;
   pos = dynamic_name.rfind(".ti");
   bool is_ti_type = false;
-  if (!GetTypeName().GetStringRef().contains("E1$") && pos == dynamic_name.length() - std::string(".ti").length()) {
+  if (!GetTypeName().GetStringRef().contains("E1$")) {
     dynamic_name = dynamic_name.substr(0, pos);
     if (dynamic_name != GetTypeName().AsCString()) {
       is_ti_type = true;
