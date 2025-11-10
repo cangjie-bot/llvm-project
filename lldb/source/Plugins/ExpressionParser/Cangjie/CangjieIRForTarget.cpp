@@ -517,7 +517,8 @@ bool CangjieIRForTarget::CreateResultVariable(lldb_private::Materializer::Persis
     LLDB_LOGF(log, "Result variable Decl:\n %s", s.GetData());
   }
 
-  auto offset = m_materializer->AddResultVariable(result_type, false, true, result_delegate, err);
+  bool isref = IsReferenceType(result_type);
+  auto offset = m_materializer->AddResultVariable(result_type, isref, true, result_delegate, err);
 
   // There are two wrapper kind: Function and MemberFunction.
   lldb_private::ConstString replaceFunc = m_func_name;
