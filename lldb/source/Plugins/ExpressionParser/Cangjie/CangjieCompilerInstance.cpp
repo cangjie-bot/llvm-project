@@ -224,7 +224,9 @@ void CangjieCompilerInstance::CreateInitFunc(AST::Decl& decl)
     if (refType->ref.target) {
       refType->ty = refType->ref.target->ty;
     }
-    classDecl->inheritedTypes.emplace_back(std::move(refType));
+    if (classDecl->inheritedTypes.size() == 0) {
+      classDecl->inheritedTypes.emplace_back(std::move(refType));
+    }
     if (!classDecl->body) {
       classDecl->body = MakeOwned<ClassBody>();
     }
