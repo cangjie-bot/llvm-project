@@ -712,6 +712,10 @@ if (APPLE)
 else ()
   set(BUILTIN_CFLAGS "")
 
+  if(OHOS)
+    list(APPEND BUILTIN_CFLAGS --target=${COMPILER_RT_DEFAULT_TARGET_TRIPLE})
+  endif()
+
   if (COMPILER_RT_HAS_FCF_PROTECTION_FLAG)
     append_list_if(COMPILER_RT_ENABLE_CET -fcf-protection=full BUILTIN_CFLAGS)
   endif()
