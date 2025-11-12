@@ -339,7 +339,7 @@ static bool mustBeCJFiniteCountedLoop(Loop *L, ScalarEvolution *SE,
                                       BasicBlock *Pred, APInt &LoopCount) {
   APInt MaxSubLoopCount(64, 1);
   for (const auto &SubL : L->getSubLoops()) {
-    SmallVector<BasicBlock*, 16> LoopLatches;
+    SmallVector<BasicBlock *, 16> LoopLatches;
     SubL->getLoopLatches(LoopLatches);
     for (BasicBlock *SubPred : LoopLatches) {
       assert(SubL->contains(SubPred));
@@ -700,7 +700,7 @@ bool placeSafepoint(Function &F, const TargetLibraryInfo &TLI) {
   DominatorTree DT;
   DT.recalculate(F);
 
-  SmallVector<std::pair<Instruction *, bool> , 16> PollsNeeded;
+  SmallVector<std::pair<Instruction *, bool>, 16> PollsNeeded;
   std::vector<CallBase *> ParsePointNeeded;
 
   if (enableBackedgeSafepoints(F)) {
@@ -870,9 +870,9 @@ InsertSafepointPoll(Instruction *InsertBefore,
          "gc.safepoint_poll declared with wrong type");
   assert(!F->empty() && "gc.safepoint_poll must be a non-empty function");
   CallInst *PollCall = CallInst::Create(F, "", InsertBefore);
-  if(!isEntry) {
-    auto loc = InsertBefore->getDebugLoc() ;
-    PollCall -> setDebugLoc(loc);
+  if (!isEntry) {
+    auto loc = InsertBefore->getDebugLoc();
+    PollCall->setDebugLoc(loc);
   }
   BasicBlock::iterator FindDL(PollCall);
   auto *DL = FindDL->getDebugLoc().get();
@@ -880,6 +880,9 @@ InsertSafepointPoll(Instruction *InsertBefore,
     FindDL++;
     if (FindDL == OrigBB->end())
       break;
+    if (FindDL->isDebugOrPseudoInst()) {
+      continue;
+    }
 
     DL = FindDL->getDebugLoc().get();
   }
@@ -895,16 +898,6 @@ InsertSafepointPoll(Instruction *InsertBefore,
 
   After++;
   assert(After != OrigBB->end() && "must have successor");
-
-  if(CJPipeline) {
-    auto I = After ;
-    while(I != OrigBB -> end()) {
-      if(I++->hasMetadata(LLVMContext::MD_dbg) ) {
-        PollCall -> setDebugLoc(After -> getDebugLoc()) ;
-        break;
-      }
-    }
-  }
 
   // Do the actual inlining
   InlineFunctionInfo IFI;
