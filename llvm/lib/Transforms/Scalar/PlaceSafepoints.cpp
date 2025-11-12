@@ -871,15 +871,18 @@ InsertSafepointPoll(Instruction *InsertBefore,
   assert(!F->empty() && "gc.safepoint_poll must be a non-empty function");
   CallInst *PollCall = CallInst::Create(F, "", InsertBefore);
   BasicBlock::iterator FindDL(PollCall);
-  auto *DL = FindDL->getDebugLoc().get();
-  while (!DL) {
-    FindDL++;
-    if (FindDL == OrigBB->end())
-      break;
-
-    DL = FindDL->getDebugLoc().get();
-  }
-  PollCall->setDebugLoc(DL);
+  // auto *DL = FindDL->getDebugLoc().get();
+  // while (!DL) {
+  //   FindDL++;
+  //   if (FindDL == OrigBB->end())
+  //     break;
+  //   if (FindDL->isDebugOrPseudoInst()) {
+  //     continue;
+  //   }
+  //
+  //   DL = FindDL->getDebugLoc().get();
+  // }
+  // PollCall->setDebugLoc(DL);
 
   // Record some information about the call site we're replacing
   BasicBlock::iterator Before(PollCall), After(PollCall);
