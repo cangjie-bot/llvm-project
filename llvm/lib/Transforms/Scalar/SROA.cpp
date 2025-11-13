@@ -2472,6 +2472,9 @@ public:
     // Compute the intersecting offset range.
     assert(BeginOffset < NewAllocaEndOffset);
     assert(EndOffset > NewAllocaBeginOffset);
+    // Cannot perform SROA on disjoint slice and partition ranges.
+    if (EndOffset == NewAllocaBeginOffset)
+      return false;
     NewBeginOffset = std::max(BeginOffset, NewAllocaBeginOffset);
     NewEndOffset = std::min(EndOffset, NewAllocaEndOffset);
 
