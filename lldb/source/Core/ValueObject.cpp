@@ -3214,30 +3214,26 @@ bool ValueObject::GetCangjieDynamicType(
   if (IsCangjieGenericType()) {
     return true;
   }
-  auto size = GetCompilerType().GetByteSize(nullptr);
-  // do not find dynamicType if compilerType's size less than 8 byte.
-  // for interfaces, dynamic type lookup is mandatory, regardless of size.
-  if (!size || *size < 8) {
-    return false;
-  }
-  Log *log = GetLog(LLDBLog::Expressions);
-  ConstString match("^std[.]core::(Enum\\$)?Option<.+>( \\*)?$|(.+)?E2\\$");
-  RegularExpression regex(match.GetStringRef());
-  if (regex.Execute(GetTypeName().AsCString())) {
-    return false;
-  }
   auto type_class = GetCompilerType().GetTypeClass() == lldb::eTypeClassTypedef ?
                     GetCompilerType().GetTypedefedType().GetTypeClass() :
                     GetCompilerType().GetTypeClass();
-  if (type_class == lldb::eTypeClassBuiltin) {
+  if (type_class != lldb::eTypeClassClass) {
     return false;
   }
-
   if (should_check_parent) {
     if (GetParent() && GetParent()->GetAddressOf() == GetAddressOf()) {
-      return false;
+      std::string parent_name = this->GetName().AsCString();
+      auto pos = parent_name.find(".");
+      while (pos != std::string::npos) {
+        parent_name.replace(pos, 1, "::");
+        pos = parent_name.find(".", pos + 2);
+      }
+      if (this->GetName().AsCString() == parent_name) {
+        return false;
+      }
     }
   }
+
   Status error;
   uint64_t type_addr = 0;
   class_type_or_name.Clear();
@@ -3268,7 +3264,7 @@ bool ValueObject::GetCangjieDynamicType(
   llvm::DenseSet<SymbolFile *> searched_symbol_files;
   pos = dynamic_name.rfind(".ti");
   bool is_ti_type = false;
-  if (!GetTypeName().GetStringRef().contains("E1$") && pos == dynamic_name.length() - std::string(".ti").length()) {
+  if (!GetTypeName().GetStringRef().contains("E1$")) {
     dynamic_name = dynamic_name.substr(0, pos);
     if (dynamic_name != GetTypeName().AsCString()) {
       is_ti_type = true;
