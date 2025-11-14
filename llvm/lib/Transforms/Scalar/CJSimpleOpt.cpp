@@ -898,3 +898,41 @@ PreservedAnalyses CJSimpleOpt::run(Function &F,
   }
   return PreservedAnalyses::all();
 }
+
+// The following instruction is redundant because the runtime has already done
+// it when the catch type is unique.
+//  landing_pad_bb:
+//    ...
+//    %x = call i1 @llvm.cj.is.subtype(...)
+//    br i1 %x, label %succ0, %succ1
+static bool simplifyLandingPad(Function &F) {
+  bool Changed = false;
+  for (auto &I : instructions(F)) {
+    auto *LPI = dyn_cast<LandingPadInst>(&I);
+    if (!LPI)
+      continue;
+    // Catch type should be unique.
+    if (LPI->getNumOperands() != 1 ||
+        isa<ConstantPointerNull>(LPI->getOperand(0)))
+      continue;
+    auto *BI = dyn_cast<BranchInst>(LPI->getParent()->getTerminator());
+    if (!BI || !BI->isConditional())
+      continue;
+    auto *CB = dyn_cast<CallBase>(BI->getCondition());
+    if (!CB || !CB->getCalledFunction()->hasName() ||
+        CB->getCalledFunction()->getName() != "CJ_MCC_IsSubType")
+      continue;
+    CB->replaceAllUsesWith(
+        ConstantInt::getTrue(Type::getInt1Ty(LPI->getContext())));
+    Changed = true;
+  }
+  return Changed;
+}
+
+PreservedAnalyses CJAfterInlineSimpleOpt::run(Function &F,
+                                              FunctionAnalysisManager &FAM) const {
+  if (simplifyLandingPad(F)) {
+    return PreservedAnalyses::none();
+  }
+  return PreservedAnalyses::all();
+}
