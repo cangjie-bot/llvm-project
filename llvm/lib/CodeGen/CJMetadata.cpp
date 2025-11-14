@@ -375,20 +375,9 @@ std::string ulebEncode(std::vector<std::uint64_t> &Strs) {
   return StrCode;
 }
 
-// Filter out the basic library functions when the exception stacktrace is
-// dumped.
-std::set<std::string> FiltMangleNameSet = {
-    "user.main",
-    "cj_entry$",
-    "_CNat",
-    "rt$",
-};
-
-bool isNeedFilt(std::string MangleName) {
-  for (auto FiltMangleName : FiltMangleNameSet) {
-    if (MangleName.find(FiltMangleName) == 0)
-      return true;
-  }
+bool isNeedFilt(const Function *F) {
+  if (F && F->hasFnAttribute("cj_stack_trace_omit"))
+    return true;
   return false;
 }
 
@@ -403,14 +392,6 @@ void CJMetadataInfo::emitStackTraceInfo(const MCSymbol *FuncSym,
     return;
   }
 
-  std::string MethodNameStr = FuncSym->getName().str();
-  if (StackTraceFormatFlag == StackTraceFormat::Simple &&
-      !isNeedFilt(MethodNameStr))
-    MethodNameStr = "";
-  // set default value "" for  dir and fileName
-  std::string DirStr("");
-  std::string FileNameStr("");
-
   Function *Func = nullptr;
   if (IsMachO) {
     // 1: FuncSym name is _xxx in macos, so begin from 1 to get xxx.
@@ -418,6 +399,14 @@ void CJMetadataInfo::emitStackTraceInfo(const MCSymbol *FuncSym,
   } else {
     Func = M->getFunction(FuncSym->getName());
   }
+  std::string MethodNameStr = FuncSym->getName().str();
+  if (StackTraceFormatFlag == StackTraceFormat::Simple &&
+      !isNeedFilt(Func))
+    MethodNameStr = "";
+  // set default value "" for  dir and fileName
+  std::string DirStr("");
+  std::string FileNameStr("");
+
   if (Func != nullptr) {
     DISubprogram *SP = Func->getSubprogram();
     if (SP != nullptr) {
