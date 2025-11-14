@@ -375,20 +375,9 @@ std::string ulebEncode(std::vector<std::uint64_t> &Strs) {
   return StrCode;
 }
 
-// Filter out the basic library functions when the exception stacktrace is
-// dumped.
-std::set<std::string> FiltMangleNameSet = {
-    "user.main",
-    "cj_entry$",
-    "_CNat",
-    "rt$",
-};
-
-bool isNeedFilt(std::string MangleName) {
-  for (auto FiltMangleName : FiltMangleNameSet) {
-    if (MangleName.find(FiltMangleName) == 0)
-      return true;
-  }
+bool isNeedFilt(const Function *F) {
+  if (F->hasAttribute("cj_stack_trace_omit"))
+    return true;
   return false;
 }
 
@@ -402,10 +391,10 @@ void CJMetadataInfo::emitStackTraceInfo(const MCSymbol *FuncSym,
     OS.emitIntValue(0, StrSize);
     return;
   }
-
+  const Function *F = FuncSym->getFunction();
   std::string MethodNameStr = FuncSym->getName().str();
   if (StackTraceFormatFlag == StackTraceFormat::Simple &&
-      !isNeedFilt(MethodNameStr))
+      !isNeedFilt(F))
     MethodNameStr = "";
   // set default value "" for  dir and fileName
   std::string DirStr("");
