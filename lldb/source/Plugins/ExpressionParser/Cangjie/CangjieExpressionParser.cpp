@@ -99,19 +99,12 @@ static void SetTripleInfoIfNeed(ArchSpec target_arch, Cangjie::Triple::Info &tar
     target_triple.vendor = Cangjie::Triple::Vendor::APPLE;
     target_triple.env = Cangjie::Triple::Environment::NOT_AVAILABLE;
     return;
-  } else if (os == llvm::Triple::IOS) {
-    target_triple.os = Cangjie::Triple::OSType::IOS;
-    target_triple.env = Cangjie::Triple::Environment::SIMULATOR;
-    target_triple.vendor = Cangjie::Triple::Vendor::APPLE;
-    return;
   } else {
     target_triple.os = Cangjie::Triple::OSType::UNKNOWN;
   }
   auto env = target_arch.GetTriple().getEnvironment();
   if (env == llvm::Triple::GNU) {
     target_triple.env = Cangjie::Triple::Environment::GNU;
-  } else if (env == llvm::Triple::Android) {
-    target_triple.env = Cangjie::Triple::Environment::ANDROID;
   } else {
     target_triple.env = Cangjie::Triple::Environment::OHOS;
   }
@@ -144,9 +137,6 @@ bool CangjieExpressionParser::Parse(ExecutionContext &exeCtx, const std::string 
   LLDB_LOGF(log, "using target triple %s %s %s %s %s\n", triple.str().c_str(),
             triple.getArchName().data(), triple.getVendorName().data(),
             triple.getOSName().data(), triple.getEnvironmentName().data());
-  if (target_triple.env == Cangjie::Triple::Environment::ANDROID) {
-    target_triple.apiLevel = "31";
-  }
   invocation->globalOptions.target = target_triple;
   invocation->globalOptions.environment.cangjieHome = cangjie_home;
   invocation->globalOptions.srcFiles.push_back(cangjieExprTempFile);

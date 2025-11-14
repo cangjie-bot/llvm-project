@@ -711,9 +711,6 @@ void CJMetadataInfo::emitGlobalInitFuncTable() {
     return;
 
   OS.switchSection(TD[GlobalInitFuncIdx].TableSection);
-  if (TT.isOSBinFormatMachO())
-    // 8: align size, 8 bytes
-    OS.emitValueToAlignment(8);
   NamedMDNode *PkgInitFuncMD = M->getNamedMetadata("pkg_init_func");
   std::set<std::string> GlobalInitFuncNameSet;
   std::string GlobalInitFuncName;
