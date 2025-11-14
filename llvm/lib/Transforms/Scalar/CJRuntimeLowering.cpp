@@ -99,11 +99,6 @@ const static StdMap<unsigned, StringRef> RuntimeMap {
     {Intrinsic::cj_is_tupletype_of, "CJ_MCC_IsTupleTypeOf"},
     {Intrinsic::cj_is_typeinfo_equal, "CJ_MCC_IsTypeInfoEqual"},
     {Intrinsic::cj_set_location, "SetDebugLocation"},
-    {Intrinsic::cj_cross_access_barrier, "CJ_MCC_CrossAccessBarrier"},
-    {Intrinsic::cj_get_exported_ref, "CJ_MCC_GetExportedRef"},
-    {Intrinsic::cj_remove_exported_ref, "CJ_MCC_RemoveExportedRef"},
-    {Intrinsic::cj_create_export_handle, "CJ_MCC_CreateExportHandle"},
-    {Intrinsic::cj_blackhole, "CJ_LLVM_BlackHole"}};
 
 struct LowerGetFieldOffset {
   CallBase *CI;
@@ -966,10 +961,6 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       Lowering.replaceWithRuntimeFunc(CI, true, false);
       Changed = true;
       break;
-    case Intrinsic::cj_cross_access_barrier:
-    case Intrinsic::cj_get_exported_ref:
-    case Intrinsic::cj_remove_exported_ref:
-    case Intrinsic::cj_create_export_handle:
     case Intrinsic::cj_fill_in_stack_trace:
       Lowering.replaceWithRuntimeFunc(CI, false, false);
       Changed = true;

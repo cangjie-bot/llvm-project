@@ -472,12 +472,6 @@ def int_cj_array_copy_struct        : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
 def int_cj_copy_struct_field        : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i64_ty]>;
-def int_cj_cross_access_barrier    : Intrinsic<[], [llvm_i64_ty]>;
-def int_cj_get_exported_ref        : Intrinsic<[llvm_gcptr_ty],
-                                                [llvm_i64_ty]>;
-def int_cj_remove_exported_ref     : Intrinsic<[], [llvm_i64_ty]>;
-def int_cj_create_export_handle         : Intrinsic<[llvm_i64_ty],
-                                                [llvm_gcptr_ty]>;
 
 //===------------------- Cangjie runtime Intrinsics ------------------------===//
 //
