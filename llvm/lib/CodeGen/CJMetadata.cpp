@@ -92,6 +92,7 @@ void CJMetadataInfo::init() {
   TD[TypeInfoTableIdx].TableSection = MOFI->getTypeInfoSection();
   TD[TypeTemplateIdx].TableSection = MOFI->getCJTypeTemplateSection();
   TD[TypeFieldsIdx].TableSection = MOFI->getCJTypeFieldsSection();
+  TD[TypeExtTableIdx].TableSection = MOFI->getTypeExtSection();
   TD[MTableIdx].TableSection = MOFI->getCJMtableSection();
   TD[StaticGIIdx].TableSection = MOFI->getCJStaticGenericTISection();
   TD[GCFlagsIdx].TableSection = MOFI->getCJGCFlagsSection();
@@ -157,6 +158,11 @@ void CJMetadataInfo::recordGlobalVariable(const GlobalVariable *GV) {
 
     if (GV->isCJMTable()) {
       MTableTable.push_back(GV);
+      return;
+    }
+
+    if (GV->isCJTypeExt()) {
+      TypeExtTable.push_back(GV);
       return;
     }
 
@@ -613,6 +619,13 @@ void CJMetadataInfo::emitTypeTemplate() {
     AP.emitGlobalVariable(TT);
 }
 
+void CJMetadataInfo::emitTypeExt() {
+  OS.switchSection(TD[TypeExtTableIdx].TableSection);
+  for (const auto *typeExt : TypeExtTable) {
+    AP.emitGlobalVariable(typeExt);
+  }
+}
+
 void CJMetadataInfo::emitMTable() {
   if (MTableTable.empty())
     return;
@@ -869,6 +882,7 @@ void CJMetadataInfo::emitCJMetadata(Module &M) {
   emitGCFlags();
   emitReflectInfo();
   emitReflectGenericTI();
+  emitTypeExt();
   OS.addBlankLine();
 }
 } // namespace llvm
