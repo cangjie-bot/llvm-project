@@ -69,7 +69,9 @@ const static StdMap<unsigned, StringRef> RuntimeMap {
     {Intrinsic::cj_malloc_object, "CJ_MCC_NewObject"},
     {Intrinsic::cj_alloca_generic, "CJ_MCC_NewObject"},
     {Intrinsic::cj_malloc_array_generic, "CJ_MCC_NewArrayGeneric"},
+    {Intrinsic::cj_get_vtable_func, "CJ_MCC_UpdateVMT"},
     {Intrinsic::cj_get_mtable_func, "CJ_MCC_GetMTable"},
+    {Intrinsic::cj_get_method_outertype, "CJ_MCC_GetMethodOuterTI"},
     {Intrinsic::cj_acquire_rawdata, "CJ_MCC_AcquireRawData"},
     {Intrinsic::cj_release_rawdata, "CJ_MCC_ReleaseRawData"},
     {Intrinsic::cj_post_throw_exception, "CJ_MCC_PostThrowException"},
@@ -329,24 +331,23 @@ public:
 
     auto *TI = CI->getArgOperand(0)->stripPointerCasts();
     auto *GV = dyn_cast<GlobalVariable>(TI);
-    // In Cangjie, non-fixed size classes allow member variable extension
-    // compatibility, so the size needs to be explicitly loaded from typeinfo.
-    if (!GV || !GV->hasAttribute("can_malloc_with_fixed_size")) {
-      IRBuilder<> IRB(CI);
-      auto *Ptr = GetTISizePointer(TI, IRB);
-      assert(Ptr->getType()->getNonOpaquePointerElementType() ==
-             IRB.getInt32Ty());
-      auto *LI = dyn_cast<Instruction>(IRB.CreateLoad(IRB.getInt32Ty(), Ptr));
-      LI->setDebugLoc(CI->getDebugLoc());
-      return VariableSizeAlign(LI, IRB);
+    if (CI->hasMetadata("TrustedSize") ||
+        (GV && GV->hasAttribute("NotModifiableClass"))) {
+          if (auto *SizeVar = dyn_cast<ConstantInt>(CI->getArgOperand(1)))
+            return ConstantSizeAlign(SizeVar->getZExtValue());
+          if (GV && GV->hasInitializer())
+            return ConstantSizeAlign(TypeInfo(GV).getSize());
+          IRBuilder<> IRB(CI);
+          VariableSizeAlign(CI->getArgOperand(1), IRB);
     }
-    if (auto *SizeVar = dyn_cast<ConstantInt>(CI->getArgOperand(1)))
-      return ConstantSizeAlign(SizeVar->getZExtValue());
-    if (GV && GV->hasInitializer())
-      return ConstantSizeAlign(TypeInfo(GV).getSize());
-
     IRBuilder<> IRB(CI);
-    VariableSizeAlign(CI->getArgOperand(1), IRB);
+    auto *Ptr = GetTISizePointer(TI, IRB);
+    assert(Ptr->getType()->getNonOpaquePointerElementType() ==
+           IRB.getInt32Ty());
+    auto *LI = dyn_cast<Instruction>(IRB.CreateLoad(IRB.getInt32Ty(), Ptr));
+    LI->setMetadata(LLVMContext::MD_invariant_load, MDNode::get(LI->getContext(), {}));
+    LI->setDebugLoc(CI->getDebugLoc());
+    return VariableSizeAlign(LI, IRB);
   }
 
   void replaceFixedNewObject(CallBase *&CI) {
@@ -524,6 +525,7 @@ public:
   // %2 = load i8**, i8*** %1
   // %3 = getelementptr i8*, i8** %2, %index_type
   // %4 = load i8*, i8** %3
+  // TryUpdateMTable
   // %5 = bitcast i8* %4 to %ExDef*
   // %6 = getelementptr inbounds %ExDef, %ExDef* %5, i64 0, i32 ET_FUNC_TABLE
   // %7 = bitcast i8* %6 to i8***
@@ -553,6 +555,13 @@ public:
         IRB.CreateLoad(GEP1->getType()->getNonOpaquePointerElementType(), GEP1);
     LI1->setMetadata(LLVMContext::MD_invariant_load,
                      MDNode::get(CB->getContext(), {}));
+
+    auto *Int8PtrTy = Type::getInt8PtrTy(C);
+    auto *Callee = getOrInsertRuntimeFunc(CB, true, false,
+      // CJ_MCC_UpdateVMT: void(*)(i8*, i8*, i8*)
+      FunctionType::get(Type::getVoidTy(C), {Int8PtrTy, Int8PtrTy, Int8PtrTy}, false));
+    IRB.CreateCall(Callee, {CB->getArgOperand(0), CB->getArgOperand(3), LI1});
+
     auto *BS1 = IRB.CreateBitCast(
         LI1, StructType::getTypeByName(CB->getContext(), "ExtensionDef")
                  ->getPointerTo());
@@ -608,6 +617,13 @@ public:
                     CB->getMetadata(LLVMContext::MD_obj_type));
     CB->replaceAllUsesWith(LI);
     CB->eraseFromParent();
+  }
+
+  void replaceGetMethodOuterType(CallBase *CB) {
+    auto *Callee = getOrInsertRuntimeFunc(CB, true, false,
+      // CJ_MCC_GetMethodOuterType: TypeInfo*(*)(i8*, i8*, i64 index)
+      CB->getFunctionType());
+    CB->setCalledFunction(Callee);
   }
 
   void replaceDivisionCheck() {
@@ -689,6 +705,30 @@ public:
     CI->replaceAllUsesWith(NewCI);
     CI->eraseFromParent();
     return true;
+  }
+
+  void loweringMallocObject(CallBase *&CI) {
+    const MDNode *MD = CI->getMetadata("MallocType");
+    if (MD == nullptr) {
+      setHeapMallocSizeAlign(CI);
+      replaceWithRuntimeFunc(CI, false, true);
+    } else {
+      StringRef Ty = dyn_cast<MDString>(MD->getOperand(0).get())->getString();
+      if (Ty.equals("HasFinalizer")) {
+        setHeapMallocSizeAlign(CI);
+        replaceNewFinalizerFunc(CI);
+      } else if (Ty.equals("Future") || Ty.equals("Mutex") ||
+                 Ty.equals("Monitor") || Ty.equals("WaitQueue")) {
+        replaceFixedNewObject(CI);
+      } else if (Ty.equals("WeakRef")) {
+        setHeapMallocSizeAlign(CI);
+        replaceNewWeakRefFunc(CI);
+      } else {
+        setHeapMallocSizeAlign(CI);
+        replaceWithRuntimeFunc(CI, false, true);
+      }
+    }
+    CI->addRetAttr(Attribute::NoAlias);
   }
 
 private:
@@ -882,22 +922,6 @@ static void insertGVForNativeFunc(Module &M, Function &F,
   CJFuncGV->addAttribute("cj-native");
 }
 
-static TypeFlag getMallocType(CallBase *CB) {
-  const MDNode *MD = CB->getMetadata("MallocType");
-  if (MD == nullptr)
-    return TF_NONE;
-
-  StringRef Ty = dyn_cast<MDString>(MD->getOperand(0).get())->getString();
-  return StringSwitch<TypeFlag>(Ty)
-      .Case("HasFinalizer", TF_HAS_FINALIZER)
-      .Case("Future", TF_FUTURE_CLASS)
-      .Case("Mutex", TF_MUTEX_CLASS)
-      .Case("Monitor", TF_MONITOR_CLASS)
-      .Case("WaitQueue", TF_WAIT_QUEUE_CLASS)
-      .Case("WeakRef", TF_WEAK_REF_CLASS)
-      .Default(TF_NONE);
-}
-
 // Declares MCC functions ready for backend processing.
 static void declareRuntimeFunc(Module &M) {
   LLVMContext &C = M.getContext();
@@ -989,6 +1013,10 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       Lowering.replaceGetMTableFunc(CI);
       Changed = true;
       break;
+    case Intrinsic::cj_get_method_outertype:
+      Lowering.replaceGetMethodOuterType(CI);
+      Changed = true;
+      break;
     case Intrinsic::cj_throw_exception:
       if (Triple(F.getParent()->getTargetTriple()).isOSWindows()) {
         // For windows, throw_exception need stackmap, beacuse runtime stack
@@ -1000,28 +1028,8 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       Changed = true;
       break;
     case Intrinsic::cj_malloc_object: {
+      Lowering.loweringMallocObject(CI);
       Changed = true;
-      switch (getMallocType(CI)) {
-      case TF_HAS_FINALIZER:
-        Lowering.setHeapMallocSizeAlign(CI);
-        Lowering.replaceNewFinalizerFunc(CI);
-        break;
-      case TF_FUTURE_CLASS:
-      case TF_MUTEX_CLASS:
-      case TF_MONITOR_CLASS:
-      case TF_WAIT_QUEUE_CLASS:
-        Lowering.replaceFixedNewObject(CI);
-        break;
-      case llvm::TF_WEAK_REF_CLASS:
-        Lowering.setHeapMallocSizeAlign(CI);
-        Lowering.replaceNewWeakRefFunc(CI);
-        break;
-      default:
-        Lowering.setHeapMallocSizeAlign(CI);
-        Lowering.replaceWithRuntimeFunc(CI, false, true);
-        break;
-      }
-      CI->addRetAttr(Attribute::NoAlias);
       break;
     }
     case Intrinsic::cj_alloca_generic:
