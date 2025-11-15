@@ -876,6 +876,9 @@ InsertSafepointPoll(Instruction *InsertBefore,
     FindDL++;
     if (FindDL == OrigBB->end())
       break;
+    if (FindDL->isDebugOrPseudoInst()) {
+      continue;
+    }
 
     DL = FindDL->getDebugLoc().get();
   }
