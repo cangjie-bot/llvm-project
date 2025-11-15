@@ -2,14 +2,14 @@
 
 %TypeTemplate = type { i8*, i8, i8, i16, i16, i8*, i8*, i8*, i8*, %ExtensionDef**, i16 }
 %TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, %TypeInfo*, %ExtensionDef**, i8*, i8* }
-%ExtensionDef = type { i32, i8, i8*, i8*, i8*, i8* }
+%ExtensionDef = type { i32, i8, i8, i16, i8*, i8*, i8*, i8* }
 
 @"default:A.tt" = internal global %TypeTemplate { i8* null, i8 -128, i8 0, i16 0, i16 1, i8* null, i8* null, i8* null, i8* null, %ExtensionDef** getelementptr inbounds ([2 x %ExtensionDef*], [2 x %ExtensionDef*]* @NonExternalExtensionDefs, i32 0, i32 0), i16 0 }
 @"std.core:Object.ti" = external global %TypeInfo
 @"default:A<Int32>.ti" = internal global %TypeInfo { i8* null, i8 -128, i8 0, i16 0, i32 0, i8* null, i32 0, i8 1, i8 1, i16 0, i32* null, i8* bitcast (%TypeTemplate* @"default:A.tt" to i8*), i8* null, i8* null, %TypeInfo* @"std.core:Object.ti", %ExtensionDef** getelementptr inbounds ([2 x %ExtensionDef*], [2 x %ExtensionDef*]* @NonExternalExtensionDefs, i32 0, i32 0), i8* null, i8* null } #0
 @"default:I1.ti" = internal global %TypeInfo { i8* null, i8 -127, i8 0, i16 0, i32 0, i8* null, i32 0, i8 1, i8 0, i16 0, i32* null, i8* null, i8* null, i8* null, %TypeInfo* null, %ExtensionDef** null, i8* null, i8* null } #0
 @"default:A<T>_ed_default:I1.ft" = internal global [1 x i8*] [i8* bitcast (i64 (i8 addrspace(1)*, %TypeInfo*)* @test_func_A to i8*)]
-@"default:A<T>_ed_default:I1" = internal global %ExtensionDef { i32 0, i8 1, i8* bitcast (%TypeTemplate* @"default:A.tt" to i8*), i8* bitcast (%TypeInfo* @"default:I1.ti" to i8*), i8* null, i8* bitcast ([1 x i8*]* @"default:A<T>_ed_default:I1.ft" to i8*) }
+@"default:A<T>_ed_default:I1" = internal global %ExtensionDef { i32 0, i8 1, i8 0, i16 1, i8* bitcast (%TypeTemplate* @"default:A.tt" to i8*), i8* bitcast (%TypeInfo* @"default:I1.ti" to i8*), i8* null, i8* bitcast ([1 x i8*]* @"default:A<T>_ed_default:I1.ft" to i8*) }
 
 @NonExternalExtensionDefs = internal global [2 x %ExtensionDef*] [%ExtensionDef* @"default:A<T>_ed_default:I1", %ExtensionDef* null]
 
