@@ -1013,6 +1013,7 @@ Error LTO::checkPartiallySplit() {
 void LTO::checkCJBC() {
   bool IsCJBC = true;
   // scan modules for ThinLTO
+  StringRef sourceFileName;
   for (auto &Mod : ThinLTO.ModuleMap) {
     LTOLLVMContext BackendContext(Conf);
     Expected<std::unique_ptr<Module>> MOrErr =
@@ -1022,6 +1023,7 @@ void LTO::checkCJBC() {
     Module &M = **MOrErr;
     Metadata *MD = M.getModuleFlag("CJBC");
     if (MD == nullptr) {
+      sourceFileName = M.getSourceFileName();
       IsCJBC = false;
       break;
     }
@@ -1032,14 +1034,16 @@ void LTO::checkCJBC() {
     Module &M = *Mod.M;
     Metadata *MD = M.getModuleFlag("CJBC");
     if (MD == nullptr) {
+      sourceFileName = M.getSourceFileName();
       IsCJBC = false;
       break;
     }
   }
 
   if (!IsCJBC) {
-    report_fatal_error(
-        "Only allow module from cangjie bc files for cangjie LTO!");
+    report_fatal_error(Twine(
+        "Only allow module from cangjie bc files for cangjie LTO!") +
+        sourceFileName);
   }
 }
 

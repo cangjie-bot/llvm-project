@@ -442,11 +442,17 @@ void CJMetadataInfo::emitStackTraceInfo(const MCSymbol *FuncSym,
   OS.emitValue(getOrInsertStrPoolOffset(MethodNameStrIndex, DescSym), StrSize);
   OS.emitValue(getOrInsertStrPoolOffset(DirStrIndex, DescSym), StrSize);
   OS.emitValue(getOrInsertStrPoolOffset(FileNameStrIndex, DescSym), StrSize);
-  OS.emitValue(
-      MCBinaryExpr::createSub(
-          MCSymbolRefExpr::create(StrPoolDictOffsetsSym, AP.OutContext),
-          MCSymbolRefExpr::create(DescSym, AP.OutContext), AP.OutContext),
-      StrSize);
+
+  if (MethodCompressedCode.empty() && DirCompressedCode.empty() &&
+      FileCompressedCode.empty()) {
+    OS.emitIntValue(0, 4);
+  } else {
+    OS.emitValue(
+        MCBinaryExpr::createSub(
+            MCSymbolRefExpr::create(StrPoolDictOffsetsSym, AP.OutContext),
+            MCSymbolRefExpr::create(DescSym, AP.OutContext), AP.OutContext),
+        4);
+  }
   return;
 }
 
@@ -706,17 +712,22 @@ void CJMetadataInfo::emitGlobalInitFuncTable() {
 
   OS.switchSection(TD[GlobalInitFuncIdx].TableSection);
   NamedMDNode *PkgInitFuncMD = M->getNamedMetadata("pkg_init_func");
+  std::set<std::string> GlobalInitFuncNameSet;
   std::string GlobalInitFuncName;
   if (PkgInitFuncMD != nullptr) {
-    MDTuple *PkgInitFuncTuple = dyn_cast<MDTuple>(PkgInitFuncMD->getOperand(0));
-    GlobalInitFuncName =
-        dyn_cast<MDString>(PkgInitFuncTuple->getOperand(0))->getString().str();
-    if (IsMachO)
-      GlobalInitFuncName = "_" + GlobalInitFuncName;
+    for (unsigned I = 0; I < PkgInitFuncMD->getNumOperands(); I++) {
+      MDTuple *PkgInitFuncTuple =
+          dyn_cast<MDTuple>(PkgInitFuncMD->getOperand(I));
+      GlobalInitFuncName =
+          dyn_cast<MDString>(PkgInitFuncTuple->getOperand(0))->getString().str();
+      if (IsMachO)
+        GlobalInitFuncName = "_" + GlobalInitFuncName;
+      GlobalInitFuncNameSet.insert(GlobalInitFuncName);
+    }
   }
   auto EmitData = [&](const MCSymbol *FuncSym, const MCSymbol *FuncBegin) {
     std::string FuncName = FuncSym->getName().str();
-    if (FuncName != GlobalInitFuncName)
+    if (!GlobalInitFuncNameSet.count(FuncName))
       return;
 
     // 8: method pc size, 8 bytes

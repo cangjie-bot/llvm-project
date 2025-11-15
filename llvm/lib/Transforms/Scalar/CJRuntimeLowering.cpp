@@ -99,10 +99,6 @@ const static StdMap<unsigned, StringRef> RuntimeMap {
     {Intrinsic::cj_is_tupletype_of, "CJ_MCC_IsTupleTypeOf"},
     {Intrinsic::cj_is_typeinfo_equal, "CJ_MCC_IsTypeInfoEqual"},
     {Intrinsic::cj_set_location, "SetDebugLocation"},
-    {Intrinsic::cj_cross_access_barrier, "CJ_MCC_CrossAccessBarrier"},
-    {Intrinsic::cj_get_exported_ref, "CJ_MCC_GetExportedRef"},
-    {Intrinsic::cj_remove_exported_ref, "CJ_MCC_RemoveExportedRef"},
-    {Intrinsic::cj_create_export_handle, "CJ_MCC_CreateExportHandle"},
     {Intrinsic::cj_blackhole, "CJ_LLVM_BlackHole"}};
 
 struct LowerGetFieldOffset {
@@ -576,6 +572,8 @@ public:
                                      CB->getArgOperand(2)))}));
     LI3->setMetadata(LLVMContext::MD_invariant_load,
                      MDNode::get(CB->getContext(), {}));
+    LI3->setMetadata(LLVMContext::MD_obj_type,
+                     CB->getMetadata(LLVMContext::MD_obj_type));
     CB->replaceAllUsesWith(LI3);
     CB->eraseFromParent();
   }
@@ -600,6 +598,8 @@ public:
     LI->setMetadata("FuncTable",
                     MDNode::get(C, {ConstantAsMetadata::get(cast<ConstantInt>(
                                        CB->getArgOperand(2)))}));
+    LI->setMetadata(LLVMContext::MD_obj_type,
+                    CB->getMetadata(LLVMContext::MD_obj_type));
     CB->replaceAllUsesWith(LI);
     CB->eraseFromParent();
   }
@@ -762,8 +762,7 @@ private:
       Func->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
     RTFuncMap[Callee] = Func;
     if (CI->getIntrinsicID() == Intrinsic::cj_blackhole) {
-      Func->addFnAttr(Attribute::ReadNone);
-      Func->setCallingConv(CallingConv::AnyReg);
+      Func->addFnAttr(Attribute::ReadOnly);
     }
     return Func;
   }
@@ -959,18 +958,10 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
     case Intrinsic::cj_set_gc_threshold:
     case Intrinsic::cj_post_throw_exception:
     case Intrinsic::cj_register_implicit_exception_raisers:
-      Lowering.replaceWithRuntimeFunc(CI, true, false);
-      Changed = true;
-      break;
     case Intrinsic::cj_blackhole:
       Lowering.replaceWithRuntimeFunc(CI, true, false);
-      CI->setCallingConv(CallingConv::AnyReg);
       Changed = true;
       break;
-    case Intrinsic::cj_cross_access_barrier:
-    case Intrinsic::cj_get_exported_ref:
-    case Intrinsic::cj_remove_exported_ref:
-    case Intrinsic::cj_create_export_handle:
     case Intrinsic::cj_fill_in_stack_trace:
       Lowering.replaceWithRuntimeFunc(CI, false, false);
       Changed = true;

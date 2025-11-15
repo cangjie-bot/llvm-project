@@ -202,7 +202,7 @@ static bool isBitcode(MemoryBufferRef mb) {
 }
 
 // Opens a file and create a file object. Path has to be resolved already.
-void LinkerDriver::addFile(StringRef path, bool withLOption) {
+void LinkerDriver::addFile(StringRef path, bool withLOption, bool exportSymbol) {
   using namespace sys::fs;
 
   Optional<MemoryBufferRef> buffer = readFile(path);
@@ -223,7 +223,7 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
     if (inWholeArchive) {
       for (const auto &p : getArchiveMembers(mbref)) {
         if (isBitcode(p.first))
-          files.push_back(make<BitcodeFile>(p.first, path, p.second, false));
+          files.push_back(make<BitcodeFile>(p.first, path, p.second, false, exportSymbol));
         else
           files.push_back(createObjFile(p.first, path));
       }
@@ -252,7 +252,7 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
       if (magic == file_magic::elf_relocatable)
         files.push_back(createObjFile(p.first, path, true));
       else if (magic == file_magic::bitcode)
-        files.push_back(make<BitcodeFile>(p.first, path, p.second, true));
+        files.push_back(make<BitcodeFile>(p.first, path, p.second, true, exportSymbol));
       else
         warn(path + ": archive member '" + p.first.getBufferIdentifier() +
              "' is neither ET_REL nor LLVM bitcode");
@@ -277,7 +277,7 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
         make<SharedFile>(mbref, withLOption ? path::filename(path) : path));
     return;
   case file_magic::bitcode:
-    files.push_back(make<BitcodeFile>(mbref, "", 0, inLib));
+    files.push_back(make<BitcodeFile>(mbref, "", 0, inLib, exportSymbol));
     break;
   case file_magic::elf_relocatable:
     files.push_back(createObjFile(mbref, "", inLib));
@@ -1566,11 +1566,20 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
   // Iterate over argv to process input files and positional arguments.
   InputFile::isInGroup = false;
   bool hasInput = false;
+  bool addExportBCOnly = false;
+  bool compileAsEXE = false;
   for (auto *arg : args) {
     switch (arg->getOption().getID()) {
     case OPT_library:
       addLibrary(arg->getValue());
       hasInput = true;
+      break;
+    case OPT_compile_as_exe:
+      compileAsEXE = true;
+      break;
+    case OPT_export_bc_only:
+      addFile(arg->getValue(), false, true);
+      addExportBCOnly = true;
       break;
     case OPT_INPUT:
       addFile(arg->getValue(), /*withLOption=*/false);
@@ -1665,6 +1674,18 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
 
   if (files.empty() && !hasInput && errorCount() == 0)
     error("no input files");
+
+  if (compileAsEXE) {
+    if (addExportBCOnly)
+      error("use compile-as-exe && export-bc-only. Hidden all sym is needed.");
+    for (InputFile *file : files)
+      if (auto bitcodeFile = dyn_cast<BitcodeFile>(file))
+        bitcodeFile->ExportSymbols = false;
+  } else if (!addExportBCOnly) {
+    for (InputFile *file : files)
+      if (auto bitcodeFile = dyn_cast<BitcodeFile>(file))
+        bitcodeFile->ExportSymbols = true;
+  }
 }
 
 // If -m <machine_type> was not given, infer it from object files.
