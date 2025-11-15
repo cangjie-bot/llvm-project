@@ -225,6 +225,8 @@ SectionKind TargetLoweringObjectFile::getKindForGlobal(const GlobalObject *GO,
     return SectionKind::getCJGCTib();
   if (GVar->isCJMTable())
     return SectionKind::getCJMTable();
+  if (GVar->isCJTypeExt())
+    return SectionKind::getCJTypeExt();
   if (GVar->isCJReflectPkgInfo())
     return SectionKind::getCJReflectPkgInfo();
   if (GVar->isCJReflectGV())

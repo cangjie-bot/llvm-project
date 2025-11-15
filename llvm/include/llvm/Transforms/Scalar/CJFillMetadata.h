@@ -107,14 +107,14 @@ enum TypeFlag : uint8_t {
   TF_MONITOR_CLASS = 0x1 << 4,
   TF_WAIT_QUEUE_CLASS = 0x1 << 5,
   TF_REFLECTION = 0x1 << 6,
-  // used to mark weakref in the backend,
-  // does not set the flag value in typeinfo.
-  TF_WEAK_REF_CLASS = 0x1 << 7,
+  TF_HAS_EXT_PART = 0x1 << 7,
 };
 
 enum ExtensionDefFieldType : uint8_t {
   ET_TYPE_PARAM_COUNT = 0,
   ET_IS_INTERFACE_TYPEINFO,
+  ET_FLAG,
+  ET_FUNC_TABLE_SIZE,
   ET_TARGET_TYPE,
   ET_INTERFACE_FN,
   ET_WHERE_COND_FN,
@@ -149,6 +149,8 @@ enum ReflectModifyType : uint32_t {
 struct ExtensionDefData {
   unsigned TypeParamCount;
   uint8_t IsInterfaceTypeInfo;
+  uint8_t Flag;
+  uint16_t FuncTableSize;
   GlobalVariable *TargetType = 0;
   union {
     Function *InterfaceFn = nullptr;
