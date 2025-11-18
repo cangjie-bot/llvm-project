@@ -1084,6 +1084,16 @@ PreservedAnalyses CJRuntimeLowering::run(Module &M,
     }
   }
 
+  for (auto &GV : M.globals()) {
+    if (GV.hasAttribute("CFileKlass") || GV.hasAttribute("CJTITypeArgs") ||
+        GV.hasAttribute("CJTypeName") || GV.hasAttribute("CJTIFields") ||
+        GV.hasAttribute("CJTIOffsets")) {
+      GV.setConstant(true);
+      GV.setUnnamedAddr(GlobalVariable::UnnamedAddr::Global);
+      Changed = true;
+    }
+  }
+
   if (!Changed)
     return PreservedAnalyses::all();
 
