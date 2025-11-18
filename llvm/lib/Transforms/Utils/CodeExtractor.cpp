@@ -697,12 +697,8 @@ void CodeExtractor::insertStructBaseInArguments(Function *F, ValueSet &Values,
         }
       }
 
-      if (I < F->arg_size()) {
+      if (I < F->arg_size())
         BasePtrCands[V] = F->getArg(I - 1);
-      } else {
-        Type *NullBasePtr = Type::getInt8PtrTy(F->getContext(), 1);
-        BasePtrCands[V] = Constant::getNullValue(NullBasePtr);
-      }
     }
   }
 }
@@ -1210,8 +1206,12 @@ Function *CodeExtractor::constructFunction(const ValueSet &Inputs,
           SourceElementType, newFunction->getArg(ArgNo),
           ConstantInt::get(M->getContext(), APInt(32, Offset)), "pi_gep",
           InsertBefore);
-      RewriteVal = new BitCastInst(NewGEP, Bitcast->getType(), "pi_bitcastgep",
-                                   InsertBefore);
+      if (isa<llvm::BitCastInst>(Bitcast)) {
+        RewriteVal = new BitCastInst(NewGEP, Bitcast->getType(), "pi_bitcastgep", InsertBefore);
+      }
+      else if (isa<llvm::AddrSpaceCastInst>(Bitcast)) {
+        RewriteVal = new AddrSpaceCastInst(NewGEP, Bitcast->getType(), "pi_bitcastgep", InsertBefore);
+      }
     }
 
     std::vector<User *> Users(Bitcast->user_begin(), Bitcast->user_end());
