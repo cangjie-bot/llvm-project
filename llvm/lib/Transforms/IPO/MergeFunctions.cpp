@@ -124,7 +124,10 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <iterator>
+#include <llvm/ADT/SetVector.h>
+#include <llvm/ADT/StringRef.h>
 #include <set>
 #include <utility>
 #include <vector>
@@ -410,8 +413,186 @@ static bool isEligibleForMerging(Function &F) {
   return !F.isDeclaration() && !F.hasAvailableExternallyLinkage();
 }
 
+static Instruction* findUsedByEarlierInstruction(Instruction *Inst, Instruction *Target) {
+  for (Instruction &I : *Inst->getParent()) {
+    if (&I == Inst)
+      break;
+    for (Value *Op : I.operands()) {
+      if (Op == Target)
+        return &I;
+    }
+  }
+
+  return nullptr;
+}
+
+static bool shouldMoveInstruction(Instruction *Inst, SetVector<Instruction *> *shouldMoveInsts = nullptr) {
+  BasicBlock *CurrentBB = Inst->getParent();
+  Instruction *TargetInst = nullptr;
+
+  switch (Inst->getOpcode()) {
+  case Instruction::GetElementPtr: {
+    // %209 = getelementptr inbounds %"record.std.core:Array<T>",
+    // %"record.std.core:Array<T>"* %arr, i32 0, i32 2
+    auto *GEP = dyn_cast<GetElementPtrInst>(Inst);
+    Value *BasePtr = GEP->getPointerOperand();
+    if (auto *BaseInst = dyn_cast<Instruction>(BasePtr)) {
+      TargetInst = BaseInst;
+    }
+    break;
+  }
+
+  case Instruction::Load: {
+    // %210 = load i64, i64* %209, align 8
+    auto *LI = dyn_cast<LoadInst>(Inst);
+    Value *Ptr = LI->getPointerOperand();
+    if (auto *PtrInst = dyn_cast<Instruction>(Ptr)) {
+      TargetInst = PtrInst;
+    }
+    break;
+  }
+
+  case Instruction::BitCast: {
+    // %211 = bitcast %"record.std.core:String"* %13 to i8*
+    auto *BC = dyn_cast<BitCastInst>(Inst);
+    Value *SrcVal = BC->getOperand(0);
+    if (auto *SrcInst = dyn_cast<Instruction>(SrcVal)) {
+      TargetInst = SrcInst;
+    }
+    break;
+  }
+
+  case Instruction::PHI: {
+    // phi
+    auto *PHI = dyn_cast<llvm::PHINode>(Inst);
+    if (PHI) return true;
+    break;
+  }
+
+  default: {
+    // call void @llvm.cj.memset.p0i8(i8* align 8 %211, i8 0, i64 16, i1 false)
+    if (auto *CI = dyn_cast<CallInst>(Inst)) {
+      Function *Callee = CI->getCalledFunction();
+      if (Callee && Callee->getName().contains("llvm.cj.memset")) {
+        if (CI->getNumOperands() > 0) {
+          Value *FirstArg = CI->getOperand(0);
+          if (auto *ArgInst = dyn_cast<Instruction>(FirstArg)) {
+            TargetInst = ArgInst;
+          }
+        }
+      }
+    }
+    break;
+  }
+  }
+
+  if (TargetInst &&
+      (TargetInst->getParent() != CurrentBB ||
+       (shouldMoveInsts && shouldMoveInsts->contains(TargetInst)))) {
+    Instruction *II = findUsedByEarlierInstruction(Inst, TargetInst);
+	if (!II ||  (II && shouldMoveInsts->contains(II))) {
+	  return true;
+	}
+    
+  }
+  return false;
+}
+
+static BasicBlock *findOrCreateCacheBB(BasicBlock *CurrentBB) {
+  Function *F = CurrentBB->getParent();
+  if (!F)
+    return nullptr;
+
+  auto Preds = predecessors(CurrentBB);
+  if (Preds.empty())
+    return nullptr;
+
+  std::vector<llvm::BasicBlock*> PredsVec;
+
+  static int CacheCounter = 0;
+  std::string CacheBBName =
+      (CurrentBB->getName() + ".cache." + std::to_string(CacheCounter++)).str();
+  //
+  for (BasicBlock *PredBB : Preds) {
+    if (PredBB->getName().contains(".cache")) {
+      return PredBB;
+    }
+    PredsVec.push_back(PredBB);
+    for (BasicBlock *Succ : successors(PredBB)) {
+      if (Succ != CurrentBB && Succ->getName().contains(".cache")) {
+        if (succ_begin(Succ) != succ_end(Succ) &&
+            *succ_begin(Succ) == CurrentBB) {
+          return Succ;
+        }
+      }
+    }
+  }
+
+  BasicBlock *CacheBB =
+      BasicBlock::Create(CurrentBB->getContext(), CacheBBName, F, CurrentBB);
+
+  for (BasicBlock *PredBB : PredsVec) {
+    PredBB->getTerminator()->replaceSuccessorWith(CurrentBB, CacheBB);
+  }
+
+  IRBuilder<> Builder(CacheBB);
+  Builder.CreateBr(CurrentBB);
+
+  return CacheBB;
+}
+
+static bool moveInstructionToTargetBB(Instruction *Inst, BasicBlock *TargetBB) {
+  if (!Inst || !TargetBB)
+    return false;
+
+  if (Inst->getParent() == TargetBB)
+    return true;
+
+  SmallVector<Instruction *, 8> DependentInsts;
+  for (User *U : Inst->users()) {
+    if (Instruction *UserInst = dyn_cast<Instruction>(U)) {
+      if (UserInst->getParent() == Inst->getParent()) {
+        DependentInsts.push_back(UserInst);
+      }
+    }
+  }
+
+  Inst->removeFromParent();
+
+  Instruction *Terminator = TargetBB->getTerminator();
+  if (Terminator) {
+    Inst->insertBefore(Terminator);
+  } else {
+    TargetBB->getInstList().push_back(Inst);
+  }
+
+  return true;
+}
+
+static bool moveInstToCacheBB(Instruction *Inst) {
+  if (shouldMoveInstruction(Inst)) {
+    BasicBlock *CacheBB = findOrCreateCacheBB(Inst->getParent());
+    if (CacheBB && moveInstructionToTargetBB(Inst, CacheBB)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static bool isBBEligibleForOutline(llvm::BasicBlock *BB) {
   if (!BB)
+    return false;
+
+  if (BB->getParent()->getName().str() == "_CNaf10getAddressHlF0ilPRNaf8SockAddrEERNat6StringE") {
+    std::string str = "dfv";
+  }
+
+  auto findOutlinedSuffix = [] (StringRef Name) -> bool {
+    size_t pos = Name.find("exception_outlined_func");
+    return pos != StringRef::npos;
+  };
+
+  if (findOutlinedSuffix(BB->getParent()->getName()))
     return false;
 
   // Do not optimize the function to prevent the failure of stack frame throwing
@@ -420,14 +601,32 @@ static bool isBBEligibleForOutline(llvm::BasicBlock *BB) {
     return false;
   if (BB->getParent()->getName().equals("rt$ThrowImplicitException"))
     return false;
+  std::vector<llvm::Instruction*> Insts;
   for (auto &Inst : *BB) {
-    if (const GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(&Inst)) {
+    if (const LandingPadInst *LDP = dyn_cast<LandingPadInst>(&Inst)) {
       return false;
     }
-    if (CallInst *CI = dyn_cast<CallInst>(&Inst)) {
+    Insts.push_back(&Inst);
+  }
+
+  SetVector<Instruction *> shouldMoveInsts;
+  for (auto *Inst: Insts) {
+    if (shouldMoveInstruction(Inst, &shouldMoveInsts))
+      shouldMoveInsts.insert(Inst);
+  }
+
+  for (Instruction &I : *BB) {
+    Instruction *Inst = &I;
+    if (shouldMoveInsts.contains(Inst))
+      continue;
+    if (const GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(Inst)) {
+      return false;
+    } else if (CallInst *CI = dyn_cast<CallInst>(Inst)) {
       Function *Callee = CI->getCalledFunction();
       if (!Callee)
         return false;
+      if (Callee->getName().startswith("llvm.cj.throw.exception"))
+        return true;
       if (Callee->isIntrinsic()) {
         return false;
       }
@@ -438,18 +637,23 @@ static bool isBBEligibleForOutline(llvm::BasicBlock *BB) {
         return false;
       }
     }
-    for (auto &Use : Inst.operands()) {
+    for (auto &Use : Inst->operands()) {
       if (auto *User = Use.get()) {
         if (auto *UserInst = llvm::dyn_cast<llvm::Instruction>(User)) {
           // If it's not a Instruction, there's no need to use it in the current
           // context. For example GV.
-          if (UserInst->getParent() != BB) {
+          /*if (UserInst->getParent() != BB && UserInst->getParent() != findOrCreateCacheBB(BB)) {
             return false;
-          }
+          }*/
         }
       }
     }
   }
+
+  for (auto *Inst : Insts) {
+    moveInstToCacheBB(Inst);
+  }
+
   return true;
 }
 
@@ -463,6 +667,19 @@ static bool isThrowExceptionInstruction(llvm::Instruction *Inst) {
 }
 
 static void getInputArgs(llvm::BasicBlock *BB, SetVector<Value *> &ArgInputs) {
+  auto isFunctionPointer = [&](const llvm::Value *V) -> bool {
+    llvm::Type *Ty = V->getType();
+
+    if (auto *PTy = llvm::dyn_cast<llvm::PointerType>(Ty)) {
+      llvm::Type *ElemTy = PTy->getElementType();
+      if (llvm::isa<llvm::FunctionType>(ElemTy)) {
+        Function *Func = BB->getModule()->getFunction(V->getName());
+        return Func && (Func->isDeclaration() || Func->isDefinitionExact());
+      }
+    }
+    return false;
+  };
+
   for (auto &Inst : *BB) {
     if (CallInst *CI = dyn_cast<CallInst>(&Inst)) {
       Function *Callee = CI->getCalledFunction();
@@ -474,7 +691,7 @@ static void getInputArgs(llvm::BasicBlock *BB, SetVector<Value *> &ArgInputs) {
       if (auto *User = Use.get()) {
         // Values can be Input Arguement.
         if (auto *GV = llvm::dyn_cast<GlobalVariable>(User)) {
-          ArgInputs.insert(GV);
+          // ArgInputs.insert(GV);
         } else if (auto *CE = dyn_cast<ConstantExpr>(User)) {
           if (CE->getOpcode() == Instruction::BitCast)
             ArgInputs.insert(CE);
@@ -483,6 +700,14 @@ static void getInputArgs(llvm::BasicBlock *BB, SetVector<Value *> &ArgInputs) {
         }
       }
     }
+  }
+
+  auto It = ArgInputs.begin();
+  while (It != ArgInputs.end()) {
+    if (isFunctionPointer(*It))
+      It = ArgInputs.erase(It);
+    else
+      ++It;
   }
 }
 
@@ -498,10 +723,10 @@ static Function* generateFunc(BasicBlock *BB, Function *OrigF) {
   Function *Func = CE.extractCodeRegion(CEAC, ArgInputs, Outputs);
   return Func;
 }
-
+ 
 void MergeFunctions::doExceptionOutline(Module &M) {
   SmallVector<std::pair<llvm::BasicBlock *, llvm::Function *>> ExceptionBBs;
-
+  
   for (Function &F : M) {
     for (BasicBlock &BB : F) {
       for (Instruction &Inst : BB) {
@@ -513,7 +738,7 @@ void MergeFunctions::doExceptionOutline(Module &M) {
       }
     }
   }
-
+ 
   for (auto &pair : ExceptionBBs) {
     generateFunc(pair.first, pair.second);
   }
@@ -521,6 +746,7 @@ void MergeFunctions::doExceptionOutline(Module &M) {
 
 bool MergeFunctions::runOnModule(Module &M) {
   bool Changed = false;
+
   doExceptionOutline(M);
   SmallVector<GlobalValue *, 4> UsedV;
   collectUsedGlobalVariables(M, UsedV, /*CompilerUsed=*/false);
