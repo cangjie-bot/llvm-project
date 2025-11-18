@@ -1057,8 +1057,53 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
   return Changed;
 }
 
+static void testMergeTI(Module &M) {
+  for (GlobalVariable &GV : M.globals()) {
+    if (GV.hasAttribute("CFileKlass") || GV.hasAttribute("CJTITypeArgs") ||
+        GV.hasAttribute("CJTypeName") || GV.hasAttribute("CJTIFields") ||
+        GV.hasAttribute("CJTIOffsets") || GV.hasAttribute("CFileReflect ")) {
+      GV.setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+      GV.setConstant(true);
+
+
+      if (!GV.hasInitializer())
+        continue;
+
+      Constant *init = GV.getInitializer();
+      Type *type = GV.getValueType();
+
+      if (!type->isStructTy())
+        continue;
+
+      StringRef name = cast<StructType>(type)->getName();
+
+      if (GV.hasAttribute("CFileKlass")) {
+        if (auto *structConst = dyn_cast<ConstantStruct>(init)) {
+          unsigned fieldIndex = 15;
+
+          if (fieldIndex < structConst->getNumOperands()) {
+            Constant *field = structConst->getOperand(fieldIndex);
+            if (!isa<ConstantPointerNull>(field)) {
+              SmallVector<Constant *, 20> newFields;
+              for (unsigned i = 0; i < structConst->getNumOperands(); i++) {
+                newFields.push_back(
+                    i == fieldIndex ? ConstantPointerNull::get(
+                                          cast<PointerType>(field->getType()))
+                                    : structConst->getOperand(i));
+              }
+              GV.setInitializer(
+                  ConstantStruct::get(cast<StructType>(type), newFields));
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 PreservedAnalyses CJRuntimeLowering::run(Module &M,
                                          ModuleAnalysisManager &AM) const {
+  testMergeTI(M);
   if (!hasRunCangjieOpt(M)) {
     M.setModuleFlag(Module::Warning, "Cangjie_OPT",
                     ConstantAsMetadata::get(ConstantInt::get(
