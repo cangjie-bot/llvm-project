@@ -768,8 +768,10 @@ void StackMaps::updateOrInsertFnInfo(const MCSymbol *FnSym,
 
   // Do not need emit callsite info when it has no any Locations and LineNumber
   // in cangjie pipeline.
+  // We cannot use CallInfo.LineNumber == 0 to check whether it has line number,
+  // because 0 has specific meaning.
   if (CJPipeline && CallInfo.RefPairs.empty() && CallInfo.FOLocations.empty() &&
-      CallInfo.StackLocations.empty() && CallInfo.LineNumber == 0)
+      CallInfo.StackLocations.empty() && CallInfo.LineNumber == UINT32_MAX)
     return;
 
   // update callsite count.
@@ -954,7 +956,7 @@ void StackMaps::recordStackMapOpers(const MCSymbol &MILabel,
       MCSymbolRefExpr::create(AP.CurrentFnSymForSize, OutContext), OutContext);
 
   // get Line number from debug info
-  uint32_t Line = 0;
+  uint32_t Line = UINT32_MAX;
   if (MI.getOpcode() == TargetOpcode::STATEPOINT) {
     if (OpersInfo.ID == CJStatepointID::StackCheck &&
         MI.getMF()->getFunction().getSubprogram() != nullptr) {
