@@ -246,11 +246,6 @@ bool CangjieIRForTarget::IsReferenceType(const lldb_private::CompilerType &ty) {
   if (ty.GetTypeClass() == lldb::eTypeClassEnumeration) {
     return false;
   }
-  // For UG, enum with args is reference type.
-  if (ty.GetTypeClass() == lldb::eTypeClassStruct &&
-      type_name.find(lldb_private::ENUM_PREFIX_NAME) != std::string::npos) {
-    return true;
-  }
   if (ty.GetTypeClass() == lldb::eTypeClassStruct &&
       type_name.find(lldb_private::E2_PREFIX_NAME_OPTION_LIKE) != std::string::npos) {
     return false;
