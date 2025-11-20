@@ -250,7 +250,6 @@ protected:
                                            const Function *F,
                                            const MachineOperand &MOSym,
                                            unsigned Opcode){};
-  virtual void emitCangjieCustomInst() {};
   virtual void emitGetCJThreadId() {};
 
   int64_t getAllocBufferOffsetInCJTLS() const;
