@@ -196,7 +196,6 @@ protected:
   MCSymbol *CurrentFnBegin = nullptr;
 
   std::map<const MachineInstr *, std::pair<MCSymbol *, MCSymbol *>> StackCheckMap;
-  SmallVector<std::tuple<const MachineInstr *, MCSymbol *, MCSymbol *>> SafepointStackMap;
   /// A vector of all debug/EH info emitters we should use. This vector
   /// maintains ownership of the emitters.
   std::vector<HandlerInfo> Handlers;
@@ -250,7 +249,6 @@ protected:
                                            const Function *F,
                                            const MachineOperand &MOSym,
                                            unsigned Opcode){};
-  virtual void emitCangjieCustomInst() {};
   virtual void emitGetCJThreadId() {};
   virtual void emitCJSafepointStub() {};
 
