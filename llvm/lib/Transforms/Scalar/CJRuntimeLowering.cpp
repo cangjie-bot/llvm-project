@@ -1076,6 +1076,9 @@ PreservedAnalyses CJRuntimeLowering::run(Module &M,
   // Declaring MCC Functions for Backend Processing.
   declareRuntimeFunc(M);
   CJIntrinsicLowering CJLowering(M);
+  if (Triple(M.getTargetTriple()).isARM())
+    for (Function &F : M)
+      F.setAlignment(Align(16));
 
   // traversal Function-Instruction to lower intrinsic
   for (Function &F : M) {

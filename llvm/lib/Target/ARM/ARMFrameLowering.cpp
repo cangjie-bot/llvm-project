@@ -866,7 +866,8 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF,
   // Move past area 1.
   if (GPRCS1Size > 0) {
     if (MF.getFunction().hasCangjieGC()) {
-      while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup))
+      while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup) &&
+             MBBI->getOpcode() == ARM::STMDB_UPD)
         ++MBBI;
       assert(MBB.begin() != MBB.end());
       MBBI = std::prev(MBBI);
