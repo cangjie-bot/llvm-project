@@ -250,7 +250,6 @@ protected:
                                            const Function *F,
                                            const MachineOperand &MOSym,
                                            unsigned Opcode){};
-  virtual void emitCangjieCustomInst() {};
   virtual void emitGetCJThreadId() {};
   virtual void emitCJSafepointStub() {};
 
