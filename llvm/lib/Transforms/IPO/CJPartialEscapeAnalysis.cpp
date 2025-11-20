@@ -44,9 +44,9 @@ static cl::opt<unsigned> CJMaxStackObject("cj-max-stack-obj", cl::Hidden,
                                           cl::init(1024));
 static cl::opt<unsigned> CJMaxNonMoveArraySize("cj-max-nonmove-array-size",
                                                cl::Hidden, cl::init(64 * 1024));
-static cl::opt<bool> CJDisablePEA("cj-disable-partial-ea",
-                                  cl::Hidden, cl::init(false));
 namespace llvm {
+cl::opt<bool> CJDisablePEA("cj-disable-partial-ea",
+                                  cl::Hidden, cl::init(false));
 
 GlobalVariable *getNewKlass(CallBase *I) {
   GlobalVariable *Klass =

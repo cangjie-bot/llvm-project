@@ -68,6 +68,8 @@ extern cl::opt<bool> EnableBarrierOnly;
 extern cl::opt<bool> EnableSafepointOnly;
 extern cl::opt<bool> EnableCJBarrierSplit;
 extern cl::opt<bool> EnableCJNewArrayFast;
+extern cl::opt<bool> CJDisableEscapeAnalysis;
+extern cl::opt<bool> CJDisablePEA;
 }
 static codegen::RegisterCodeGenFlags CFG;
 
@@ -397,6 +399,8 @@ static TargetMachine* GetTargetMachine(Triple TheTriple, StringRef CPUStr,
   if (CJPipeline && TheTriple.isARM()) {
     EnableCJBarrierSplit = false;
     EnableCJNewArrayFast = false;
+    CJDisableEscapeAnalysis = true;
+    CJDisablePEA = true;
   }
 
   return TheTarget->createTargetMachine(

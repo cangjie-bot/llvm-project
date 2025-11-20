@@ -1175,7 +1175,7 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     Changed = doNewFastPath(F, News);
   }
 
-  if (!Safepoints.empty())
+  if (!Safepoints.empty() && !TT.isARM())
     Changed |= combineSafepointStub(F.getParent(), Safepoints);
 
   if (Barriers.empty()) {
