@@ -985,7 +985,8 @@ UnwindPlanSP RegisterContextUnwind::GetFullUnwindPlanForFrame() {
 #if defined(_WIN32)
     auto symbol_name = GetSymbolOrFunctionName(m_sym_ctx);
     if (symbol_name == "CJ_MCC_C2NStub" || symbol_name == "CJ_MCC_N2CStub" ||
-        symbol_name == "CJ_MCC_NewObjectFast" || symbol_name == "CJ_MCC_NewFinalizerFast") {
+        symbol_name == "CJ_MCC_NewObjectFast" || symbol_name == "CJ_MCC_NewFinalizerFast" ||
+        synbol_name == "unwindPCForC2NStub") {
       unwind_plan_sp = func_unwinders_sp->GetAssemblyUnwindPlan(process->GetTarget(), m_thread);
     }
 #endif
