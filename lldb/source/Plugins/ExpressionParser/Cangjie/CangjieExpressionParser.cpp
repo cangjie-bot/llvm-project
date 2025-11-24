@@ -126,8 +126,10 @@ bool CangjieExpressionParser::Parse(ExecutionContext &exeCtx, const std::string 
     std::stringstream sstream(cangjie_path);
     std::string tmp_path;
     while (std::getline(sstream, tmp_path, ':')) {
-      LLDB_LOGF(log, "add [%s] to env CANGJIE_PATH\n", tmp_path.c_str());
-      invocation->globalOptions.environment.cangjiePaths.emplace_back(tmp_path);
+      if (!tmp_path.empty()) {
+        LLDB_LOGF(log, "add [%s] to env CANGJIE_PATH\n", tmp_path.c_str());
+        invocation->globalOptions.environment.cangjiePaths.emplace_back(tmp_path);
+      }
     }
   }
   Cangjie::Triple::Info target_triple;
