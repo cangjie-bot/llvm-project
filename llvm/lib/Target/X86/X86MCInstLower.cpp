@@ -1526,11 +1526,11 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
   const MachineOperand &CallTarget = SOpers.getCallTarget();
   if (CJPipeline) {
     uint64_t ID = SOpers.getID();
-    if (ID == CJStatepointID::StackCheck) {
+    if (ID == Cangjie::CJStatepointID::StackCheck) {
       emitCangjieStackCheck(MI);
       return;
     }
-    if (ID == CJStatepointID::NewArrayFast) {
+    if (ID == Cangjie::CJStatepointID::NewArrayFast) {
       emitCJNewArrayFastPath(MI, CallTarget);
       return;
     }
@@ -1584,7 +1584,7 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
     OutStreamer->emitInstruction(CallInst, getSubtargetInfo());
   }
 
-  if (SOpers.getID() == CJStatepointID::Safepoint)
+  if (SOpers.getID() == Cangjie::CJStatepointID::Safepoint)
     return SM.recordCJStackMap(MI, true);
 
   // Record our statepoint node in the same section used by STACKMAP
