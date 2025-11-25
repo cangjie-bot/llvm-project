@@ -3521,7 +3521,8 @@ static bool isNonStackOverflowFunc(MachineFunction &MF, unsigned FrameSize) {
 
       StatepointOpers SO(&MI);
       uint64_t ID = SO.getID();
-      if (ID == CJStatepointID::Safepoint || ID == CJStatepointID::StackCheck)
+      if (ID == Cangjie::CJStatepointID::Safepoint ||
+          ID == Cangjie::CJStatepointID::StackCheck)
         continue;
 
       const MachineOperand &CallTarget = SO.getCallTarget();
