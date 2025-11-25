@@ -19,6 +19,7 @@
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCSectionCOFF.h"
@@ -175,7 +176,7 @@ void CJMetadataInfo::recordGlobalVariable(const GlobalVariable *GV) {
       assert(GV->hasInitializer() && "StaticGenericTI has no Initializer!");
       const Constant *C = GV->getInitializer();
       for (unsigned Idx = 0; Idx < C->getNumOperands(); Idx++)
-        StaticGenericTI.push_back(cast<GlobalVariable>(C->getOperand(Idx)));
+        StaticGenericTI.push_back(cast<GlobalValue>(C->getOperand(Idx)));
       return;
     }
 
@@ -263,7 +264,12 @@ void CJMetadataInfo::recordCurrentFunc() {
   }
 }
 
-const MCExpr *CJMetadataInfo::getGVRefSymbol(const GlobalVariable *GV) {
+const MCExpr *CJMetadataInfo::getGVRefSymbol(const GlobalValue *GV) {
+  if (const GlobalAlias *GA = dyn_cast<GlobalAlias>(GV)) {
+    // Directly use the alias symbol itself
+    MCSymbol *GASymbol = AP.TM.getSymbol(GV);
+    return MCSymbolRefExpr::create(GASymbol, Context);
+  }
   MCSymbol *GVSymbol = AP.TM.getSymbol(GV);
   if (GV->hasExactDefinition()) {
     MCSymbol *RefSym =
@@ -683,7 +689,7 @@ void CJMetadataInfo::emitGCTibTable() {
     AP.emitGlobalVariable(GCTib);
 }
 
-void CJMetadataInfo::emitSubExpr(StringRef Label, const GlobalVariable *GV) {
+void CJMetadataInfo::emitSubExpr(StringRef Label, const GlobalValue *GV) {
   MCSymbol *CurSymbol = Context.createTempSymbol(Label);
   OS.emitLabel(CurSymbol);
   const MCExpr *CurRefSym = MCSymbolRefExpr::create(CurSymbol, Context);
