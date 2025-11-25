@@ -541,10 +541,6 @@ static bool doesNotRequireEntrySafepointBefore(CallBase *Call) {
     case Intrinsic::experimental_gc_statepoint:
     case Intrinsic::experimental_patchpoint_void:
     case Intrinsic::experimental_patchpoint_i64:
-    case Intrinsic::dbg_declare:
-    case Intrinsic::dbg_value:
-    case Intrinsic::dbg_addr:
-    case Intrinsic::dbg_label:
       // The can wrap an actual call which may grow the stack by an unbounded
       // amount or run forever.
       return false;
@@ -871,6 +867,18 @@ InsertSafepointPoll(Instruction *InsertBefore,
          "gc.safepoint_poll declared with wrong type");
   assert(!F->empty() && "gc.safepoint_poll must be a non-empty function");
   CallInst *PollCall = CallInst::Create(F, "", InsertBefore);
+  BasicBlock::iterator FindDL(PollCall);
+  auto *DL = FindDL->getDebugLoc().get();
+  while (!DL) {
+    FindDL++;
+    if (FindDL == OrigBB->end())
+      break;
+    if (FindDL->isDebugOrPseudoInst())
+      continue;
+
+    DL = FindDL->getDebugLoc().get();
+  }
+  PollCall->setDebugLoc(DL);
 
   // Record some information about the call site we're replacing
   BasicBlock::iterator Before(PollCall), After(PollCall);

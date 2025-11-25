@@ -34,14 +34,16 @@
 
 namespace llvm {
 
+namespace Cangjie {
 // Cangjie Statepoint ID
 enum CJStatepointID : uint64_t {
-   Default = 0,
-   // 1 and 2 are reserved for others
-   Safepoint = 3,
-   StackCheck = 4,
-   NewArrayFast = 5,
+  Default = 0,
+  // 1 and 2 are reserved for others
+  Safepoint = 3,
+  StackCheck = 4,
+  NewArrayFast = 5,
 };
+} // namespace Cangjie
 
 /// The statepoint intrinsic accepts a set of flags as its third argument.
 /// Valid values come out of this set.
