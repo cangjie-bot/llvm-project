@@ -992,6 +992,11 @@ void MCObjectFileInfo::initCOFFMCObjectFileInfo(const Triple &T) {
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
+  CJTypeExtSection = Ctx->getCOFFSection(
+      ".cjtpe",
+      COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
+          COFF::IMAGE_SCN_MEM_WRITE,
+      SectionKind::getData());
 
   // GC
   CJMethodInfoSection = Ctx->getCOFFSection(
