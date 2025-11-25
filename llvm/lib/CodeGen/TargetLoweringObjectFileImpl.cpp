@@ -640,6 +640,8 @@ static StringRef getCJCOFFSectionPrefixForGlobal(SectionKind Kind) {
     return ".cjinty";
   if (Kind.isCJReflectGenericTI())
     return ".cjrflg";
+  if (Kind.isCJTypeExt())
+    return ".cjtpe";
   llvm_unreachable("Unknown section kind");
 }
 
