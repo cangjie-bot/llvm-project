@@ -619,6 +619,8 @@ void CJMetadataInfo::emitTypeTemplate() {
 }
 
 void CJMetadataInfo::emitTypeExt() {
+  if (TypeExtTable.empty())
+    return;
   OS.switchSection(TD[TypeExtTableIdx].TableSection);
   for (const auto *typeExt : TypeExtTable) {
     AP.emitGlobalVariable(typeExt);
