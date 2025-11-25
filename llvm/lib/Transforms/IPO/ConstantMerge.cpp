@@ -38,9 +38,23 @@
 
 using namespace llvm;
 
+namespace llvm {
+  extern cl::opt<bool> CJPipeline;
+}
+
 #define DEBUG_TYPE "constmerge"
 
 STATISTIC(NumIdenticalMerged, "Number of identical global constants merged");
+
+static bool CJGVMergeable(GlobalVariable &GV) {
+  if (CJPipeline &&
+      (GV.hasAttribute("CJTITypeArgs") || GV.hasAttribute("CJTypeName") ||
+       GV.hasAttribute("CJTIFields") || GV.hasAttribute("CJTIOffsets") ||
+       GV.hasAttribute("CFileReflect"))) {
+    return true;
+  }
+  return false;
+}
 
 /// Find values that are marked as llvm.used.
 static void FindUsedValues(GlobalVariable *LLVMUsed,
@@ -105,9 +119,9 @@ enum class CanMerge { No, Yes };
 static CanMerge makeMergeable(GlobalVariable *Old, GlobalVariable *New) {
   if (!Old->hasGlobalUnnamedAddr() && !New->hasGlobalUnnamedAddr())
     return CanMerge::No;
-  if (hasMetadataOtherThanDebugLoc(Old))
+  if (hasMetadataOtherThanDebugLoc(Old) && !CJGVMergeable(*Old))
     return CanMerge::No;
-  assert(!hasMetadataOtherThanDebugLoc(New));
+  assert(!(hasMetadataOtherThanDebugLoc(New) && !CJGVMergeable(*New)));
   if (!Old->hasGlobalUnnamedAddr())
     New->setUnnamedAddr(GlobalValue::UnnamedAddr::None);
   return CanMerge::Yes;
@@ -128,7 +142,7 @@ static void replace(Module &M, GlobalVariable *Old, GlobalVariable *New) {
 
   // Delete the global value from the module.
   assert(Old->hasLocalLinkage() &&
-         "Refusing to delete an externally visible global variable.");
+         "Refusing to delete an externally  visible global variable.");
   Old->eraseFromParent();
 }
 
@@ -177,7 +191,7 @@ static bool mergeConstants(Module &M) {
         continue;
 
       // Don't touch globals with metadata other then !dbg.
-      if (hasMetadataOtherThanDebugLoc(&GV))
+      if (hasMetadataOtherThanDebugLoc(&GV) && !CJGVMergeable(GV))
         continue;
 
       Constant *Init = GV.getInitializer();
