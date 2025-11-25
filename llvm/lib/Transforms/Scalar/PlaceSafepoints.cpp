@@ -540,10 +540,6 @@ static bool doesNotRequireEntrySafepointBefore(CallBase *Call) {
     case Intrinsic::experimental_gc_statepoint:
     case Intrinsic::experimental_patchpoint_void:
     case Intrinsic::experimental_patchpoint_i64:
-    case Intrinsic::dbg_declare:
-    case Intrinsic::dbg_value:
-    case Intrinsic::dbg_addr:
-    case Intrinsic::dbg_label:
       // The can wrap an actual call which may grow the stack by an unbounded
       // amount or run forever.
       return false;
@@ -876,6 +872,8 @@ InsertSafepointPoll(Instruction *InsertBefore,
     FindDL++;
     if (FindDL == OrigBB->end())
       break;
+    if (FindDL->isDebugOrPseudoInst())
+      continue;
 
     DL = FindDL->getDebugLoc().get();
   }
