@@ -105,9 +105,9 @@ enum class CanMerge { No, Yes };
 static CanMerge makeMergeable(GlobalVariable *Old, GlobalVariable *New) {
   if (!Old->hasGlobalUnnamedAddr() && !New->hasGlobalUnnamedAddr())
     return CanMerge::No;
-  if (hasMetadataOtherThanDebugLoc(Old))
+  if (hasMetadataOtherThanDebugLoc(Old) && !CJGVMergeable(*Old))
     return CanMerge::No;
-  assert(!hasMetadataOtherThanDebugLoc(New));
+  assert(!(hasMetadataOtherThanDebugLoc(New) && !CJGVMergeable(*New)));
   if (!Old->hasGlobalUnnamedAddr())
     New->setUnnamedAddr(GlobalValue::UnnamedAddr::None);
   return CanMerge::Yes;
@@ -127,9 +127,18 @@ static void replace(Module &M, GlobalVariable *Old, GlobalVariable *New) {
   Old->replaceAllUsesWith(NewConstant);
 
   // Delete the global value from the module.
-  assert(Old->hasLocalLinkage() &&
-         "Refusing to delete an externally visible global variable.");
+  assert((Old->hasLocalLinkage() || CJGVMergeable(*Old)) &&
+         "Refusing to delete an externally  visible global variable.");
   Old->eraseFromParent();
+}
+
+static bool CJGVMergeable(GlobalVariable &GV) {
+  if (GV.hasAttribute("CFileKlass") || GV.hasAttribute("CJTITypeArgs") ||
+        GV.hasAttribute("CJTypeName") || GV.hasAttribute("CJTIFields") ||
+        GV.hasAttribute("CJTIOffsets") || GV.hasAttribute("CFileReflect ")) {
+          return true;
+        }
+  return false;
 }
 
 static bool mergeConstants(Module &M) {
@@ -177,7 +186,7 @@ static bool mergeConstants(Module &M) {
         continue;
 
       // Don't touch globals with metadata other then !dbg.
-      if (hasMetadataOtherThanDebugLoc(&GV))
+      if (hasMetadataOtherThanDebugLoc(&GV) && !CJGVMergeable(GV))
         continue;
 
       Constant *Init = GV.getInitializer();
@@ -205,7 +214,7 @@ static bool mergeConstants(Module &M) {
         continue;
 
       // We can only replace constant with local linkage.
-      if (!GV.hasLocalLinkage())
+      if (!GV.hasLocalLinkage() && !CJGVMergeable(GV))
         continue;
 
       Constant *Init = GV.getInitializer();

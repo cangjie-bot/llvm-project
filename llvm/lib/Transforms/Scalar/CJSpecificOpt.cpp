@@ -387,7 +387,40 @@ static bool runOnFunction(Function &F, unsigned OptLevel) {
   return Changed;
 }
 
+static void generateAliasForStaticGI(Module &M) {
+  for (GlobalVariable &GV : M.globals()) {
+    if (GV.isCJStaticGenericTI()) {
+      assert(GV.hasInitializer() && "StaticGenericTI has no Initializer!");
+
+      Constant *C = GV.getInitializer();
+
+      SmallVector<Constant*, 100> NewOperands;
+      for (unsigned Idx = 0; Idx < C->getNumOperands(); Idx++) {
+        GlobalVariable *TI = cast<GlobalVariable>(C->getOperand(Idx));
+        
+        std::string AliasName = "alias_" + TI->getName().str();
+        auto *Alias = GlobalAlias::create(
+            TI->getValueType(),
+            TI->getType()->getPointerAddressSpace(),
+            GlobalValue::InternalLinkage,
+            AliasName,
+            TI,
+            &M
+        );
+        
+        NewOperands.push_back(Alias);
+      }
+
+      ArrayType *ArrayTy = cast<ArrayType>(C->getType());
+      Constant *NewInit = ConstantArray::get(ArrayTy, NewOperands);
+      GV.setInitializer(NewInit);
+    }
+  }
+  return;
+}
+
 static bool processCangjieIR(Module &M, unsigned OptLevel) {
+  generateAliasForStaticGI(M);
   bool Changed = false;
   for (Function &F : M) {
     Changed |= runOnFunction(F, OptLevel);
