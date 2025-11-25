@@ -19,6 +19,7 @@
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCSectionCOFF.h"
@@ -175,7 +176,7 @@ void CJMetadataInfo::recordGlobalVariable(const GlobalVariable *GV) {
       assert(GV->hasInitializer() && "StaticGenericTI has no Initializer!");
       const Constant *C = GV->getInitializer();
       for (unsigned Idx = 0; Idx < C->getNumOperands(); Idx++)
-        StaticGenericTI.push_back(cast<GlobalVariable>(C->getOperand(Idx)));
+        StaticGenericTI.push_back(cast<GlobalAlias>(C->getOperand(Idx)));
       return;
     }
 
@@ -270,6 +271,11 @@ const MCExpr *CJMetadataInfo::getGVRefSymbol(const GlobalVariable *GV) {
         Context.getOrCreateSymbol(Twine(".LRef.") + GVSymbol->getName());
     return MCSymbolRefExpr::create(RefSym, Context);
   }
+  return MCSymbolRefExpr::create(GVSymbol, Context);
+}
+
+const MCExpr *CJMetadataInfo::getGARefSymbol(const GlobalAlias *GA) {
+  MCSymbol *GVSymbol = AP.TM.getSymbol(GA);
   return MCSymbolRefExpr::create(GVSymbol, Context);
 }
 
@@ -700,6 +706,23 @@ void CJMetadataInfo::emitSubExpr(StringRef Label, const GlobalVariable *GV) {
   OS.emitValue(Offset, 4);
 }
 
+void CJMetadataInfo::emitSubExprGA(StringRef Label, const GlobalAlias *GA) {
+  MCSymbol *CurSymbol = Context.createTempSymbol(Label);
+  OS.emitLabel(CurSymbol);
+  const MCExpr *CurRefSym = MCSymbolRefExpr::create(CurSymbol, Context);
+  const MCExpr *GVRefSym = getGARefSymbol(GA);
+  const MCExpr *Offset = nullptr;
+  if (IsMachO) {
+    // The subtraction(second operand) in the MAC-O address cannot be a private
+    // symbol. We use `gvSym - curSym` to perform the subtraction operation.
+    Offset = MCBinaryExpr::createSub(CurRefSym, GVRefSym, Context);
+  } else {
+    // Emit generic typeinfo offset: long xxx - generic_ti
+    Offset = MCBinaryExpr::createSub(GVRefSym, CurRefSym, Context);
+  }
+  OS.emitValue(Offset, 4);
+}
+
 void CJMetadataInfo::emitInnerTypeExtensions() {
   if (InnerTypeExtensions.empty())
     return;
@@ -720,8 +743,8 @@ void CJMetadataInfo::emitStaticGenericTI() {
   if (StaticGenericTI.empty())
     return;
   OS.switchSection(TD[StaticGIIdx].TableSection);
-  for (const auto *GenericTI : StaticGenericTI)
-    emitSubExpr("generic_ti", GenericTI);
+  for (const auto *GenericTI : StaticGenericTI) {
+    emitSubExprGA("generic_ti", GenericTI);}
 }
 
 void CJMetadataInfo::emitGlobalInitFuncTable() {
