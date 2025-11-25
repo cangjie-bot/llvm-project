@@ -387,8 +387,55 @@ static bool runOnFunction(Function &F, unsigned OptLevel) {
   return Changed;
 }
 
+static bool generateAliasForStaticGI(Module &M) {
+  bool Changed = false;
+  for (GlobalVariable &GV : M.globals()) {
+
+    if (!GV.isDeclaration() && GV.hasAttribute("CFileKlass") &&
+        GV.hasAvailableExternallyLinkage()) {
+      GV.setLinkage(GlobalValue::PrivateLinkage);
+      Changed = true;
+    }
+
+    if (GV.isCJStaticGenericTI()) {
+      assert(GV.hasInitializer() && "StaticGenericTI has no Initializer!");
+
+      Constant *C = GV.getInitializer();
+
+      SmallVector<Constant *, 100> NewOperands;
+      for (unsigned Idx = 0; Idx < C->getNumOperands(); Idx++) {
+        GlobalVariable *TI = cast<GlobalVariable>(C->getOperand(Idx));
+
+        if (TI->hasExternalLinkage()) {
+          NewOperands.push_back(TI);
+          continue;
+        }
+
+        std::string AliasName = "alias_" + TI->getName().str();
+        auto *Alias = GlobalAlias::create(
+            TI->getValueType(), TI->getType()->getPointerAddressSpace(),
+            GlobalValue::PrivateLinkage, AliasName, TI, &M);
+
+        NewOperands.push_back(Alias);
+      }
+
+      ArrayType *ArrayTy = cast<ArrayType>(C->getType());
+      Constant *NewInit = ConstantArray::get(ArrayTy, NewOperands);
+      GV.setInitializer(NewInit);
+      Changed = true;
+    }
+  }
+  return Changed;
+}
+
 static bool processCangjieIR(Module &M, unsigned OptLevel) {
   bool Changed = false;
+
+  llvm::Triple T(M.getTargetTriple());
+  if (!T.isOSWindows()) {
+    Changed |= generateAliasForStaticGI(M);
+  }
+
   for (Function &F : M) {
     Changed |= runOnFunction(F, OptLevel);
   }
