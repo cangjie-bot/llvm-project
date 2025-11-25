@@ -17,6 +17,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/CodeGen/StackMapEncode.h"
+#include "llvm/IR/GlobalValue.h"
+
 #include <cstdint>
 
 namespace llvm {
@@ -97,7 +99,7 @@ private:
   void emitReflectInfo();
   void emitReflectGenericTI();
   void emitSubExpr(StringRef Label, const GlobalVariable *GV);
-  const MCExpr *getGVRefSymbol(const GlobalVariable *GV);
+  const MCExpr *getGVRefSymbol(const GlobalValue *GV);
   const MCExpr *getOrInsertStrPoolOffset(std::string &Str,
                                          const MCSymbol *DescSym,
                                          bool MachONeedNoOffset = false);
@@ -137,7 +139,7 @@ private:
   SmallVector<const GlobalVariable *, 100> MTableTable;
   SmallVector<const GlobalVariable *, 100> TypeExtTable;
   SmallVector<const GlobalVariable *, 100> GCTibTable;
-  SmallVector<const GlobalVariable *, 100> StaticGenericTI;
+  SmallVector<const GlobalValue *, 100> StaticGenericTI;
   SmallVector<const GlobalVariable *, 50> ReflectGeneticTI;
   SmallVector<const Function *, 100> ExternalMethod;
   SmallVector<const GlobalVariable *, 100> ReflectStrGV;
