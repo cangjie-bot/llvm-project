@@ -27,6 +27,7 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/StackMaps.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
@@ -37,6 +38,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Statepoint.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCSection.h"
@@ -1975,6 +1977,13 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
     return true;
   };
 
+  auto IsCangjieSafepoint = [](const MachineInstr *MI) {
+    return MI->getOpcode() != TargetOpcode::STATEPOINT
+               ? false
+               : StatepointOpers(MI).getID() ==
+                     Cangjie::CJStatepointID::Safepoint;
+  };
+
   // When describing calls, we need a label for the call instruction.
   if (!NoDebug && SP->areAllCallsDescribed() &&
       MI->isCandidateForCallSiteEntry(MachineInstr::AnyInBundle) &&
@@ -1995,7 +2004,7 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
   if (!CurMI)
     return;
 
-  if (NoDebug)
+  if (NoDebug || IsCangjieSafepoint(MI)) // No debug info for safepoints.
     return;
 
   // Check if source location changes, but ignore DBG_VALUE and CFI locations.

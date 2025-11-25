@@ -1339,11 +1339,11 @@ void AArch64AsmPrinter::LowerSTATEPOINT(MCStreamer &OutStreamer, StackMaps &SM,
   const MachineOperand &CallTarget = SOpers.getCallTarget();
   if (CJPipeline) {
     uint64_t ID = SOpers.getID();
-    if (ID == CJStatepointID::StackCheck) {
+    if (ID == Cangjie::CJStatepointID::StackCheck) {
       emitCangjieStackCheck(MI);
       return;
     }
-    if (ID == CJStatepointID::NewArrayFast) {
+    if (ID == Cangjie::CJStatepointID::NewArrayFast) {
       emitCJNewArrayFastPath(MI, CallTarget);
       return;
     }
@@ -1385,7 +1385,7 @@ void AArch64AsmPrinter::LowerSTATEPOINT(MCStreamer &OutStreamer, StackMaps &SM,
                    MCInstBuilder(CallOpcode).addOperand(CallTargetMCOp));
   }
 
-  if (SOpers.getID() == CJStatepointID::Safepoint)
+  if (SOpers.getID() == Cangjie::CJStatepointID::Safepoint)
     return SM.recordCJStackMap(MI, true);
 
   auto &Ctx = OutStreamer.getContext();

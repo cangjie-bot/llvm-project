@@ -87,7 +87,7 @@ unsigned AArch64InstrInfo::getCangjieSpecificCallInstSizeInBytes(
   const MachineOperand *MOSym = nullptr;
   if (MI.getOpcode() == TargetOpcode::STATEPOINT) {
     StatepointOpers SO(&MI);
-    if (SO.getID() == CJStatepointID::NewArrayFast) {
+    if (SO.getID() == Cangjie::CJStatepointID::NewArrayFast) {
       return 52; // 52: 52 bytes(13 insts) for new array call
     }
     MOSym = &(SO.getCallTarget());
