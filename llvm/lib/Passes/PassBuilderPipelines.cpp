@@ -81,6 +81,7 @@
 #include "llvm/Transforms/Scalar/CJBarrierSplit.h"
 #include "llvm/Transforms/Scalar/CJDevirtualOpt.h"
 #include "llvm/Transforms/Scalar/CJSimpleOpt.h"
+#include "llvm/Transforms/Scalar/CJObjectReuseOpt.h"
 #include "llvm/Transforms/Scalar/CJGenericIntrinsicOpt.h"
 #include "llvm/Transforms/Scalar/CJLoopFloatOpt.h"
 #include "llvm/Transforms/Scalar/CJRSSCE.h"
@@ -475,6 +476,9 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   // Form SSA out of local memory accesses after breaking apart aggregates into
   // scalars.
   FPM.addPass(SROAPass());
+
+  if (CJPipeline && Level == OptimizationLevel::O2)
+    FPM.addPass(CJObjectReuseOpt());
 
   // Catch trivial redundancies
   FPM.addPass(EarlyCSEPass(true /* Enable mem-ssa. */));
@@ -1009,6 +1013,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   EarlyFPM.addPass(SimplifyCFGPass());
   EarlyFPM.addPass(SROAPass());
   EarlyFPM.addPass(EarlyCSEPass());
+  EarlyFPM.addPass(CJObjectReuseOpt());
   if (Level == OptimizationLevel::O3)
     EarlyFPM.addPass(CallSiteSplittingPass());
 

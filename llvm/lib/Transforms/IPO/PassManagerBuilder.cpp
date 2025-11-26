@@ -311,6 +311,7 @@ void PassManagerBuilder::populateFunctionPassManager(
   FPM.add(createCFGSimplificationPass());
   FPM.add(createSROAPass());
   FPM.add(createEarlyCSEPass());
+  FPM.add(createCJObjectReuseOptPass());
 }
 
 void PassManagerBuilder::addFunctionSimplificationPasses(
@@ -320,6 +321,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
   assert(OptLevel >= 1 && "Calling function optimizer with no optimization level!");
 
   MPM.add(createSROAPass());
+  MPM.add(createCJObjectReuseOptPass());
   MPM.add(createEarlyCSEPass(true /* Enable mem-ssa. */)); // Catch trivial redundancies
   if (EnableKnowledgeRetention)
     MPM.add(createAssumeSimplifyPass());
@@ -430,6 +432,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
 
   // Break up allocas that may now be splittable after loop unrolling.
   MPM.add(createSROAPass());
+  MPM.add(createCJObjectReuseOptPass());
 
   if (OptLevel > 1) {
     MPM.add(createMergedLoadStoreMotionPass()); // Merge ld/st in diamonds
