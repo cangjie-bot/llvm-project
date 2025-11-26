@@ -121,6 +121,7 @@ void llvm::initializeScalarOpts(PassRegistry &Registry) {
   initializeInsertCJTBAALegacyPassPass(Registry);
   initializeCJSimpleRangeAnalysisPass(Registry);
   initializeCJRewriteStatepointLegacyPassPass(Registry);
+  initializeCJObjectReuseOptLegacyPassPass(Registry);
 }
 
 void LLVMAddLoopSimplifyCFGPass(LLVMPassManagerRef PM) {
