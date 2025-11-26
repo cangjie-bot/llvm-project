@@ -15,6 +15,7 @@ static_library("Utils") {
     "BuildLibCalls.cpp",
     "BypassSlowDivision.cpp",
     "CallGraphUpdater.cpp",
+    "CJSimpleGraphColoring.cpp",
     "CallPromotionUtils.cpp",
     "CanonicalizeAliases.cpp",
     "CanonicalizeFreezeInLoops.cpp",
