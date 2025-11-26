@@ -227,6 +227,7 @@ namespace {
       (void) llvm::createFixIrreduciblePass();
       (void)llvm::createFunctionSpecializationPass();
       (void)llvm::createSelectOptimizePass();
+      (void)llvm::createCJObjectReuseOptPass();
 
       (void)new llvm::IntervalPartition();
       (void)new llvm::ScalarEvolutionWrapperPass();
