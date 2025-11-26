@@ -74,6 +74,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
+#include "llvm/Analysis/CJFunctionVarLifeTime.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/PassManager.h"
@@ -156,6 +157,7 @@
 #include "llvm/Transforms/Scalar/CJBarrierSplit.h"
 #include "llvm/Transforms/Scalar/CJDevirtualOpt.h"
 #include "llvm/Transforms/Scalar/CJSimpleOpt.h"
+#include "llvm/Transforms/Scalar/CJObjectReuseOpt.h"
 #include "llvm/Transforms/Scalar/CJGenericIntrinsicOpt.h"
 #include "llvm/Transforms/Scalar/CJLoopFloatOpt.h"
 #include "llvm/Transforms/Scalar/CJRSSCE.h"
@@ -1236,8 +1238,12 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
       if (EnableCJBarrierSplit)
         MPM.addPass(CJBarrierSplit());
 
-      if (L.getSpeedupLevel() > 1)
+      if (L.getSpeedupLevel() > 1) {
         MPM.addPass(createModuleToFunctionPassAdaptor(CJSimpleOpt()));
+        MPM.addPass(
+          createModuleToPostOrderCGSCCPassAdaptor(
+              CJPartialEscapeAnalysisPass()));
+      }  
 
       if (EnableCJPtrAuthBackwardCFI)
         MPM.addPass(PtrAuthBackwardCFI());

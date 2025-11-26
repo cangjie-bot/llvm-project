@@ -42,6 +42,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
+#include "llvm/Transforms/IPO/CJPartialEscapeAnalysis.h"
 #include "llvm/Transforms/Scalar/CJBarrierOpt.h"
 #include "llvm/Transforms/Scalar/CJBarrierSplit.h"
 #include "llvm/Transforms/Scalar/CJRewriteStatepoint.h"
@@ -350,6 +351,9 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
       MPM.addPass(CJBarrierSplit());
     if (OptLevel > 1) {
       MPM.addPass(createModuleToFunctionPassAdaptor(CJSimpleOpt()));
+      MPM.addPass(
+          createModuleToPostOrderCGSCCPassAdaptor(
+              CJPartialEscapeAnalysisPass()));
     }
   }
 
