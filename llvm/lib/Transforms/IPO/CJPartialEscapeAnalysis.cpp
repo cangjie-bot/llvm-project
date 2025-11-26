@@ -3300,6 +3300,7 @@ static bool escapeAnalysisImpl(LazyCallGraph::SCC &C, LazyCallGraph &CG,
 
 PreservedAnalyses CJPartialEscapeAnalysisPass::run(LazyCallGraph::SCC &C,
     CGSCCAnalysisManager &AM, LazyCallGraph &CG, CGSCCUpdateResult &UR) const {
+  return PreservedAnalyses::all();
   NonEscapeRewriter::clearRewritePhiIncoming();
   bool Changed = escapeAnalysisImpl(C, CG, AM, UR);
   if (Changed) {
