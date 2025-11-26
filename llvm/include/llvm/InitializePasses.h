@@ -96,6 +96,7 @@ void initializeCJRuntimeLoweringLegacyPassPass(PassRegistry &);
 void initializeCJGenericIntrinsicOptLegacyPassPass(PassRegistry &);
 void initializeCJIRVerifierLegacyPassPass(PassRegistry &);
 void initializeCJLoopFloatOptLegacyPassPass(PassRegistry &);
+void initializeCJObjectReuseOptLegacyPassPass(PassRegistry&);
 void initializeCFGOnlyPrinterLegacyPassPass(PassRegistry&);
 void initializeCFGOnlyViewerLegacyPassPass(PassRegistry&);
 void initializeCFGPrinterLegacyPassPass(PassRegistry&);

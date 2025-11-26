@@ -43,6 +43,9 @@ public:
   AliasResult alias(const MemoryLocation &LocA, const MemoryLocation &LocB,
                     AAQueryInfo &AAQI);
 
+  AliasResult bestAlias(const MemoryLocation &LocA, const MemoryLocation &LocB,
+                    AAQueryInfo &AAQI);
+
   using AAResultBase::getModRefInfo;
   ModRefInfo getModRefInfo(const CallBase *Call, const MemoryLocation &Loc,
                            AAQueryInfo &AAQI);

@@ -564,6 +564,12 @@ FunctionPass *createCJLoopFloatOptLegacyPass();
 
 //===----------------------------------------------------------------------===//
 //
+// CJObjectReuseOpt - Object Reuse optimization.
+//
+FunctionPass *createCJObjectReuseOptPass();
+
+//===----------------------------------------------------------------------===//
+//
 // CJSimpleRangeAnalysis - simple range analysis of cangjie
 //
 FunctionPass *createCJSimpleRangeAnalysis();
