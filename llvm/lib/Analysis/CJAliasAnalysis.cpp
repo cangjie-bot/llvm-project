@@ -138,6 +138,11 @@ AliasResult CJAAResult::alias(const MemoryLocation &LocA,
   return AAResultBase::alias(LocA, LocB, AAQI);
 }
 
+AliasResult CJAAResult::bestAlias(const MemoryLocation &LocA,
+                              const MemoryLocation &LocB, AAQueryInfo &AAQI) {
+  return getBestAAResults().alias(LocA, LocB, AAQI);
+}
+
 std::tuple<Optional<MemoryLocation>, Optional<MemoryLocation>,
            Optional<MemoryLocation>>
 getLocInfoForCJIntrinsics(const IntrinsicInst *II,
