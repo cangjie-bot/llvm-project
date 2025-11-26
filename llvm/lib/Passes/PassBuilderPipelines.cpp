@@ -81,6 +81,8 @@
 #include "llvm/Transforms/Scalar/CJBarrierSplit.h"
 #include "llvm/Transforms/Scalar/CJDevirtualOpt.h"
 #include "llvm/Transforms/Scalar/CJSimpleOpt.h"
+#include "llvm/Transforms/Scalar/CJObjectReuseOpt.h"
+#include "llvm/Transforms/Scalar/DCE.h"
 #include "llvm/Transforms/Scalar/CJGenericIntrinsicOpt.h"
 #include "llvm/Transforms/Scalar/CJLoopFloatOpt.h"
 #include "llvm/Transforms/Scalar/CJRSSCE.h"
@@ -476,6 +478,11 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   // scalars.
   FPM.addPass(SROAPass());
 
+  if (CJPipeline && Level == OptimizationLevel::O2) {
+    FPM.addPass(CJObjectReuseOpt());
+    FPM.addPass(DCEPass());
+  }
+
   // Catch trivial redundancies
   FPM.addPass(EarlyCSEPass(true /* Enable mem-ssa. */));
   if (EnableKnowledgeRetention)
@@ -675,8 +682,10 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   // Specially optimize memory movement as it doesn't look like dataflow in SSA.
   FPM.addPass(MemCpyOptPass());
 
-  if (CJPipeline && Level == OptimizationLevel::O2)
+  if (CJPipeline && Level == OptimizationLevel::O2) {
     FPM.addPass(CJRSSCEPass());
+    FPM.addPass(CJObjectReuseOpt());
+  }
 
   FPM.addPass(DSEPass());
   FPM.addPass(createFunctionToLoopPassAdaptor(
@@ -1009,6 +1018,12 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   EarlyFPM.addPass(SimplifyCFGPass());
   EarlyFPM.addPass(SROAPass());
   EarlyFPM.addPass(EarlyCSEPass());
+
+  if (CJPipeline && Level == OptimizationLevel::O2) {
+    EarlyFPM.addPass(CJObjectReuseOpt());
+    EarlyFPM.addPass(DCEPass());
+  }
+
   if (Level == OptimizationLevel::O3)
     EarlyFPM.addPass(CallSiteSplittingPass());
 

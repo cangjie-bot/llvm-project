@@ -33,6 +33,7 @@ add_llvm_component_library(LLVMAnalysis
   AssumptionCache.cpp
   BasicAliasAnalysis.cpp
   CJAliasAnalysis.cpp
+  CJFunctionVarLifeTime.cpp
   BlockFrequencyInfo.cpp
   BlockFrequencyInfoImpl.cpp
   BranchProbabilityInfo.cpp
