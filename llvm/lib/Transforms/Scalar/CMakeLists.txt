@@ -22,6 +22,7 @@ add_llvm_component_library(LLVMScalarOpts
   CJSimpleRangeAnalysis.cpp
   CJRSSCE.cpp
   CJLoopFloatOpt.cpp
+  CJObjectReuseOpt.cpp
   CJSpecificOpt.cpp
   CJRewriteStatepoint.cpp
   CJFillMetadata.cpp
