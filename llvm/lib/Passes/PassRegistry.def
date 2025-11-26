@@ -242,6 +242,7 @@ FUNCTION_ANALYSIS("targetir",
 FUNCTION_ANALYSIS("verify", VerifierAnalysis())
 FUNCTION_ANALYSIS("pass-instrumentation", PassInstrumentationAnalysis(PIC))
 FUNCTION_ANALYSIS("divergence", DivergenceAnalysis())
+FUNCTION_ANALYSIS("cangjie-fucntion-var-life-time", CJFunctionVarLifeTime())
 
 #ifndef FUNCTION_ALIAS_ANALYSIS
 #define FUNCTION_ALIAS_ANALYSIS(NAME, CREATE_PASS)                             \
@@ -403,6 +404,7 @@ FUNCTION_PASS("memprof", MemProfilerPass())
 FUNCTION_PASS("cj-generic-intrinsic-opt", CJGenericIntrinsicOpt())
 FUNCTION_PASS("insert-cj-tbaa", InsertCJTBAA())
 FUNCTION_PASS("cj-simple-opt", CJSimpleOpt())
+FUNCTION_PASS("cj-object-reuse-opt", CJObjectReuseOpt())
 FUNCTION_PASS("cj-after-inline-simple-opt", CJAfterInlineSimpleOpt())
 FUNCTION_PASS("cj-loop-float-opt", CJLoopFloatOpt())
 FUNCTION_PASS("cj-simple-range-analysis", CJSimpleRangeAnalysisPass())
