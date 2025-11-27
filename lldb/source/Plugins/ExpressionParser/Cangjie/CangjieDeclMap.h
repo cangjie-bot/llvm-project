@@ -197,6 +197,7 @@ private:
     CompilerType GetGenericTypeByPartName(const std::string& part_name);
     CompilerType CreateOrGetGenericType(const CompilerType& type);
     void CollectGenericTypeOfVariable(const CompilerType& type);
+    void CollectOptionValType(CompilerType& type);
     void AddFieldToRecordType(const CompilerType& genericType, CompilerType& instancedType, std::string& name);
     std::set<ConstString> m_local_func;
 };
