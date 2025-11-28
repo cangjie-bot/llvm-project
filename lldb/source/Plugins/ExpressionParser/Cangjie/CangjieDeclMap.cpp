@@ -977,6 +977,9 @@ CompilerType CangjieDeclMap::CreateOrGetGenericType(const CompilerType& type)
 }
 
 Ptr<AST::Decl> CangjieDeclMap::CreateTypeDecl(CompilerType type) {
+  if (!type.IsValid()) {
+    return nullptr;
+  }
   std::string typeName = type.GetTypeName().GetCString();
   if (CangjieASTBuiler::IsFunctionType(ConstString(typeName.c_str()))) {
     return nullptr;
@@ -1164,12 +1167,10 @@ CompilerType CangjieDeclMap::GetEnumerationType(const CompilerType& type, bool h
       CJC_ASSERT(member_name == "constructor");
       return ctorFuncType;
     }
-    CJC_ASSERT(member_name == "EnumClass$");
     if (ctorFuncType.IsPointerType()) {
       ctorFuncType = ctorFuncType.GetPointeeType();
     }
     enumType = ctorFuncType.GetFieldAtIndex(0, member_name, nullptr, nullptr, nullptr);
-    CJC_ASSERT(member_name == "constructor");
   }
   return enumType;
 }
@@ -1486,9 +1487,21 @@ CompilerType CangjieDeclMap::GetGenericTypeByPartName(const std::string& name) {
   for (size_t i = 0; i < ntypes; ++i) {
     lldb::TypeSP type = type_list.GetTypeAtIndex(i);
     std::string tmpName = type->GetName().AsCString();
-    auto tlpos = tmpName.find(combine_name);
     auto tpos = tmpName.find("<");
-    if (tlpos != std::string::npos && (tpos == std::string::npos || tpos > tlpos)) {
+    auto dcpos = tmpName.find(PACKAGE_SUFFIX);
+    if (dcpos != std::string::npos && tpos > dcpos) {
+      // tmpName: "ohos.ark_interop::Slab<T>"  -->  "Slab<T>"
+      tmpName = tmpName.substr(dcpos + PACKAGE_SUFFIX.size());
+    }
+    auto tlpos = tmpName.find(combine_name);
+    if (tlpos == 0) {
+      CompilerType full_type = type->GetFullCompilerType();
+      return full_type;
+    }
+    //  tmpName: "E1$Time<Default::Bar>"  -->  "Time<Default::Bar>"
+    tmpName = DeletePrefixOfType(tmpName);
+    tlpos = tmpName.find(combine_name);
+    if (tlpos == 0) {
       CompilerType full_type = type->GetFullCompilerType();
       return full_type;
     }
