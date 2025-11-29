@@ -1272,6 +1272,7 @@ void X86AsmPrinter::emitStackCmp(const MachineInstr &MI) {
 
 //   subq   numbytes, %rsp
 //   movq  40(%r15), %rax    # stack.check
+//   addq  $4096, %rax       # reserve.stack
 //   cmpq  %rax, %rsp
 //   jbe   .Lstack.overflow:
 // .Lstack.check.end:
@@ -1279,6 +1280,12 @@ void X86AsmPrinter::emitCJStackCheck(const MachineInstr &MI) {
   MCContext &Ctx = MF->getContext();
   // stack.check start
   emitGetCJTLSData(getProtectAddrOffsetInCJTLS());
+  MCInst AddInst;
+  AddInst.setOpcode(X86::ADD64ri32);
+  AddInst.addOperand(MCOperand::createReg(X86::RAX));
+  AddInst.addOperand(MCOperand::createReg(X86::RAX));
+  AddInst.addOperand(MCOperand::createImm(4096));
+  OutStreamer->emitInstruction(AddInst, getSubtargetInfo());
   emitStackCmp(MI);
 
   MCSymbol *StackOverflowSym = Ctx.createTempSymbol("stack.overflow");

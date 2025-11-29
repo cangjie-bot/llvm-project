@@ -1225,6 +1225,7 @@ void AArch64AsmPrinter::emitSubSP(unsigned Size) {
 // Note: emit specific inst should update inst size info in
 // AArch64InstrInfo::getInstSizeInBytes for AArch64 at the same time
 //   ldr x9, [x28, #ProtectAddr]
+//   add x9, x9, #4096           # reserve.stack
 //   subs xzr, sp, x9              # stack.check
 //   b.gt Lstack.check.end
 //   ...                           # stack.overflow handle
@@ -1236,6 +1237,8 @@ void AArch64AsmPrinter::emitCJStackCheck(const MachineInstr &MI) {
 
   // ldr x9, [x28, #ProtectAddr]
   emitGetCJTLSData(getProtectAddrOffsetInCJTLS());
+  MCInst Add = MCInstBuilder(ADDXri).addReg(X9).addReg(X9).addImm(4096).addImm(0);
+  EmitToStreamer(*OutStreamer, Add);
   MCInst Cmp = MCInstBuilder(SUBSXrx).addReg(XZR).addReg(SP).addReg(X9).addImm(
       AArch64_AM::getArithExtendImm(AArch64_AM::UXTX, 0));
   EmitToStreamer(*OutStreamer, Cmp);
