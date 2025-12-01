@@ -48,6 +48,10 @@ void ARMBasicBlockUtils::computeBlockSize(MachineBasicBlock *MBB) {
   LLVM_DEBUG(dbgs() << "computeBlockSize: " << MBB->getName() << "\n");
   BasicBlockInfo &BBI = BBInfo[MBB->getNumber()];
   BBI.Size = 0;
+  // For cangjie, there are 4 bytes before the function start instruction to
+  // store the method description.
+  if (MBB->getParent()->getFunction().hasCangjieGC() && MBB->isEntryBlock())
+    BBI.Size += 4;
   BBI.Unalign = 0;
   BBI.PostAlign = Align(1);
 
