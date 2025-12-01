@@ -342,7 +342,7 @@ private:
 
   bool verifierMemcpy(CallBase *Mem) {
     auto GetBeginOffset = [&](Value *V, uint64_t &BeginPos) {
-      APInt Offset(64, 0);
+      APInt Offset(DL.getIndexSizeInBits(0u), 0);
       Value *Base = V->stripAndAccumulateConstantOffsets(DL, Offset, true);
       BeginPos = Offset.getZExtValue();
       StructType *ST = dyn_cast<StructType>(
@@ -507,7 +507,7 @@ private:
     if (Barrier->getIntrinsicID() == Intrinsic::cj_gcwrite_struct) {
       auto Src = Barrier->getArgOperand(2)->stripPointerCasts();
       // 64 is 64-bit integer
-      APInt Offset(64, -1);
+      APInt Offset(DL.getIndexSizeInBits(0u), -1);
       StructType *ST = nullptr;
       auto Size = dyn_cast<ConstantInt>(Barrier->getArgOperand(3));
       if (auto AI = dyn_cast<AllocaInst>(Src)) {

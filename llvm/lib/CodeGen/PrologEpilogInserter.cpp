@@ -503,7 +503,6 @@ static void assignCalleeSavedSpillSlots(MachineFunction &F,
       if (F.getFunction().hasCangjieGC() &&
           F.getTarget().getTargetTriple().isARM() &&
           Reg == RegInfo->getFrameRegister(F)) {
-        assert(Reg == CSI[1].getReg());
         // 4: reg size
         FrameIdx = MFI.CreateStackObject(4, Align(4), true);
         // It ensures that the stack object is placed below the callee-saved

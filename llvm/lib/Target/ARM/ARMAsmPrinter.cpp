@@ -1363,7 +1363,6 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
   MCSymbol *GVSymbol = GetARMGVSymbol(AddrGV, MOSym.getTargetFlags());
   MCSymbol *Label0 = OutContext.createTempSymbol();
   MCSymbol *Label1 = OutContext.createTempSymbol();
-  CangjieStubMap.push_back(std::make_tuple(GVSymbol, Label0, Label1));
 
   // ldr R12, .LPCIxxx
   EmitToStreamer(*OutStreamer,
@@ -1440,41 +1439,26 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
                      MCSymbolRefExpr::create(StubGVSymbol, OutContext))));
 
   SM.recordCJStackMap(*MI);
-  return;
-}
 
-// C2NStub
-// C2NStub
-// b .Lable
-// .Ltmp81:
-//    .long xxx.CJStubGV-(.Ltmp80+8)
-// .Ltmp83:
-//    .long xxx.CJStubGV-(.Ltmp82+8)
-// .Lable：
-void ARMAsmPrinter::emitCangjieCustomInst() {
-  if (!CangjieStubMap.empty()) {
-    MCSymbol *DotSym = OutContext.createTempSymbol();
-    const MCExpr *GVSymExpr = MCSymbolRefExpr::create(DotSym, OutContext);
-    EmitToStreamer(
-        *OutStreamer,
-        MCInstBuilder(ARM::Bcc).addExpr(GVSymExpr).addImm(ARMCC::AL).addReg(0));
-    for (unsigned C2NStubIndex = 0; C2NStubIndex < CangjieStubMap.size();
-         C2NStubIndex++) {
-      auto FuncSym = std::get<0>(CangjieStubMap[C2NStubIndex]);
-      auto StartLabel = std::get<1>(CangjieStubMap[C2NStubIndex]);
-      auto EndLabel = std::get<2>(CangjieStubMap[C2NStubIndex]);
-      OutStreamer->emitLabel(EndLabel);
-      // .long xxx.CJStubGV-(.Ltmp82+8)
-      auto Expr2 = MCBinaryExpr::createAdd(
-          MCSymbolRefExpr::create(StartLabel, OutContext),
-          MCConstantExpr::create(8, OutContext), OutContext);
-      auto Offset = MCBinaryExpr::createSub(
-          MCSymbolRefExpr::create(FuncSym, OutContext), Expr2, OutContext);
-      OutStreamer->emitValue(Offset, 4);
-    }
-    OutStreamer->emitLabel(DotSym);
-    CangjieStubMap.clear();
-  }
+  // Emit `const pool entry`
+  MCSymbol *Label2 = OutContext.createTempSymbol();
+  // b .Ltmp2
+  EmitToStreamer(*OutStreamer,
+                 MCInstBuilder(ARM::Bcc)
+                     .addExpr(MCSymbolRefExpr::create(Label2, OutContext))
+                     .addImm(ARMCC::AL)
+                     .addReg(0));
+  // .Ltmp1:
+  //   .long xxx.CJStubGV-(.Ltmp0+8)
+  OutStreamer->emitLabel(Label1);
+  auto *Add = MCBinaryExpr::createAdd(
+      MCSymbolRefExpr::create(Label0, OutContext),
+      MCConstantExpr::create(8, OutContext), OutContext);
+  auto *Offset = MCBinaryExpr::createSub(
+      MCSymbolRefExpr::create(GVSymbol, OutContext), Add, OutContext);
+  OutStreamer->emitValue(Offset, 4);
+  OutStreamer->emitLabel(Label2);
+  return;
 }
 
 bool ARMAsmPrinter::tryEmitCangjieSpecificCall(const MachineInstr *MI) {
