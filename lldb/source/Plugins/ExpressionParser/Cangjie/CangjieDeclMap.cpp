@@ -737,31 +737,7 @@ void CangjieDeclMap::SetGenericDeclBySubclass(Ptr<AST::RefType> refType, std::st
   }
 }
 
-CompilerType CangjieDeclMap::GetLambdaReturnType(CompilerType& type) {
-  bool isLambda = type.GetTypeName().GetStringRef().contains("->");
-  if (isLambda && type.IsValid() && type.GetTypeClass() == lldb::eTypeClassClass) {
-    // get member ptr
-    for (uint32_t i = 0; i < type.GetNumFields(); i++) {
-      std::string member_name;
-      auto child_type = type.GetFieldAtIndex(i, member_name, nullptr, nullptr, nullptr);
-      if (member_name != "ptr") {
-        continue;
-      }
-      if (!child_type.IsPointerType()) {
-        break;
-      }
-      child_type = child_type.GetPointeeType();
-      if (child_type.GetTypeClass() != lldb::eTypeClassFunction) {
-        break;
-      }
-      return child_type.GetFunctionReturnType();
-    }
-  }
-  return type;
-}
-
 void CangjieDeclMap::ReplaceTypeDefWithInterfaceType(CompilerType& type) {
-  type = GetLambdaReturnType(type);
   bool isTypeDef = type.IsValid() && type.GetTypeClass() == lldb::eTypeClassTypedef;
   if (!isTypeDef) {
     return;
@@ -1644,8 +1620,10 @@ void CangjieDeclMap::CreateDeclByType(const CompilerTypeInfo& typeInfo) {
     case DeclKind::UserDefinedDecl:{
       // Find and create types.
       CreateTypeDeclByType(typeInfo.Type);
+      break;
     }
-    default :{}
+    default :
+      break;
   }
 }
 
@@ -1770,8 +1748,12 @@ std::vector<OwnedPtr<Cangjie::AST::Package>> CangjieDeclMap::CreateExternalAST()
     if (std::find(m_identifys.begin(), m_identifys.end(), name) != m_identifys.end()) {
       continue;
     }
+    auto lookup_name = name;
+    if (size_t pos = lookup_name.find_first_of("::"); pos != std::string::npos) {
+      lookup_name = lookup_name.substr(pos + 1);
+    }
     std::vector<CompilerTypeInfo> ctypeinfos;
-    LookUpTypeByName(name, ctypeinfos);
+    LookUpTypeByName(lookup_name, ctypeinfos);
     for (auto& ti: ctypeinfos) {
       CreateDeclByType(ti);
     }
