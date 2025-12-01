@@ -761,7 +761,7 @@ CompilerType CangjieDeclMap::GetLambdaReturnType(CompilerType& type) {
 }
 
 void CangjieDeclMap::ReplaceTypeDefWithInterfaceType(CompilerType& type) {
-  type = GetLambdaReturnType(type);
+  //type = GetLambdaReturnType(type);
   bool isTypeDef = type.IsValid() && type.GetTypeClass() == lldb::eTypeClassTypedef;
   if (!isTypeDef) {
     return;
