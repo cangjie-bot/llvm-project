@@ -79,7 +79,7 @@ getBasePtrAndOffset(const DataLayout &DL, Value *V, Instruction *I) {
   // V is not a memory object.
   if (!isa<PointerType>(V->getType()))
     return {nullptr, 0};
-  constexpr unsigned BitWidth = 64;
+  const unsigned BitWidth = DL.getIndexSizeInBits(0);
   constexpr uint64_t OffsetRawValue = 0;
   APInt Offset(BitWidth, OffsetRawValue);
   Value *BPtr = V->stripAndAccumulateConstantOffsets(DL, Offset, true);
@@ -1064,7 +1064,7 @@ struct DestPropagationState {
   std::pair<Value *, int64_t> findFullEquivalentValue(Value *Ptr, uint64_t Size,
                                                       BasicBlock *BB,
                                                       Instruction *Use) {
-    APInt VOff(64, 0);
+    APInt VOff(DL.getIndexSizeInBits(0u), 0);
     Value *V = Ptr->stripAndAccumulateConstantOffsets(DL, VOff, true);
     auto ContainCheck = [&](SmallVector<Define, 8>::iterator IT) -> int {
       uint64_t LastPos = IT->IV.second;
