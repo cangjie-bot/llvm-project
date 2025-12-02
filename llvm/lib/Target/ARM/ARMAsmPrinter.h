@@ -143,7 +143,6 @@ private:
                                                const Function *F,
                                                const MachineOperand &MOSym,
                                                unsigned Opcode) override;
-  virtual void emitCangjieCustomInst() override;
 
 public:
   unsigned getISAEncoding() override {
