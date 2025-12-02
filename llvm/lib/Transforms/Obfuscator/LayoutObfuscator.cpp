@@ -387,12 +387,31 @@ bool LayoutObfuscator::needObfuse(const Function &F) {
   return true;
 }
 
+// Filter out the basic library functions when the exception stacktrace is
+// dumped.
+std::set<std::string> FiltMangleNameSet = {
+    "user.main",
+    "cj_entry$",
+    "_CNat",
+    "rt$",
+};
+
+bool isNeedFilt(std::string MangleName) {
+  for (auto FiltMangleName : FiltMangleNameSet) {
+    if (MangleName.find(FiltMangleName) == 0)
+      return true;
+  }
+  return false;
+}
+
 void LayoutObfuscator::doObfuscation(Function &F) {
   if (!needObfuse(F))
     return;
   std::string NewName;
   std::string OldName = F.getName().str();
   std::string MappedName = SymbolMap.getMappedName(OldName);
+  if (isNeedFilt(OldName))
+    F.addFnAttr("cj_stack_trace_omit");
   if (MappedName.size() != 0) {
     NewName = MappedName;
   } else {
