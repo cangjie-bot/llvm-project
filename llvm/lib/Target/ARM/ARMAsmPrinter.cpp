@@ -2535,8 +2535,8 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
       CallOpcode = ARM::BLX;
       break;
     }
-    SM.recordCJStackMap(*MI);
     EmitToStreamer(*OutStreamer, MCInstBuilder(CallOpcode).addOperand(CallTargetMCOp));
+    SM.recordCJStackMap(*MI);
     return;
   }
   }

@@ -59,7 +59,8 @@ static cl::opt<bool> EnableCompressedBitMap(
     cl::desc("Enable Compressed BitMap"));
 namespace llvm {
 // struct start address alignment
-int32_t OffsetStepSize = 8; 
+int32_t OffsetStepSize = 8;
+int32_t FuncPtrSize = 8;
 
 extern cl::opt<bool> CJPipeline;
 extern cl::opt<bool> EnableStackGrow;
@@ -371,8 +372,9 @@ void StackMaps::processArrayType(ArrayType *AT, int64_t RefOffset,
   if (isa<PointerType>(ElementType)) {
     for (unsigned Index = 0; Index < Size; Index++) {
       Locations.emplace_back(StackMaps::Location::Indirect,
-                             8, // 8: size of the register
-                             getDwarfRegNum(Reg, TRI), RefOffset + Index * 8);
+                             FuncPtrSize, // size of the register
+                             getDwarfRegNum(Reg, TRI),
+                             RefOffset + Index * FuncPtrSize);
     }
   } else if (StructType *ArrayStruct = dyn_cast<StructType>(ElementType)) {
     int64_t DerivedOffset = DL.getStructLayout(ArrayStruct)->getSizeInBytes();
@@ -395,7 +397,7 @@ void StackMaps::processAllocaStructType(StructType *ST, int64_t RefOffset,
         continue;
       }
       Locations.emplace_back(StackMaps::Location::Indirect,
-                             8, // 8: size of the register
+                             FuncPtrSize, // size of the register
                              getDwarfRegNum(Reg, TRI), Offset);
     } else if (StructType *EST = dyn_cast<StructType>(ST->getElementType(i))) {
       processAllocaStructType(EST, Offset, Locations, Reg, GS);
@@ -455,7 +457,7 @@ StackMaps::parseStructArgsOperand(MachineInstr::const_mop_iterator MOI,
                                   LocationVec &FOLocations,
                                   unsigned Offset) const {
   assert(MOI->isImm() && "MOI is not a Imm when parseStructArgsOperand!");
-  assert((Offset % OffsetStepSize == 0) && "Struct Offset should be 8 aligned!");
+  assert((Offset % OffsetStepSize == 0) && "Struct Offset should be aligned!");
   const TargetRegisterInfo *TRI = AP.MF->getSubtarget().getRegisterInfo();
   if (MOI->getImm() == StackMaps::DirectMemRefOp) {
     Register Reg = (++MOI)->getReg();
@@ -471,8 +473,8 @@ StackMaps::parseStructArgsOperand(MachineInstr::const_mop_iterator MOI,
     assert(DL.getStructLayout(ST)->getSizeInBytes() > Offset &&
            "The offset cannot be greater than the size of struct.");
 #endif
-    // 8:ptr size
-    FOLocations.emplace_back(StackMaps::Location::Indirect, 8,
+    // 4/8:ptr size
+    FOLocations.emplace_back(StackMaps::Location::Indirect, FuncPtrSize,
                              getDwarfRegNum(Reg, TRI), Imm + Offset);
   } else if (MOI->getImm() == StackMaps::IndirectMemRefOp) {
     int64_t Size = (++MOI)->getImm();
@@ -509,16 +511,16 @@ StackMaps::parseAllocaOperand(MachineInstr::const_mop_iterator MOI,
     } else if (auto *PT = dyn_cast<PointerType>(Inst->getAllocatedType())) {
       if (*GS->isGCManagedPointer(PT) ||
           *GS->isGCManagedPointer(PT->getElementType())) {
-        // 8:ptr size
-        Locations.emplace_back(StackMaps::Location::Indirect, 8,
+        // 4/8:ptr size
+        Locations.emplace_back(StackMaps::Location::Indirect, FuncPtrSize,
                                getDwarfRegNum(Reg, TRI), Imm);
       }
     }
   } else {
     // The FI of alloca may be modify in tryToElideArgumentCopy.
     // In this case, alloca type must be a pointer type.
-    // 8:ptr size
-    Locations.emplace_back(StackMaps::Location::Indirect, 8,
+    // 4/8:ptr size
+    Locations.emplace_back(StackMaps::Location::Indirect, FuncPtrSize,
                            getDwarfRegNum(Reg, TRI), Imm);
   }
   return ++MOI;
@@ -542,8 +544,8 @@ StackMaps::parseStackPtrOperand(MachineInstr::const_mop_iterator MOI,
     int64_t FI = (++MOI)->getImm();
     (void)FI;
     assert((Imm % OffsetStepSize == 0) && "Stack Offset align error!");
-    Locations.emplace_back(StackMaps::Location::Indirect, 8,
-                           getDwarfRegNum(Reg, TRI), Imm); // 8: pointer size
+    Locations.emplace_back(StackMaps::Location::Indirect, FuncPtrSize,
+                           getDwarfRegNum(Reg, TRI), Imm); // 4/8: pointer size
   } else {
     report_fatal_error("MOI is error when parseStackPtrOperand!");
   }
@@ -747,6 +749,9 @@ void StackMaps::updateOrInsertFnInfo(const MCSymbol *FnSym,
     if (CJPipeline && AP.getSubtargetInfo().getTargetTriple().isOSWindows()) {
       FrameSize = MFI.getWin64FramePointerOffset();
     }
+    if (CJPipeline && isARM()) {
+      FrameSize = MFI.getStackSize();
+    }
     // get func callee saved regInfo
     const auto &CSInfo = AP.MF->getFrameInfo().getCalleeSavedInfo();
     std::map<unsigned, int> CSReg2Stack; // <reg, stackOffset>
@@ -756,6 +761,8 @@ void StackMaps::updateOrInsertFnInfo(const MCSymbol *FnSym,
         continue;
       }
       unsigned RegNo = getDwarfRegNum(CS.getReg(), RegInfo);
+      if (isARM() && (RegNo == 11 /*R11*/ || RegNo == 14 /*LR*/))
+        continue;
       Register Reg;
       CSReg2Stack[RegNo] =
           TFI->getFrameIndexRefForCJ(*AP.MF, CS.getFrameIdx(), Reg).getFixed();
@@ -1237,6 +1244,7 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
   const Triple TT(AP.MMI->getModule()->getTargetTriple());
   bool IsWindows = TT.isOSWindows();
   OffsetStepSize = TT.isARM() ? 4 : 8;
+  FuncPtrSize = TT.isARM() ? 4 : 8;
   for (auto const &FR : FnInfos) {
     MCSymbol *StackmapFunction =
         OutContext.getOrCreateSymbol(".Lstack_map." + FR.first->getName());
@@ -1328,7 +1336,7 @@ void calculateStackSlots(MaxWidthOfRefInfo &WidthInfo,
 
   for (const auto &Offset : BOffsets) {
     if (Offset % OffsetStepSize != 0) {
-      report_fatal_error("Offset should be 8 aligned!");
+      report_fatal_error("Offset should be aligned!");
     }
     uint32_t BitIdx = (MaxOffset - Offset) / OffsetStepSize;
     // 64: uint64_t
@@ -1810,8 +1818,8 @@ void DataEncoder::emitCommentForSlots(raw_svector_ostream &Comment,
     (Comment << " 0x").write_hex(SlotBit) << "[";
     for (unsigned Idx = 0; Idx < Width; ++Idx) { // 64: uint64_t
       if (SlotBit & ((uint64_t)1 << Idx)) {
-        // 8: Each bit represents 8 Byte offsets
-        int32_t Off = BaseOffset - Idx * 8;
+        // Each bit represents 4 or 8 Byte offsets
+        int32_t Off = BaseOffset - Idx * FuncPtrSize;
         Comment << " " << Off;
       }
     }
@@ -1826,7 +1834,7 @@ void DataEncoder::emitCommentForSlots(raw_svector_ostream &Comment,
     while (SlotBitBitNums > 64) {
       SlotBitBitNums -= 64;
       EmitSlotBitComment(readBits(64), 64);
-      BaseOffset -= 64 * 8; // each bit represents 8 bytes
+      BaseOffset -= 64 * FuncPtrSize; // each bit represents 4/8 bytes
     }
     EmitSlotBitComment(readBits(SlotBitBitNums), SlotBitBitNums);
   } else {
