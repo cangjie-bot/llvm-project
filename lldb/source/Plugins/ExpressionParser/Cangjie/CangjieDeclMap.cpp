@@ -80,13 +80,15 @@ lldb::VariableSP CangjieDeclMap::GetVariableByName(const std::string& sname, Var
   return var;
 }
 
-void CangjieDeclMap::CollectOptionValType(CompilerType& type) {
-  auto val_type = type.GetPointeeType();
+void CangjieDeclMap::CollectOptionValType(CompilerType& val_type) {
   for (uint32_t i = 0; i < val_type.GetNumFields(); i++) {
     std::string member_name;
     auto child_type = val_type.GetFieldAtIndex(i, member_name, nullptr, nullptr, nullptr);
     if (member_name != "val") {
       continue;
+    }
+    if (child_type.GetTypeClass() == lldb::eTypeClassPointer) {
+      child_type = child_type.GetPointeeType();
     }
     if (child_type.GetTypeClass() == lldb::eTypeClassTypedef) {
       auto underlyingType = child_type.GetTypedefedType();
@@ -124,10 +126,10 @@ CompilerType CangjieDeclMap::GetVariableType(lldb::VariableSP var) {
       }
     }
     type_name = DeletePrefixOfType(type_name);
-    if (type.GetTypeClass() == lldb::eTypeClassPointer &&
-        (type_name.find("std.core::Option") != std::string::npos)) {
+    if (type.GetTypeClass() == lldb::eTypeClassStruct &&
+        (type_name.find("std.core::Option") == 0)) {
       // Option is now implemented as a reference type.
-      type_name = type.GetPointeeType().GetTypeName().AsCString();
+      type_name = type.GetTypeName().AsCString();
       CollectOptionValType(type);
     }
     if (type.GetTypeClass() == lldb::eTypeClassPointer &&
