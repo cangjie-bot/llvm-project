@@ -246,7 +246,7 @@ lldb_private::Status CangjieExpressionParser::PrepareForExecution(
     sym_ctx.target_sp = target_sp;
   }
 
-  lldb_private::ConstString function_name("_CN4expr11__lldb_exprHPu");
+  lldb_private::ConstString function_name("_CN11__cjdb_expr11__lldb_exprHPu");
   std::vector<std::string> cpu_features;
   execution_unit_sp = std::make_shared<IRExecutionUnit>(
       context_up, m_module, function_name, target_sp, sym_ctx, cpu_features);

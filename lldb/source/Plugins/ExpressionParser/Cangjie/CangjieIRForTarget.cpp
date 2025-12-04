@@ -437,7 +437,7 @@ void CangjieIRForTarget::SetPlatformInfo() {
 llvm::StringRef CangjieIRForTarget::FindExtendFunction()
 {
   for (llvm::Function &func : m_module->functions()) {
-    if (func.getName().startswith("_CN4exprUexpr.temp$X") && func.getName().endswith("__lldb_wrapped_exprHPu")) {
+    if (func.getName().startswith("_CN11__cjdb_exprUexpr.temp$X") && func.getName().endswith("__lldb_wrapped_exprHPu")) {
       return func.getName();
     }
   }

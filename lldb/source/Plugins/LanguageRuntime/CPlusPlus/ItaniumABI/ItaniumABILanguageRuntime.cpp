@@ -478,7 +478,12 @@ bool IsFunctionType(ConstString& type_name) {
 ConstString GetFunctionTypeName(std::string type_name,
     uint64_t para_num, std::vector<CompilerType>& param_types, CompilerType& return_type) {
     std::string name = type_name.substr(0, type_name.find(":")) + "::(";
+    std::string expression_package_name = "__cjdb_expr::";
     uint64_t para_id = 0;
+    if (name.find(expression_package_name) == 0) {
+      // If the function type is created by cangjie expression. Delete package name.
+      name = name.substr(expression_package_name.size());
+    }
     for (auto& para : param_types) {
       para_id++;
       name += std::string(para.GetTypeName().GetCString());

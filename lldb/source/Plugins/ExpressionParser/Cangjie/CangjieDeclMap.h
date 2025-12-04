@@ -138,7 +138,7 @@ private:
     std::map<std::string, lldb_private::CompilerType> m_parsed_types;
     std::map<std::string, uint64_t> m_captured_var_addrs;
 
-    TypeSystemClang * m_type_system = nullptr;
+    TypeSystemClang *m_type_system = nullptr;
 
     void InitVariable();
     void CreateInjectedThis();
