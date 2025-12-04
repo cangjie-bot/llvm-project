@@ -1597,6 +1597,7 @@ void CangjieDeclMap::LookUpTypeByName(const std::string& name, std::vector<Compi
       LLDB_LOGF(log, "[Generic]: find type decl with generic param by part name[%s] -> [%s]. \n",
                 ConstString(name).AsCString(), userDefinedType.GetTypeName().GetCString());
       m_generic_types.insert({ConstString(name), userDefinedType});
+      builder.m_type_names.insert(userDefinedType.GetTypeName().AsCString());
     }
   }
   if (userDefinedType.IsValid()) {
