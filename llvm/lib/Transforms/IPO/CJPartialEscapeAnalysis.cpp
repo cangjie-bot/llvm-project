@@ -2075,6 +2075,7 @@ public:
     Base->spreadMemEscape(BB, ES, SuccBBInfo, Offsets, Direct);
     Offsets.pop_back();
     if (Offset < 0) {
+      IsVisiting = false;
       return;
     }
     if (Direct) {
