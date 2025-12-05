@@ -791,7 +791,7 @@ std::vector<std::string> CangjieCompilerInstance::WalkAndCollectIdentifiers()
       if (find == names.end()) {
         names.emplace_back(re->ref.identifier);
       }
-      return VisitAction::SKIP_CHILDREN;
+      return VisitAction::WALK_CHILDREN;
     }
     if (curNode->astKind == AST::ASTKind::REF_EXPR) {
       auto re = RawStaticCast<const RefExpr *>(curNode.get());
