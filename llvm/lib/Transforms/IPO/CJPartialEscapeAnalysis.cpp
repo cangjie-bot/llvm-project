@@ -671,6 +671,9 @@ public:
                   std::max(EdgesMap[IL], - IL->EdgesMap[this]);
         int J2I = std::min(EdgesMap[IL], - IL->EdgesMap[this]) -
                   std::max(EdgesMap[JL], - JL->EdgesMap[this]);
+        if (I2J == 0 && J2I == 0 && IL->Val && JL->Val &&
+            isa<LoadInst>(IL->Val) && isa<LoadInst>(JL->Val))
+          continue;
         IL->insertEdge(JL, I2J);
         JL->insertEdge(IL, J2I);
       }
