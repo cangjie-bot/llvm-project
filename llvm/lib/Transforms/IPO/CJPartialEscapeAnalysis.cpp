@@ -1627,6 +1627,10 @@ private:
         AllLocations[Index]->passEdges(false);
       }
     }
+    llvm::sort(AllLocations.begin() + ArgsObjectNum + MayReplaceObjectNum,
+               AllLocations.end(), [](ObjectLocation *L, ObjectLocation *R) {
+                 return L->EdgesSet.size() < R->EdgesSet.size();
+               });
     for (unsigned Index = ArgsObjectNum + MayReplaceObjectNum;
          Index < AllLocations.size(); Index++) {
       ObjectLocation *CurLoc = AllLocations[Index];
