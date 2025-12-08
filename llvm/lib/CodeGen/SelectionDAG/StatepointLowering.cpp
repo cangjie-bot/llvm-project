@@ -423,8 +423,9 @@ spillIncomingStatepointValue(SDValue Incoming, SDValue Chain,
     auto *StoreMMO = MF.getMachineMemOperand(
         PtrInfo, MachineMemOperand::MOStore, MFI.getObjectSize(Index),
         MFI.getObjectAlign(Index));
-    Chain = Builder.DAG.getStore(Chain, Builder.getCurSDLoc(), Incoming, Loc,
-                                 StoreMMO);
+    Chain = Builder.DAG.getStore(Chain,
+                                 CJPipeline ? SDLoc() : Builder.getCurSDLoc(),
+                                 Incoming, Loc, StoreMMO);
 
     MMO = getMachineMemOperand(MF, *cast<FrameIndexSDNode>(Loc));
 
@@ -1496,7 +1497,8 @@ void SelectionDAGBuilder::visitRelocate(const GCProjectionInst &Relocate) {
                                                            Relocate.getType());
 
     SDValue SpillLoad =
-        DAG.getLoad(LoadVT, getCurSDLoc(), Chain, SpillSlot, LoadMMO);
+        DAG.getLoad(LoadVT, CJPipeline ? SDLoc() : getCurSDLoc(), Chain,
+                    SpillSlot, LoadMMO);
     PendingLoads.push_back(SpillLoad.getValue(1));
 
     assert(SpillLoad.getNode());

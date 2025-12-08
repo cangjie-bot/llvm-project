@@ -322,7 +322,7 @@ const Function *StatepointOpers::getCalledFunction() {
 }
 
 bool StatepointOpers::isCJStackCheck() {
-  return getID() == CJStatepointID::StackCheck;
+  return getID() == Cangjie::CJStatepointID::StackCheck;
 }
 
 StackMaps::StackMaps(AsmPrinter &AP) : AP(AP) {
@@ -961,7 +961,7 @@ void StackMaps::recordStackMapOpers(const MCSymbol &MILabel,
   // get Line number from debug info
   uint32_t Line = 0;
   if (MI.getOpcode() == TargetOpcode::STATEPOINT) {
-    if (OpersInfo.ID == CJStatepointID::StackCheck &&
+    if (OpersInfo.ID == Cangjie::CJStatepointID::StackCheck &&
         MI.getMF()->getFunction().getSubprogram() != nullptr) {
       Line = MI.getMF()->getFunction().getSubprogram()->getLine();
     }

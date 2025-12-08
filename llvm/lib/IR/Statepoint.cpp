@@ -40,6 +40,7 @@ llvm::parseStatepointDirectivesFromAttrs(AttributeList AS) {
 }
 
 uint64_t llvm::getCJStatepointID(CallBase *Call) {
+  using namespace Cangjie;
   Function *Callee = Call->getCalledFunction();
   if (!Callee)
     return CJStatepointID::Default;
