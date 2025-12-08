@@ -671,6 +671,8 @@ public:
                   std::max(EdgesMap[IL], - IL->EdgesMap[this]);
         int J2I = std::min(EdgesMap[IL], - IL->EdgesMap[this]) -
                   std::max(EdgesMap[JL], - JL->EdgesMap[this]);
+        if (I2J == 0 && J2I == 0)
+          continue;
         IL->insertEdge(JL, I2J);
         JL->insertEdge(IL, J2I);
       }
@@ -2204,8 +2206,7 @@ Value *CJEscapeAnalysis::getBaseValue(Value *CV, int &Offset) {
         V = CI->getOperand(0);
       }
     } else if (auto *GEPI = dyn_cast<GetElementPtrInst>(V)) {
-      APInt GEPOffset(GEPI->getModule()->getDataLayout().getIndexSizeInBits(0),
-                      0);
+      APInt GEPOffset(64, 0);
       if (GEPI->accumulateConstantOffset(GEPI->getModule()->getDataLayout(),
                                          GEPOffset)) {
         Offset += GEPOffset.getZExtValue();
