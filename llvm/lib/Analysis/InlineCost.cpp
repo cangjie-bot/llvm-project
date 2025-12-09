@@ -621,6 +621,7 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
   /// we have to disable SROA for one of the allocas, this tells us how much
   /// cost must be added.
   DenseMap<AllocaInst *, int> SROAArgCosts;
+  DenseMap<Function*, int> CallSiteNumCache;
 
   /// Return true if \p Call is a cold callsite.
   bool isColdCallSite(CallBase &Call, BlockFrequencyInfo *CallerBFI);
@@ -1010,6 +1011,61 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
 
   void onLoadEliminationOpportunity() override {
     LoadEliminationCost += InlineConstants::InstrCost;
+  }
+
+  // Calculate the cost of the stackmap based on the number of callsites. This
+  // check is not precises.
+  bool checkCJStackMapThreshold(CallBase &Call, Function &F) {
+    Function *Caller = Call.getCaller();
+    Function *Callee = &F;
+    int CallSiteNum1 = 0;
+    int CallSiteNum2 = 0;
+    auto It = CallSiteNumCache.find(Caller);
+    if (It != CallSiteNumCache.end()) {
+        CallSiteNum1 = CallSiteNumCache[Caller];
+    }else {
+      for (auto &I : instructions(Caller)) {
+        CallBase *CB = dyn_cast<CallBase>(&I);
+        if (CB && !isa<IntrinsicInst>(&I)) {
+          Function *F = CB->getCalledFunction();
+          // Functions has cj-runtime, gc-leaf-function and gc-safepoint does not
+          // need relocate
+          if (!F || F->hasFnAttribute("cj-runtime") ||
+              F->hasFnAttribute("gc-leaf-function") ||
+              F->hasFnAttribute("gc-safepoint"))
+            continue;
+          ++CallSiteNum1;
+        }
+      }
+      CallSiteNumCache[Caller] = CallSiteNum1;
+    }
+    if (CallSiteNum1 == 0)
+      return true;
+    It = CallSiteNumCache.find(Callee);
+    if (It != CallSiteNumCache.end()) {
+        CallSiteNum2 = CallSiteNumCache[Callee];
+    }else {
+      for (auto &I : instructions(Callee)) {
+        CallBase *CB = dyn_cast<CallBase>(&I);
+        if (CB && !isa<IntrinsicInst>(&I)) {
+          Function *F = CB->getCalledFunction();
+          // Functions has cj-runtime, gc-leaf-function and gc-safepoint does not
+          // need relocate
+          if (!F || F->hasFnAttribute("cj-runtime") ||
+              F->hasFnAttribute("gc-leaf-function") ||
+              F->hasFnAttribute("gc-safepoint"))
+            continue;
+          ++CallSiteNum2;
+        }
+      }
+      CallSiteNumCache[Callee] = CallSiteNum2;
+    }
+
+    if (CallSiteNum2 <= CJInlineStackMapCalleecallnumThreshold)
+      return true;
+    // 100: percentage
+    return CallSiteNum2 * 1.0 / CallSiteNum1 <=
+          CJInlinePerStackMapThreshold * 1.0 / 100;
   }
 
   InlineResult onAnalysisStart() override {
@@ -2876,47 +2932,6 @@ int llvm::getCallsiteCost(CallBase &Call, const DataLayout &DL) {
   // The call instruction also disappears after inlining.
   Cost += InlineConstants::InstrCost + CallPenalty;
   return Cost;
-}
-
-// Calculate the cost of the stackmap based on the number of callsites. This
-// check is not precises.
-bool llvm::checkCJStackMapThreshold(CallBase &Call, Function &F) {
-  Function *Caller = Call.getCaller();
-  Function *Callee = &F;
-  int CallSiteNum1 = 0;
-  int CallSiteNum2 = 0;
-  for (auto &I : instructions(Caller)) {
-    CallBase *CB = dyn_cast<CallBase>(&I);
-    if (CB && !isa<IntrinsicInst>(&I)) {
-      Function *F = CB->getCalledFunction();
-      // Functions has cj-runtime, gc-leaf-function and gc-safepoint does not
-      // need relocate
-      if (!F || F->hasFnAttribute("cj-runtime") ||
-          F->hasFnAttribute("gc-leaf-function") ||
-          F->hasFnAttribute("gc-safepoint"))
-        continue;
-      ++CallSiteNum1;
-    }
-  }
-
-  for (auto &I : instructions(Callee)) {
-    CallBase *CB = dyn_cast<CallBase>(&I);
-    if (CB && !isa<IntrinsicInst>(&I)) {
-      Function *F = CB->getCalledFunction();
-      // Functions has cj-runtime, gc-leaf-function and gc-safepoint does not
-      // need relocate
-      if (!F || F->hasFnAttribute("cj-runtime") ||
-          F->hasFnAttribute("gc-leaf-function") ||
-          F->hasFnAttribute("gc-safepoint"))
-        continue;
-      ++CallSiteNum2;
-    }
-  }
-  if (CallSiteNum1 == 0 || CallSiteNum2 <= CJInlineStackMapCalleecallnumThreshold)
-    return true;
-  // 100: percentage
-  return CallSiteNum2 * 1.0 / CallSiteNum1 <=
-         CJInlinePerStackMapThreshold * 1.0 / 100;
 }
 
 InlineCost llvm::getInlineCost(
