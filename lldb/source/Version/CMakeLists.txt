@@ -11,6 +11,8 @@ find_first_existing_vc_file("${LLDB_SOURCE_DIR}" lldb_vc)
 if(lldb_vc AND LLVM_APPEND_VC_REV)
   set(lldb_source_dir ${LLDB_SOURCE_DIR})
 endif()
+message(STATUS "CJDB_VERSION_STR value: ${CJDB_VERSION_STR}")
+add_compile_definitions(CJDB_VERSION="${CJDB_VERSION_STR}")
 
 add_custom_command(OUTPUT "${vcs_version_inc}"
   DEPENDS "${lldb_vc}" "${generate_vcs_version_script}"

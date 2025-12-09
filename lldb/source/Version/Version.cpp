@@ -58,7 +58,11 @@ const char *lldb_private::GetVersion() {
       g_version_str += "\n  llvm revision ";
       g_version_str += llvm_rev;
     }
-    g_version_str += "\n  cangjie 1.1.0-beta.9";
+    #ifdef CJDB_VERSION
+    g_version_str += "\n  cangjie " CJDB_VERSION;
+    #else
+    g_version_str += "\n  cangjie 1.1.0-beta.10";
+    #endif
   }
 
   return g_version_str.c_str();
