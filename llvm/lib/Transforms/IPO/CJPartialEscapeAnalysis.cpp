@@ -655,30 +655,44 @@ public:
     return OldSize != InfoEscapeLoc.size();
   }
 
-  void passEdges(bool DoClear) {
-    for (unsigned i = 0; i < EdgesSet.size(); i++) {
-      ObjectLocation *IL = EdgesSet[i];
-      assert(EdgesMap.count(IL) && "The EdgesMap and EdgesSet do not match.");
-
-      if (EscapeDepth != INT32_MAX) {
-        IL->setInfoEscaped(EscapeDepth + EdgesMap[IL]);
-      }
-
-      for (unsigned j = i + 1; j < EdgesSet.size(); j++) {
-        ObjectLocation *JL = EdgesSet[j];
-        assert(EdgesMap.count(JL) && "The EdgesMap and EdgesSet do not match.");
-        int I2J = std::min(EdgesMap[JL], - JL->EdgesMap[this]) -
-                  std::max(EdgesMap[IL], - IL->EdgesMap[this]);
-        int J2I = std::min(EdgesMap[IL], - IL->EdgesMap[this]) -
-                  std::max(EdgesMap[JL], - JL->EdgesMap[this]);
-        IL->insertEdge(JL, I2J);
-        JL->insertEdge(IL, J2I);
-      }
-      if (DoClear) {
+  struct EdgeInfo {
+    ObjectLocation *Loc;
+    int Path;
+    int PathFromThis;
+    int PathMax;
+    int PathMin;
+  };
+  void passEdges(bool ShouldClear) {
+    const size_t EdgeCount = EdgesSet.size();
+    SmallVector<EdgeInfo, 8> EdgeInfos;
+    EdgeInfos.reserve(EdgeCount);
+    for (unsigned i = 0; i < EdgeCount; i++) {
+        ObjectLocation *IL = EdgesSet[i];
+        assert(EdgesMap.count(IL) && "The EdgesMap and EdgesSet do not match.");
+        if (EscapeDepth != INT32_MAX)
+            IL->setInfoEscaped(EscapeDepth + EdgesMap[IL]);
+        int ILPath = EdgesMap[IL];
+        int ILPathFromThis = IL->EdgesMap[this];
+        int ILPathMax = std::max(ILPath, -ILPathFromThis);
+        int ILPathMin = std::min(ILPath, -ILPathFromThis);
+        EdgeInfos.push_back({IL, ILPath, ILPathFromThis, ILPathMax, ILPathMin});
+    }
+    for (unsigned i = 0; i < EdgeCount; i++) {
+        EdgeInfo& ILInfo = EdgeInfos[i];
+        ObjectLocation* IL = ILInfo.Loc;
+        for (unsigned j = i + 1; j < EdgeCount; j++) {
+            EdgeInfo& JLInfo = EdgeInfos[j];
+            ObjectLocation* JL = JLInfo.Loc;
+            int I2J = JLInfo.PathMin - ILInfo.PathMax;
+            int J2I = ILInfo.PathMin - JLInfo.PathMax;
+            IL->insertEdge(JL, I2J);
+            JL->insertEdge(IL, J2I);
+        }
+      if (ShouldClear) {
         IL->removeEdge(this);
       }
     }
-    if (DoClear) {
+    if (ShouldClear) {
       clearEdges();
     }
   }
