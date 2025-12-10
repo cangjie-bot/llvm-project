@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<configuration>
+    <oatconfig>
+        <licensefile></licensefile>
+        <policylist>
+            <policy name="projectPolicy" desc="">
+                <policyitem type="copyright" name="Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved." path=".*" rule="may" group="defaultGroup" filefilter="copyrightPolicyFilter" desc=""/>
+                <policyitem type="copyright" name="REM Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved." path=".*" rule="may" group="defaultGroup" filefilter="copyrightPolicyFilter" desc=""/>
+                <policyitem type="license" name="CC-BY-4.0" path=".*" rule="may" group="defaultGroup" filefilter="defaultPolicyFilter" desc=""/>
+            </policy>
+        </policylist>
+        <filefilterlist>
+            <filefilter name="defaultFilter" desc="Files not to check">
+                <filteritem type="filename" name="COPYRIGHT|COPYRIGHT_EN" desc="doc file"/>
+                <filteritem type="filename" name="*.dylib|*.csv|*.text|*.dll|*.so|*.out|*.gz|*.test|*.list" desc="desc files"/>
+                <filteritem type="filename" name="!cj-.*.ll" desc="test files"/>
+            </filefilter>
+            <filefilter name="licenseFileNamePolicyFilter" desc="Filters for LICENSE file policies">
+                <filteritem type="filepath" name="!CJ*" desc="仅检查CJ目录"/>
+                <filteritem type="filepath" name="unittests/Utils/CangjieFiles/emptyfile.cj" desc="空文件过滤"/>
+            </filefilter>
+            <filefilter name="defaultPolicyFilter" desc="Files that do not need to be applied specified policy, will be merged with the filter items which has the same filefilter name">
+            </filefilter>
+            <filefilter name="copyrightPolicyFilter" desc="">
+            </filefilter>
+            <filefilter name="readmeFileNamePolicyFilter" desc="Filters for README file policies">
+            </filefilter>
+            <filefilter name="readmeOpenSourcefileNamePolicyFilter" desc="Filters for README.OpenSource file policies">
+            </filefilter>
+            <filefilter name="binaryFileTypePolicyFilter" desc="Filters for binary file policies">
+            </filefilter>
+            <filefilter name="binaryFileTypePolicyFilter" desc="Filters for binaryFile" >
+            </filefilter>	
+        </filefilterlist>
+		<licensematcherlist>
+            <licensematcher name="Apache-2.0 with Runtime Library Exception" desc="If the scanning result is InvalidLicense, you can define matching rules here. Note that quotation marks must be escaped.">
+                <licensetext name="
+                    This source file is part of the Cangjie project, licensed under Apache-2.0
+					with Runtime Library Exception.
+				 " desc=""/>
+            </licensematcher>
+            <licensematcher name="Apache-2.0 with Runtime Library Exception" desc="If the scanning result is InvalidLicense, you can define matching rules here. Note that quotation marks must be escaped.">
+                <licensetext name="
+                    REM This source file is part of the Cangjie project, licensed under Apache-2.0
+					REM with Runtime Library Exception.
+				 " desc=""/>
+            </licensematcher>
+        </licensematcherlist>
+    </oatconfig>
+</configuration>
+
