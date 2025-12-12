@@ -1346,20 +1346,11 @@ void StructLiveAnalysis::insertGEPForField(CallBase *Call,
       assert(AllocaData.StructLayoutGCPtrMap[AI][Offset] &&
              "FieldInfos contains incorrect value.");
 
-      if (FieldToGEPMap.count(FI)) {
-        Value *GEP = FieldToGEPMap[FI];
-        if (DT.dominates(GEP, Call)) {
-          FieldSet.insert(GEP);
-          continue;
-        }
-      }
-
       Value *Int8Ptr = Builder.CreateBitCast(Base, Builder.getInt8PtrTy());
       cast<Instruction>(Int8Ptr)->setMetadata(
           "noreloc", MDNode::get(Builder.getContext(), {}));
       Value *GEP = Builder.CreateGEP(Builder.getInt8Ty(), Int8Ptr,
                                      Builder.getInt64(Offset), "field", true);
-      FieldToGEPMap[FI] = GEP;
       FieldSet.insert(GEP);
     } else {
       checkFailed("Unexpected type in insertGEPForField", AI);

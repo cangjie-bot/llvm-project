@@ -1056,9 +1056,6 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
     if (Cost >= Threshold && !ComputeFullInlineCost)
       return InlineResult::failure("high cost");
 
-    if (CJPipeline && !checkCJStackMapThreshold(CandidateCall, F))
-      return InlineResult::failure("high stackmap cost");
-
     return InlineResult::success();
   }
 
@@ -2876,47 +2873,6 @@ int llvm::getCallsiteCost(CallBase &Call, const DataLayout &DL) {
   // The call instruction also disappears after inlining.
   Cost += InlineConstants::InstrCost + CallPenalty;
   return Cost;
-}
-
-// Calculate the cost of the stackmap based on the number of callsites. This
-// check is not precises.
-bool llvm::checkCJStackMapThreshold(CallBase &Call, Function &F) {
-  Function *Caller = Call.getCaller();
-  Function *Callee = &F;
-  int CallSiteNum1 = 0;
-  int CallSiteNum2 = 0;
-  for (auto &I : instructions(Caller)) {
-    CallBase *CB = dyn_cast<CallBase>(&I);
-    if (CB && !isa<IntrinsicInst>(&I)) {
-      Function *F = CB->getCalledFunction();
-      // Functions has cj-runtime, gc-leaf-function and gc-safepoint does not
-      // need relocate
-      if (!F || F->hasFnAttribute("cj-runtime") ||
-          F->hasFnAttribute("gc-leaf-function") ||
-          F->hasFnAttribute("gc-safepoint"))
-        continue;
-      ++CallSiteNum1;
-    }
-  }
-
-  for (auto &I : instructions(Callee)) {
-    CallBase *CB = dyn_cast<CallBase>(&I);
-    if (CB && !isa<IntrinsicInst>(&I)) {
-      Function *F = CB->getCalledFunction();
-      // Functions has cj-runtime, gc-leaf-function and gc-safepoint does not
-      // need relocate
-      if (!F || F->hasFnAttribute("cj-runtime") ||
-          F->hasFnAttribute("gc-leaf-function") ||
-          F->hasFnAttribute("gc-safepoint"))
-        continue;
-      ++CallSiteNum2;
-    }
-  }
-  if (CallSiteNum1 == 0 || CallSiteNum2 <= CJInlineStackMapCalleecallnumThreshold)
-    return true;
-  // 100: percentage
-  return CallSiteNum2 * 1.0 / CallSiteNum1 <=
-         CJInlinePerStackMapThreshold * 1.0 / 100;
 }
 
 InlineCost llvm::getInlineCost(
