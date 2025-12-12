@@ -300,7 +300,6 @@ public:
 
   void clear() {
     StackContainGCPtrMap.clear();
-    FieldToGEPMap.clear();
     for (auto *Field : AllFields) {
       delete Field;
     }
@@ -320,8 +319,6 @@ private:
   // Mapping whether a V is a stack pointer that contains gcptr, and clear it
   // after active variable analysis.
   MapVector<Value *, bool> StackContainGCPtrMap;
-  // Caches all newly generated GEP fields.
-  MapVector<FieldInfo *, Value *> FieldToGEPMap;
   // Avoid duplicate liveness analysis in the BB.
   MapVector<BasicBlock *, std::pair<Instruction *, StructLiveSetTy>>
       InstLiveSetCache;
