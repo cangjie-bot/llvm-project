@@ -1923,7 +1923,7 @@ public:
     for (unsigned It = 0; It < MPs.size(); ++It) {
       if (!SuccBBInfo.count(MPs[It]) || SuccBBInfo[MPs[It]] < ES) {
         SuccBBInfo[MPs[It]] = ES;
-        MPs[It]->spreadEscape(BB, Escaped, SuccBBInfo, true);
+        MPs[It]->spreadEscape(BB, ES, SuccBBInfo, true);
       }
     }
     // is direct escape
@@ -2478,13 +2478,13 @@ public:
     bool Changed = true;
     for (auto &BB : *Func) {
       auto &BBInfo = EscapeBBInfo[&BB];
-      SmallSetVector<GCPtr *, 8> EscapedValues;
-      SmallSetVector<GCPtr *, 8> InfoEscapedValues;
+      SmallVector<GCPtr *, 8> EscapedValues;
+      SmallVector<GCPtr *, 8> InfoEscapedValues;
       for (auto EscapeInfo : BBInfo) {
         if (EscapeInfo.second == Escaped) {
-          EscapedValues.insert(EscapeInfo.first);
+          EscapedValues.push_back(EscapeInfo.first);
         } else if (EscapeInfo.first->isInfoEscaped()) {
-          InfoEscapedValues.insert(EscapeInfo.first);
+          InfoEscapedValues.push_back(EscapeInfo.first);
         }
       }
       for (unsigned Index = 0; Index < EscapedValues.size(); Index++) {
