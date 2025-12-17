@@ -97,6 +97,7 @@ public:
     CompilerType GetDynamicTupleType(Ptr<AST::Ty>& ty, std::string typeName, CompilerType& genericType);
     CompilerType GetDynamicEnumType(Ptr<AST::Ty>& ty, std::string typeName, CompilerType& genericType);
     CompilerType GetEnumType(Ptr<AST::Ty>& ty, std::string typeName, CompilerType& genericType);
+    CompilerType CreateOptionReturnType(Ptr<Cangjie::AST::Ty>& ty, std::string& typeName);
     void CreateAndAddInheritTypeToRecordType(Ptr<AST::Ty>& ty, CompilerType& enum_type, CompilerType& instancetiateType, CompilerType& generic_type);
 
     CompilerType GetDynamicArrayType(Ptr<AST::Ty>& ty, std::string typeName, CompilerType& genericType);

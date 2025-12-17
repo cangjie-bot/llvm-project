@@ -209,6 +209,9 @@ bool CangjieExpressionParser::Parse(ExecutionContext &exeCtx, const std::string 
   }
   m_result_type_name = instance->m_result_type_name;
   std::string demangled_name = lldb_private::Mangled::GetDemangledTypeName(m_result_type_name);
+  if (!m_expr_result_type.IsValid() && demangled_name.find("std.core::Option<") == 0) {
+    m_expr_result_type = m_expr_decl_map_up->CreateOptionReturnType(instance->m_expr_result->ty, demangled_name);
+  }
   if (!instance->m_expr_result->ty->typeArgs.empty()) {
     std::string typeName = GetSubNameWithoutPkgname(demangled_name, m_expr_decl_map_up->m_current_pkgname);
     if (typeName.empty()) {
