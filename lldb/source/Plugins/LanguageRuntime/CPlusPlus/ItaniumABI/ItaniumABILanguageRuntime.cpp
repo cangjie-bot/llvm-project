@@ -477,7 +477,12 @@ bool IsFunctionType(ConstString& type_name) {
 
 ConstString GetFunctionTypeName(std::string type_name,
     uint64_t para_num, std::vector<CompilerType>& param_types, CompilerType& return_type) {
-    std::string name = type_name.substr(0, type_name.find(":")) + "::(";
+    std::string name = "";
+    if (auto pos = type_name.find(":"); pos != std::string::npos) {
+      name = type_name.substr(0, pos) + "::(";
+    } else {
+      name = "(";
+    }
     std::string expression_package_name = "__cjdb_expr::";
     uint64_t para_id = 0;
     if (name.find(expression_package_name) == 0) {
@@ -726,8 +731,6 @@ static CompilerType CreateEnumType(TypeSystemClang& ast, Process& process,
 
 void ItaniumABILanguageRuntime::CreateAndAddInheritTypeToRecordType(CompilerType& dynamic_type, CompilerType& enum_type,
     TypeSystemClang& ast, uint64_t ctor_num, uint64_t ctors_addr) {
-    CompilerType basic_type = ast.GetBasicType(eBasicTypeLongLong).CreateTypedef(
-            "Int64", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
     auto ti_type = ast.GetBasicType(eBasicTypeVoid).GetPointerType();
     TypeInfo ctor_ti;
     Status error;

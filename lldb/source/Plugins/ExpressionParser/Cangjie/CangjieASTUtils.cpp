@@ -55,6 +55,8 @@ std::string lldb_private::GetEnumPrefix(const std::string& name) {
   } else if (name.find(E3_PREFIX_NAME) != std::string::npos) {
     return E3_PREFIX_NAME;
   }
+
+  return "";
 }
 
 std::string lldb_private::GetEnumNameWithoutPrefix(std::string& name, std::string& pkgname) {
