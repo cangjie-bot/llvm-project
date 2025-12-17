@@ -169,8 +169,7 @@ public:
            hasAttribute("CJTypeName") || hasAttribute("CJTIOffsets") ||
            hasAttribute("CJTITypeArgs") || hasAttribute("CJTIFields") ||
            hasAttribute("CJTTFieldsFns") || hasAttribute("CJTIUpperBounds") ||
-           hasAttribute("CJFuncTable") || getName().equals("cj.sdk.version") ||
-           hasAttribute("CFileTIExt");
+           hasAttribute("CJFuncTable") || getName().equals("cj.sdk.version");
   }
 
   bool isCJSDKVersion() const { return getName().equals("cj.sdk.version"); }
@@ -185,7 +184,6 @@ public:
   bool isCJGlobalValue() const { return hasAttribute("CJGlobalValue"); }
   bool isCJGCTib() const { return hasAttribute("CFileGCTib"); }
   bool isCJMTable() const { return hasAttribute("CFileMTable"); }
-  bool isCJTypeExt() const { return hasAttribute("CFileTIExt"); }
   bool isCJInnerTypeExtensions() const {
     return hasAttribute("InnerTypeExtensions");
   }

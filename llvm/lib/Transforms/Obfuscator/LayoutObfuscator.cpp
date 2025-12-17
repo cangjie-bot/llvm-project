@@ -287,9 +287,6 @@ bool LayoutObfuscator::needObfuse(const GlobalVariable &G) {
     "CFileVTable",
     "CFileMTable",
     "CFileStaticGenericTI",
-    "Reflection",
-    "ReflectionGV",
-    "CFileTIExt",
   };
   if (GlobalName.empty() || G.getName().startswith("llvm.")) {
     return false;

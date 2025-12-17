@@ -418,9 +418,6 @@ ExtensionDefData::ExtensionDefData(GlobalVariable *GV) {
   IsInterfaceTypeInfo =
       cast<ConstantInt>(Data->getOperand(ET_IS_INTERFACE_TYPEINFO))
           ->getZExtValue();
-  Flag = cast<ConstantInt>(Data->getOperand(ET_FLAG))->getZExtValue();
-  FuncTableSize =
-      cast<ConstantInt>(Data->getOperand(ET_FUNC_TABLE_SIZE))->getSExtValue();
   auto CE = dyn_cast<ConstantExpr>(Data->getOperand(ET_TARGET_TYPE));
   TargetType = dyn_cast<GlobalVariable>(CE->getOperand(0));
   CE = dyn_cast<ConstantExpr>(Data->getOperand(ET_INTERFACE_FN));
@@ -1338,9 +1335,6 @@ public:
       assert(TT.isSyncClass() && "Not a Future TypeTemplate!");
       Flag |= TF_FUTURE_CLASS;
     }
-    if (GV->hasAttribute("HasExtPart")) {
-      Flag |= TF_HAS_EXT_PART;
-    }
     if (Reflector.enable(M)) {
       Flag |= TF_REFLECTION;
     }
@@ -1433,9 +1427,6 @@ private:
 
     if (Reflector.enable(M))
       Flag |= TF_REFLECTION;
-
-    if (TI->hasAttribute("HasExtPart"))
-      Flag |= TF_HAS_EXT_PART;
 
     return Flag;
   }

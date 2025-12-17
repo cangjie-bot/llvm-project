@@ -608,11 +608,8 @@ def int_cj_gcread_generic           : Intrinsic<[],
 def int_cj_get_mtable_func          : Intrinsic<[llvm_ptr_ty],
                                                 [llvm_ptr_ty, llvm_ptr_ty, llvm_i64_ty],
                                                 [IntrNoMem, IntrWillReturn, IntrSpeculatable]>;
-def int_cj_get_method_outertype     : Intrinsic<[llvm_ptr_ty],
-                                                [llvm_ptr_ty, llvm_ptr_ty, llvm_i64_ty],
-                                                [IntrNoMem, IntrWillReturn, IntrSpeculatable]>;
 def int_cj_get_vtable_func          : Intrinsic<[llvm_ptr_ty],
-                                                [llvm_ptr_ty, llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty]>;
+                                                [llvm_ptr_ty, llvm_i64_ty, llvm_i64_ty]>;
 def int_cj_assign_generic           : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_ptr_ty],
                                                 [IntrArgMemOnly, IntrWillReturn,
