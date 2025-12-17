@@ -198,6 +198,7 @@ private:
     void CollectGenericTypeOfVariable(const CompilerType& type);
     void CollectOptionValType(CompilerType& type);
     void AddFieldToRecordType(const CompilerType& genericType, CompilerType& instancedType, std::string& name);
+    CompilerType CreateOptionReturnType(Ptr<Cangjie::AST::Ty>& ty, std::string& typeName);
     std::set<ConstString> m_local_func;
 };
 

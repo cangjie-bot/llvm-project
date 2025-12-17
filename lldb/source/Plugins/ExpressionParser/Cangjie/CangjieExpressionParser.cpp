@@ -222,6 +222,9 @@ bool CangjieExpressionParser::Parse(ExecutionContext &exeCtx, const std::string 
           instance->m_expr_result->ty, demangled_name);
     }
   }
+  if (!m_expr_result_type.IsValid() && demangled_name.find("std.core::Option<") ==0) {
+    m_expr_result_type = m_expr_decl_map_up->CreateOptionReturnType(instance->m_expr_result->ty, demangled_name);
+  }
   return true;
 }
 

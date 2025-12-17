@@ -55,6 +55,8 @@ std::string lldb_private::GetEnumPrefix(const std::string& name) {
   } else if (name.find(E3_PREFIX_NAME) != std::string::npos) {
     return E3_PREFIX_NAME;
   }
+
+  return "";
 }
 
 std::string lldb_private::GetEnumNameWithoutPrefix(std::string& name, std::string& pkgname) {
@@ -163,7 +165,7 @@ OwnedPtr<AST::Type> CangjieASTBuiler::CreateFuncType(std::string name, Ptr<Decl>
     // For example, a func name can be "(Object, Int8, Int8) -> Int8".
     OwnedPtr<FuncType> ret = MakeOwned<FuncType>();
     name.erase(std::remove(name.begin(), name.end(), ' '), name.end());
-    auto arrowPos = name.find("->");
+    auto arrowPos = name.rfind("->");
     if (arrowPos == std::string::npos) {
         return ret;
     }
