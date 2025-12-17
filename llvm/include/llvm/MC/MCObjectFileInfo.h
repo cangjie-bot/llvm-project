@@ -236,7 +236,6 @@ protected:
   /// Sections about cangjie typeinfo.
   MCSection *CJTypeInfoSection = nullptr;   // TypeInfo
   MCSection *CJTypeFieldsSection = nullptr; // Fields of TI or TT
-  MCSection *CJTypeExtSection = nullptr; // Ext part of TI or TT
 
   /// Sections about vtable and itable
   MCSection *CJMtableSection = nullptr;              // Tile all extensiondefs
@@ -472,7 +471,6 @@ public:
   MCSection *getCJTypeTemplateSection() const { return CJTypeTemplateSection; }
   MCSection *getCJStaticGenericTISection() const { return CJStaticGenericTISection; }
   MCSection *getTypeInfoSection() const { return CJTypeInfoSection; }
-  MCSection *getTypeExtSection() const { return CJTypeExtSection; }
   MCSection *getCJTypeFieldsSection() const { return CJTypeFieldsSection; }
 
   // VTable/ITable

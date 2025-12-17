@@ -123,7 +123,6 @@ class SectionKind {
                CJStaticGenericTI,
                CJTypeInfo,
                CJTypeFields,
-               CJTypeExt,
                CJMTable,
                CJInnerTypeExtensions,
                CJOuterTypeExtensions,
@@ -140,7 +139,6 @@ public:
   bool isCJTypeFields() const { return K == CJTypeFields; }
   bool isCJGCTib() const { return K == CJGCTib; }
   bool isCJMTable() const { return K == CJMTable; }
-  bool isCJTypeExt() const { return K == CJTypeExt; }
   bool isCJReflectPkgInfo() const { return K == CJReflectPkgInfo; }
   bool isCJReflectGV() const { return K == CJReflectGV; }
   bool isCJStaticGenericTI() const { return K == CJStaticGenericTI; }
@@ -152,7 +150,7 @@ public:
            isCJTypeFields() || isCJGCTib() || isCJMTable() ||
            isCJReflectPkgInfo() || isCJReflectGV() || isCJStaticGenericTI() ||
            isCJInnerTypeExtensions() || isCJOuterTypeExtensions() ||
-           isCJReflectGenericTI() || isCJTypeExt();
+           isCJReflectGenericTI();
   }
 
   bool isMetadata() const { return K == Metadata; }
@@ -254,7 +252,6 @@ public:
   static SectionKind getCJTypeFields() { return get(CJTypeFields); }
   static SectionKind getCJGCTib() { return get(CJGCTib); }
   static SectionKind getCJMTable() { return get(CJMTable); }
-  static SectionKind getCJTypeExt() { return get(CJTypeExt); }
   static SectionKind getCJReflectGV() { return get(CJReflectGV); }
   static SectionKind getCJReflectPkgInfo() { return get(CJReflectPkgInfo); }
   static SectionKind getCJStaticGenericTI() { return get(CJStaticGenericTI); }

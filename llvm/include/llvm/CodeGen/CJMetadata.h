@@ -43,7 +43,6 @@ enum CJMetadataTable {
   TypeInfoTableIdx,
   TypeTemplateIdx,
   TypeFieldsIdx,
-  TypeExtTableIdx,
   StaticGIIdx,
   GlobalInitFuncIdx,
   MTableIdx,
@@ -88,7 +87,6 @@ private:
 
   void emitTypeInfo();
   void emitTypeTemplate();
-  void emitTypeExt();
   void emitMTable();
   void emitStaticGenericTI();
   void emitInnerTypeExtensions();
@@ -135,7 +133,6 @@ private:
   SmallVector<const GlobalVariable *, 100> ExternalTITable;
   SmallVector<const GlobalVariable *, 100> TIFieldsTable;
   SmallVector<const GlobalVariable *, 100> MTableTable;
-  SmallVector<const GlobalVariable *, 100> TypeExtTable;
   SmallVector<const GlobalVariable *, 100> GCTibTable;
   SmallVector<const GlobalVariable *, 100> StaticGenericTI;
   SmallVector<const GlobalVariable *, 50> ReflectGeneticTI;

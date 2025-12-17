@@ -606,8 +606,6 @@ static StringRef getCJSectionPrefixForGlobal(SectionKind Kind) {
     return ".cjmetadata.gctib";
   if (Kind.isCJMTable())
     return ".cjmetadata.mtable";
-  if (Kind.isCJTypeExt())
-    return ".cjmetadata.type.ext";
   if (Kind.isCJReflectPkgInfo())
     return ".cjmetadata.reflect.pkginfo";
   if (Kind.isCJReflectGV())
@@ -656,8 +654,6 @@ static StringRef getCJMachOSectionPrefixForGlobal(SectionKind Kind) {
     return "__cjgctib";
   if (Kind.isCJMTable())
     return "__cjmtable";
-  if (Kind.isCJTypeExt())
-    return "__cjtype_ext";
   if (Kind.isCJReflectPkgInfo())
     return "__cjref_pkginfo";
   if (Kind.isCJReflectGV())
