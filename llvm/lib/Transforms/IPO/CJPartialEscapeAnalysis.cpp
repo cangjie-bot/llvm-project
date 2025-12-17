@@ -418,6 +418,18 @@ private:
     if (UseCJMemset) {
       CI->setCalledFunction(CJMemset);
     }
+    addLoopIterationMemsetForHoistedArray(I, CI);
+  }
+
+  void addLoopIterationMemsetForHoistedArray(CallBase *I, CallInst *MemsetCI) {
+    IRBuilder<> IRB(I);
+    if (I && I->getCalledFunction()) {
+      Function *F = I->getCalledFunction();
+      auto FuncName = F->getName();
+      if (FuncName.startswith("CJ_MCC_NewArray")) {
+        CallInst *NewMemset = cast<CallInst>(MemsetCI->clone());
+        NewMemset->insertBefore(I);
+      }
   }
 
   void replaceOldInst(IRBuilder<> &IRB, CallBase *I) {
