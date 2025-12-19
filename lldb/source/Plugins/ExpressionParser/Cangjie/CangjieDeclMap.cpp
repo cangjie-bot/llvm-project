@@ -1786,6 +1786,7 @@ lldb_private::CompilerType CangjieDeclMap::FindParsedTypesByName(std::string nam
 
 static std::map<std::string, lldb::BasicType> basic_clang_type_map = {
     { "Bool", lldb::eBasicTypeBool },
+    { "Unit", lldb::eBasicTypeSignedChar },
     { "Rune", lldb::eBasicTypeChar32 },
     { "Int8", lldb::eBasicTypeSignedChar },
     { "Int16", lldb::eBasicTypeShort },
@@ -2220,4 +2221,50 @@ size_t CangjieDeclMap::GetSubGenericTyIndex(const Ptr<Cangjie::AST::Decl>& decl,
     }
   }
   return index;
+}
+
+CompilerType CangjieDeclMap::CreateOptionReturnType(Ptr<Cangjie::AST::Ty>& ty, std::string& typeName) {
+  auto valTypeName = builder.GetInstantiatedParamDeclName(typeName);
+  auto valType = CompilerType();
+  if (m_parsed_types.find(valTypeName[0]) != m_parsed_types.end()) {
+    valType = m_parsed_types[valTypeName[0]];
+  } else {
+    valType = GetPrimitiveTypeByName(valTypeName[0]);
+  }
+
+  if (!valType.IsValid()) {
+    if (m_generic_types.find(ConstString(valTypeName[0])) != m_generic_types.end()) {
+      valType = GetDynamicTypeFromTy(ty->typeArgs[0], valTypeName[0], m_generic_types[ConstString(valTypeName[0])]);
+    }
+  }
+
+  if (!valType.IsValid()) {
+    valType = LookUpType(valTypeName[0]);
+  }
+
+  if (!valType.IsValid()) {
+    return CompilerType();
+  }
+
+  TypeSystemClang* ast = this->GetTypeSystem();
+  CompilerType type = ast->CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+      ConstString(typeName).GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
+  ast->StartTagDeclarationDefinition(type);
+  if (!ty->typeArgs[0]->IsClassLike() && !ty->typeArgs[0]->IsFunc()) {
+    CompilerType basic_type = ast->GetBasicType(lldb::eBasicTypeLongLong).CreateTypedef(
+        "Int64", ast->CreateDeclContext(ast->GetTranslationUnitDecl()), 0);
+    CompilerType enumType = ast->CreateEnumerationType(E2_PREFIX_NAME_OPTION_LIKE + std::string("created"),
+            ast->GetTranslationUnitDecl(), OptionalClangModuleID(), Declaration(), basic_type, false);
+    ast->StartTagDeclarationDefinition(enumType);
+    ast->AddEnumerationValueToEnumerationType(enumType, Declaration(), "Some", 0, 4);
+    ast->AddEnumerationValueToEnumerationType(enumType, Declaration(), "None", 1, 4);
+    ast->CompleteTagDeclarationDefinition(enumType);
+    ast->AddFieldToRecordType(type, "constructor", enumType, lldb::eAccessPublic, 0);
+    ast->AddFieldToRecordType(type, "val", valType, lldb::eAccessPublic, 0);
+  } else {
+    ast->AddFieldToRecordType(type, "val", valType.GetPointerType(), lldb::eAccessPublic, 0);
+  }
+  ast->CompleteTagDeclarationDefinition(type);
+
+  return type;
 }
