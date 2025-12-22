@@ -23,6 +23,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include <unordered_map>
 
 namespace llvm {
@@ -73,10 +74,10 @@ private:
 
   void ComputeDependencies(Value *V, SmallPtrSetImpl<GlobalValue *> &U);
 
-  friend struct CangjieVFE;
+  friend struct CangjieDCE;
 };
 
-struct CangjieVFE {
+struct CangjieDCE {
   struct GenericFuncInfo {
     bool IsValid= false;
     GenericFuncInfo *Prev = nullptr;
@@ -85,12 +86,49 @@ struct CangjieVFE {
     DenseMap<GlobalVariable *, GenericFuncInfo *> Next;
   };
 
+  // These are used for eliminating the useless virtual func.
   GlobalDCEPass &DCE;
   GenericFuncInfo *Root;
 
-  CangjieVFE() = delete;
-  CangjieVFE(GlobalDCEPass &DCE) : DCE(DCE) { Root = new GenericFuncInfo; }
-  ~CangjieVFE();
+  // This is used for eliminating the useless typeinfo.
+  DenseMap<Value *, SmallPtrSet<GlobalVariable *, 8>> ReverseDeps;
+
+  CangjieDCE() = delete;
+  CangjieDCE(GlobalDCEPass &DCE) : DCE(DCE) { Root = new GenericFuncInfo; }
+  ~CangjieDCE();
+
+  static bool isCangjieType(GlobalVariable *GV) {
+    return GV->hasAttribute("CFileKlass") || GV->hasAttribute("cj_tt");
+  }
+  static bool isMetaAssociatedWithType(GlobalVariable *GV) {
+    return GV->hasAttribute("CFileTIExt") || GV->hasAttribute("CFileMTable");
+  }
+  static bool isFakeUser(GlobalVariable *GVU, GlobalVariable *GV) {
+    // We can choose to cut off, for example, the dependencies of llvm.used and
+    // InnerTypeExtensions. However, in this case, when typeinfo is alive, an
+    // additional layer of dependency needs to be penetrated to mark
+    // InnerTypeExtensions alive. However, for CFileTIExt, we can directly sever
+    // the dependency relationship between llvm.used and it, because the
+    // dependency between CFileTIExt and typeinfo is a direct dependency.
+    return GVU->hasAttribute("CFileStaticGenericTI") ||
+           GVU->hasAttribute("InnerTypeExtensions") ||
+           (GV->hasAttribute("CFileTIExt") &&
+            GVU->getName().startswith("llvm.used"));
+  }
+  static int getReverseDepsIndex(GlobalVariable *GV) {
+    if (GV->hasAttribute("CFileMTable"))
+      return ExtensionDefFieldType::ET_TARGET_TYPE;
+    if (GV->hasAttribute("CFileTIExt"))
+      return 0; // 0: dependence typeinfo
+    return -1;
+  }
+  static bool shouldRewrite(GlobalVariable *GV) {
+    // There might also be InnerTypeExtensions. Considering the runtime's
+    // parsing method, not rewriting this part does not affect correctness; it
+    // only slightly impacts the optimization effect on code size.
+    return GV->hasAttribute("CFileStaticGenericTI") ||
+           GV->hasAttribute("OuterTypeExtensions");
+  }
 
   GenericFuncInfo *insertInstance(const SmallVectorImpl<GlobalVariable *> &,
                                   GlobalVariable *FT);
@@ -110,6 +148,10 @@ struct CangjieVFE {
   // Add dependencies between caller and callee.
   void updateDependencies(Function *,
                           DenseMap<GenericFuncInfo *, SmallSet<uint64_t, 4>> &);
+
+  void initTIE(Module &);
+  void updateLiveExtensions();
+  void rewriteExtensions(Module &);
 };
 
 }
