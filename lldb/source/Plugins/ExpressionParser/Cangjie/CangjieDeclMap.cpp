@@ -2265,6 +2265,7 @@ CompilerType CangjieDeclMap::CreateOptionReturnType(Ptr<Cangjie::AST::Ty>& ty, s
     ast->AddFieldToRecordType(type, "val", valType.GetPointerType(), lldb::eAccessPublic, 0);
   }
   ast->CompleteTagDeclarationDefinition(type);
+  m_parsed_types.insert({typeName, type});
 
   return type;
 }
