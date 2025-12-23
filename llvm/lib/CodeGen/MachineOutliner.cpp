@@ -1079,6 +1079,7 @@ bool MachineOutliner::doOutline(Module &M, unsigned &OutlinedFunctionNum) {
   if (ShouldEmitSizeRemarks && OutlinedSomething)
     emitInstrCountChangedRemark(M, MMI, FunctionToInstrCount);
 
+
   LLVM_DEBUG({
     if (!OutlinedSomething)
       dbgs() << "Stopped outlining at iteration " << OutlineRepeatedNum
