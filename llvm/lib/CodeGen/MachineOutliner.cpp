@@ -580,7 +580,7 @@ static bool isCangjieSpecificCall(const MachineInstr *MI) {
   unsigned Opcode = MI->getOpcode();
   if (Opcode == TargetOpcode::STATEPOINT) {
     StatepointOpers SO(MI);
-    if (SO.getID() != Cangjie::CJStatepointID::Default)
+    if (SO.getID() == Cangjie::CJStatepointID::StackCheck)
       return true;
 
     const auto *Callee = SO.getCalledFunction();
@@ -647,8 +647,13 @@ void MachineOutliner::findCandidates(
         MachineBasicBlock::iterator EndIt = Mapper.InstrList[EndIdx];
         MachineBasicBlock *MBB = StartIt->getParent();
 
-        if (hasStatePointBeforeEnd(StartIt, EndIt) || isCangjieSpecificCall(&*EndIt))
+        if (hasStatePointBeforeEnd(StartIt, EndIt))
            continue;
+
+        if (isCangjieSpecificCall(&*EndIt)) {
+          StringLen--;
+          EndIt = Mapper.InstrList[EndIdx - 1];
+        }
 
         CandidatesForRepeatedSeq.emplace_back(StartIdx, StringLen, StartIt,
                                               EndIt, MBB, FunctionList.size(),
@@ -947,7 +952,6 @@ bool MachineOutliner::outline(Module &M,
       NumOutlined++;
     }
   }
-
   LLVM_DEBUG(dbgs() << "OutlinedSomething = " << OutlinedSomething << "\n";);
   return OutlinedSomething;
 }
