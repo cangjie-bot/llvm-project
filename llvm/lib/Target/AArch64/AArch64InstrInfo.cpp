@@ -7638,6 +7638,25 @@ bool AArch64InstrInfo::isMBBSafeToOutlineFrom(MachineBasicBlock &MBB,
   return true;
 }
 
+static bool isCangjieSpecificCallee(const MachineInstr *MI, const Function *Callee) {
+  if (Callee == nullptr) {
+    return false;
+  }
+
+  const auto &CallerFunc = MI->getParent()->getParent()->getFunction();
+
+  StringRef FuncName = Callee->getName();
+
+  return FuncName.isGetGCPhase() 
+      || FuncName.isSetDebugLocation() 
+      || FuncName.equals("CJ_MRT_PreInitializePackage")
+      || FuncName.equals("CJ_MCC_ThrowException")
+      || FuncName.equals("CJ_MCC_NewObject") 
+      || FuncName.equals("CJ_MCC_NewFinalizer")
+      || Callee->isGetCJThreadId()
+      || Callee->isCangjieNativeStub(CallerFunc);
+}
+
 outliner::InstrType
 AArch64InstrInfo::getOutliningType(MachineBasicBlock::iterator &MIT,
                                    unsigned Flags) const {
@@ -7752,7 +7771,7 @@ AArch64InstrInfo::getOutliningType(MachineBasicBlock::iterator &MIT,
       StatepointOpers SO(&MI);
       const MachineOperand *MOSym = &(SO.getCallTarget());
       const auto *Callee = dyn_cast<const Function>(MOSym->getGlobal());
-      if (!Callee || !Callee->isCangjieSafePoint())
+      if (!Callee || !Callee->isCangjieStackCheck())
         UnknownCallOutlineType = outliner::InstrType::LegalTerminator;
     }
 

@@ -580,7 +580,7 @@ static bool isCangjieSpecificCall(const MachineInstr *MI) {
   unsigned Opcode = MI->getOpcode();
   if (Opcode == TargetOpcode::STATEPOINT) {
     StatepointOpers SO(MI);
-    if (SO.getID() != Cangjie::CJStatepointID::Default)
+    if (SO.getID() == Cangjie::CJStatepointID::StackCheck)
       return true;
 
     const auto *Callee = SO.getCalledFunction();
@@ -598,6 +598,12 @@ static bool isCangjieSpecificCall(const MachineInstr *MI) {
 
   const auto *Callee = dyn_cast<const Function>(MOSym.getGlobal());
   return isCangjieSpecificCallee(MI, Callee);
+}
+
+bool MachineOutliner::isCandidateWithStatePoint(MachineBasicBlock::iterator &FirstInst,
+      MachineBasicBlock::iterator &LastInst, 
+      MachineBasicBlock *MBB) {
+  return true;
 }
 
 
@@ -647,8 +653,13 @@ void MachineOutliner::findCandidates(
         MachineBasicBlock::iterator EndIt = Mapper.InstrList[EndIdx];
         MachineBasicBlock *MBB = StartIt->getParent();
 
-        if (hasStatePointBeforeEnd(StartIt, EndIt) || isCangjieSpecificCall(&*EndIt))
+        if (hasStatePointBeforeEnd(StartIt, EndIt))
            continue;
+
+        if (isCangjieSpecificCall(&*EndIt)) {
+          StringLen--;
+          EndIt = Mapper.InstrList[EndIdx - 1];
+        }
 
         CandidatesForRepeatedSeq.emplace_back(StartIdx, StringLen, StartIt,
                                               EndIt, MBB, FunctionList.size(),
@@ -837,6 +848,8 @@ bool MachineOutliner::outline(Module &M,
     return LHS.getBenefit() > RHS.getBenefit();
   });
 
+  unsigned Benefit = 0;
+
   // Walk over each function, outlining them as we go along. Functions are
   // outlined greedily, based off the sort above.
   for (OutlinedFunction &OF : FunctionList) {
@@ -856,10 +869,16 @@ bool MachineOutliner::outline(Module &M,
     // It's beneficial. Create the function and outline its sequence's
     // occurrences.
     OF.MF = createOutlinedFunction(M, OF, Mapper, OutlinedFunctionNum);
+    Benefit += OF.getBenefit();
     emitOutlinedFunctionRemark(OF);
     FunctionsCreated++;
     OutlinedFunctionNum++; // Created a function, move to the next name.
     MachineFunction *MF = OF.MF;
+
+    errs() << MF->getName() << "\n";
+    for (MachineBasicBlock &MBB: *MF) {
+      errs() << MBB;
+    }
     const TargetSubtargetInfo &STI = MF->getSubtarget();
     const TargetInstrInfo &TII = *STI.getInstrInfo();
 
@@ -946,8 +965,9 @@ bool MachineOutliner::outline(Module &M,
       // Statistics.
       NumOutlined++;
     }
+    errs() << "Benefit: " << Benefit << "\n";
   }
-
+  errs() << "EndBenefit: " << Benefit << "\n";
   LLVM_DEBUG(dbgs() << "OutlinedSomething = " << OutlinedSomething << "\n";);
   return OutlinedSomething;
 }
