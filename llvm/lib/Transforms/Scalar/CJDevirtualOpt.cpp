@@ -187,6 +187,10 @@ static bool isSubType(GlobalVariable *Klass0, GlobalVariable *Klass1) {
 
     for (unsigned i = 0; i < K0FieldNum; ++i) {
       if (!isSubType(K0.getField(i), K1.getField(i))) {
+      if (!K0.getField(i)->hasInitializer() ||
+          !K1.getField(i)->hasInitializer()) {
+        return false;
+      }
         return false;
       }
     }
