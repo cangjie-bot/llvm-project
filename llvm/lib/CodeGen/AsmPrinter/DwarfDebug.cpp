@@ -1977,13 +1977,6 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
     return true;
   };
 
-  auto IsCangjieSafepoint = [](const MachineInstr *MI) {
-    return MI->getOpcode() != TargetOpcode::STATEPOINT
-               ? false
-               : StatepointOpers(MI).getID() ==
-                     Cangjie::CJStatepointID::Safepoint;
-  };
-
   // When describing calls, we need a label for the call instruction.
   if (!NoDebug && SP->areAllCallsDescribed() &&
       MI->isCandidateForCallSiteEntry(MachineInstr::AnyInBundle) &&
@@ -2004,7 +1997,7 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
   if (!CurMI)
     return;
 
-  if (NoDebug || IsCangjieSafepoint(MI)) // No debug info for safepoints.
+  if (NoDebug) // No debug info for safepoints.
     return;
 
   // Check if source location changes, but ignore DBG_VALUE and CFI locations.
