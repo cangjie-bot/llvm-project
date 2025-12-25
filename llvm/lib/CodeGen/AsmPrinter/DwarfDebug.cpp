@@ -1981,7 +1981,7 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
     return MI->getOpcode() != TargetOpcode::STATEPOINT
                ? false
                : StatepointOpers(MI).getID() ==
-                     Cangjie::CJStatepointID::Safepoint;
+                     Cangjie::CJStatepointID::Safepoint && PrologEndLoc;
   };
 
   // When describing calls, we need a label for the call instruction.
