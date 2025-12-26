@@ -584,6 +584,8 @@ static bool isCangjieSpecificCall(const MachineInstr *MI) {
       return true;
 
     const auto *Callee = SO.getCalledFunction();
+    if (SO.getID() == Cangjie::CJStatepointID::Default && Callee && Callee->getName().startswith("CJ_MCC_NewArray"))
+      return true;
     return isCangjieSpecificCallee(MI, Callee);
   }
 
