@@ -2251,15 +2251,23 @@ CompilerType CangjieDeclMap::CreateOptionReturnType(Ptr<Cangjie::AST::Ty>& ty, s
       ConstString(typeName).GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
   ast->StartTagDeclarationDefinition(type);
   if (!ty->typeArgs[0]->IsClassLike() && !ty->typeArgs[0]->IsFunc()) {
-    CompilerType basic_type = ast->GetBasicType(lldb::eBasicTypeLongLong).CreateTypedef(
-        "Int64", ast->CreateDeclContext(ast->GetTranslationUnitDecl()), 0);
-    CompilerType enumType = ast->CreateEnumerationType(E2_PREFIX_NAME_OPTION_LIKE + std::string("created"),
-            ast->GetTranslationUnitDecl(), OptionalClangModuleID(), Declaration(), basic_type, false);
+    CompilerType basic_type = ast->GetBasicType(lldb::eBasicTypeChar);
+    CompilerType enumType = ast->CreateEnumerationType(std::string("created"),
+      ast->GetTranslationUnitDecl(), OptionalClangModuleID(), Declaration(), basic_type, false);
     ast->StartTagDeclarationDefinition(enumType);
-    ast->AddEnumerationValueToEnumerationType(enumType, Declaration(), "Some", 0, 4);
-    ast->AddEnumerationValueToEnumerationType(enumType, Declaration(), "None", 1, 4);
+    ast->AddEnumerationValueToEnumerationType(enumType, Declaration(), "Some", 0, 1);
+    ast->AddEnumerationValueToEnumerationType(enumType, Declaration(), "None", 1, 1);
     ast->CompleteTagDeclarationDefinition(enumType);
-    ast->AddFieldToRecordType(type, "constructor", enumType, lldb::eAccessPublic, 0);
+    auto field = ast->AddFieldToRecordType(type, "constructor", enumType, lldb::eAccessPublic, 0);
+    uint64_t size = valType.GetByteSize(nullptr).value_or(0);
+    if (size >= 8) {
+      clang::ASTContext &clang_ast =  ast->getASTContext();
+      llvm::APInt bitfield_bit_size_apint(clang_ast.getTypeSize(clang_ast.IntTy), 64);
+      auto bit_width = new (clang_ast)
+          clang::IntegerLiteral(clang_ast, bitfield_bit_size_apint,
+                                clang_ast.IntTy, clang::SourceLocation());
+      field->setBitWidth(bit_width);
+    }
     ast->AddFieldToRecordType(type, "val", valType, lldb::eAccessPublic, 0);
   } else {
     ast->AddFieldToRecordType(type, "val", valType.GetPointerType(), lldb::eAccessPublic, 0);
