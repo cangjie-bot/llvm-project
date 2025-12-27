@@ -869,7 +869,7 @@ CompilerType ItaniumABILanguageRuntime::CreateEnum2Type(TypeSystemClang& ast,
 }
 
 CompilerType ItaniumABILanguageRuntime::GetDynamicOptionType(
-    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name, CompilerType& enum_type) {
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
     Status error;
     uint64_t val_ti_addr = 0;
     TypeInfo valti;
@@ -885,6 +885,23 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicOptionType(
     if (IsRefType(valti.type)) {
       ast.AddFieldToRecordType(option_type, "val", val_type.GetPointerType(), lldb::eAccessPublic, 0);
     } else {
+      CompilerType basic_type = ast->GetBasicType(lldb::eBasicTypeChar);
+      CompilerType enumType = ast->CreateEnumerationType(std::string("created"),
+              ast->GetTranslationUnitDecl(), OptionalClangModuleID(), Declaration(), basic_type, false);
+      ast->StartTagDeclarationDefinition(enumType);
+      ast->AddEnumerationValueToEnumerationType(enumType, Declaration(), "Some", 0, 1);
+      ast->AddEnumerationValueToEnumerationType(enumType, Declaration(), "None", 1, 1);
+      ast->CompleteTagDeclarationDefinition(enumType);
+      auto field = ast->AddFieldToRecordType(type, "constructor", enumType, lldb::eAccessPublic, 0);
+      uint64_t size = val_type.GetByteSize(nullptr).value_or(0);
+      if (size >= 8) {
+        clang::ASTContext &clang_ast =  ast.getASTContext();
+        llvm::APInt bitfield_bit_size_apint(clang_ast.getTypeSize(clang_ast.IntTy), 64);
+        auto bit_width = new (clang_ast)
+            clang::IntegerLiteral(clang_ast, bitfield_bit_size_apint,
+                                  clang_ast.IntTy, clang::SourceLocation());
+        field->setBitWidth(bit_width);
+      }
       ast.AddFieldToRecordType(option_type, "constructor", enum_type, lldb::eAccessPublic, 0);
       ast.AddFieldToRecordType(option_type, "val", val_type, lldb::eAccessPublic, 0);
     }
@@ -967,7 +984,7 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicEnumType(
     ConstString match("^std[.]core::(Enum\\$)?Option<.+>( \\*)?$");
     RegularExpression regex(match.GetStringRef());
     if (regex.Execute(type_name.AsCString())) {
-      return GetDynamicOptionType(ast, typeInfo, type_name, enum_type);
+      return GetDynamicOptionType(ast, typeInfo, type_name);
     }
 
     if (enum_kind == ReflectModifyType::RMT_ENUM_KIND2) {
