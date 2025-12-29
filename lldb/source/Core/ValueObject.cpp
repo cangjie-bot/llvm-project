@@ -3214,12 +3214,7 @@ bool ValueObject::GetCangjieDynamicType(
   if (IsCangjieGenericType()) {
     return true;
   }
-  auto size = GetCompilerType().GetByteSize(nullptr);
-  // do not find dynamicType if compilerType's size less than 8 byte.
-  // for interfaces, dynamic type lookup is mandatory, regardless of size.
-  if (!size || *size < 8) {
-    return false;
-  }
+
   Log *log = GetLog(LLDBLog::Expressions);
   ConstString match("^std[.]core::(Enum\\$)?Option<.+>( \\*)?$|(.+)?E2\\$");
   RegularExpression regex(match.GetStringRef());
