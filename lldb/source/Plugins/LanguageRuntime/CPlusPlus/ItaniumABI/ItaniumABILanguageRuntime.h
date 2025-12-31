@@ -133,6 +133,8 @@ public:
   CompilerType GetDynamicClassType(TypeSystemClang& ast,
                             TypeInfo& typeInfo,
                             ConstString& type_name);
+  CompilerType GetDynamicInterfaceType(TypeSystemClang& ast,
+                            ConstString& type_name);
   CompilerType GetDynamicRawArrayType(TypeSystemClang& ast,
                             TypeInfo& typeInfo,
                             ConstString& type_name);
