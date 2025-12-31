@@ -761,7 +761,7 @@ void StackMaps::updateOrInsertFnInfo(const MCSymbol *FnSym,
         continue;
       }
       unsigned RegNo = getDwarfRegNum(CS.getReg(), RegInfo);
-      if (isARM() && (RegNo == 11 /*SP*/ || RegNo == 14 /*LR*/))
+      if (isARM() && (RegNo == 11 /*R11*/ || RegNo == 14 /*LR*/))
         continue;
       Register Reg;
       CSReg2Stack[RegNo] =
@@ -1034,6 +1034,8 @@ void StackMaps::recordStatepoint(const MCSymbol &L, const MachineInstr &MI,
 
 void StackMaps::recordCJStackMap(const MachineInstr &MI,
                                  bool RecordAllRefInReg) {
+  const Triple TT(AP.MMI->getModule()->getTargetTriple());
+  OffsetStepSize = TT.isARM() ? 4 : 8;
   MCSymbol *MILabel = AP.OutStreamer->getContext().createTempSymbol();
   AP.OutStreamer->emitLabel(MILabel);
   recordStatepoint(*MILabel, MI, RecordAllRefInReg);

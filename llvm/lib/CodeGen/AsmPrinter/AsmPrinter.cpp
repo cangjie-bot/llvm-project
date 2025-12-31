@@ -1488,7 +1488,9 @@ static bool needFuncLabelsForEHOrDebugInfo(const MachineFunction &MF) {
 /// EmitFunctionBody - This method emits the body and trailer for a
 /// function.
 void AsmPrinter::emitFunctionBody() {
+  int NumInstsInFunction = 0;
   emitFunctionHeader();
+  NumInstsInFunction++;
 
   // Emit target-specific gunk before the function body.
   emitFunctionBodyStart();
@@ -1513,7 +1515,7 @@ void AsmPrinter::emitFunctionBody() {
 
   // Print out code for the function.
   bool HasAnyRealCode = false;
-  int NumInstsInFunction = 0;
+
   bool CangjieSrc = MF->getFunction().hasCangjieGC();
   if (CangjieSrc) {
     MF->setEpilogueLabel(nullptr);
@@ -1665,7 +1667,6 @@ void AsmPrinter::emitFunctionBody() {
       }
     }
     emitBasicBlockEnd(MBB);
-    emitCangjieCustomInst();
 
     if (CanDoExtraAnalysis) {
       // Skip empty blocks.

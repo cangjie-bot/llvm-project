@@ -880,7 +880,8 @@ static bool runImpl(Function &F, function_ref<AnalysisResults()> GetAnalysis) {
   if (AR.DT)
     Changed |= ICmpOptimization(F, *AR.DT).eliminateICmp();
   Changed |= ArraySizeConstantFold(F).optArraySizeConst();
-  Changed |= MutexLockLower(&F).optCJMutexLock();
+  if (!Triple(F.getParent()->getTargetTriple()).isARM())
+    Changed |= MutexLockLower(&F).optCJMutexLock();
 
   return Changed;
 }
