@@ -421,6 +421,14 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicClassType(
     return dynamic_type;
 }
 
+CompilerType ItaniumABILanguageRuntime::GetDynamicInterfaceType(
+    TypeSystemClang& ast, ConstString& type_name) {
+    std::string interface_name = std::string("Interface$") + std::string(type_name.AsCString());
+    auto dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                                             interface_name.c_str(), clang::TTK_Class, lldb::eLanguageTypeC);
+    return dynamic_type.CreateTypedef(type_name.GetCString(), ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+}
+
 CompilerType ItaniumABILanguageRuntime::GetDynamicRawArrayType(
     TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
     CompilerType dynamic_type = ast.GetTypeForIdentifier<clang::CXXRecordDecl>(type_name);
@@ -1115,8 +1123,10 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicTypeFromGenericTypeInfo(
     CompilerType dynamic_type;
     switch (typekind) {
       case UGTypeKind::UG_CLASS:
-      case UGTypeKind::UG_INTERFACE:
         dynamic_type = GetDynamicClassType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_INTERFACE:
+        dynamic_type = GetDynamicInterfaceType(ast, type_name);
         break;
       case UGTypeKind::UG_RAWARRAY:
         dynamic_type = GetDynamicRawArrayType(ast, typeInfo, type_name);
