@@ -1714,19 +1714,6 @@ void AsmPrinter::emitFunctionBody() {
       }
     }
     StackCheckMap.clear();
-
-    // emit safepoint
-    for (unsigned SafeIndex = 0; SafeIndex < SafepointStackMap.size();
-         SafeIndex++) {
-      for (const HandlerInfo &HI : Handlers) {
-        HI.Handler->beginInstruction(std::get<0>(SafepointStackMap[SafeIndex]));
-      }
-      NumInstsInFunction += emitSafePointDirectCall(SafeIndex);
-      for (const HandlerInfo &HI : Handlers) {
-        HI.Handler->endInstruction();
-      }
-    }
-    SafepointStackMap.clear();
   }
 
   EmittedInsts += NumInstsInFunction;
@@ -1775,7 +1762,7 @@ void AsmPrinter::emitFunctionBody() {
   // Emit target-specific gunk after the function body.
   emitFunctionBodyEnd();
 
-  if (needFuncLabelsForEHOrDebugInfo(*MF) ||
+  if (MF->getFunction().hasCangjieGC() || needFuncLabelsForEHOrDebugInfo(*MF) ||
       MAI->hasDotTypeDotSizeDirective()) {
     // Create a symbol for the end of function.
     CurrentFnEnd = createTempSymbol("func_end");
@@ -4144,6 +4131,10 @@ bool AsmPrinter::tryEmitCangjieSpecificCallByMOSym(const MachineInstr *MI,
   StringRef FuncName = Callee->getName();
   if (FuncName.isGetGCPhase()) {
     emitGcStateCheck();
+    return true;
+  }
+  if (Callee->isCangjieSafePoint()) {
+    emitCJSafepointStub();
     return true;
   }
   // Using for debug information only, no emit instructions.

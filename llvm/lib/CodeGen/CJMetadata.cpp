@@ -482,8 +482,8 @@ void CJMetadataInfo::emitEHTableOffset(unsigned FuncNumber) {
       OS.emitValue(EHTableOffset, 4);
     }
   } else {
-    // 4: ehtable offset size, 4 bytes
-    OS.emitIntValue(0, 4);
+    // MachO is 8 bytes, others are 4 bytes
+    IsMachO ? OS.emitIntValue(0, 8) : OS.emitIntValue(0, 4);
   }
 }
 
