@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CangjieDeclMap.h"
+#include "CangjieIRForTarget.h"
 #include "cangjie/AST/Create.h"
 #include "cangjie/AST/Utils.h"
 #include "lldb/Core/Module.h"
@@ -2250,7 +2251,7 @@ CompilerType CangjieDeclMap::CreateOptionReturnType(Ptr<Cangjie::AST::Ty>& ty, s
   CompilerType type = ast->CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
       ConstString(typeName).GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
   ast->StartTagDeclarationDefinition(type);
-  if (!ty->typeArgs[0]->IsClassLike() && !ty->typeArgs[0]->IsFunc() && !ty->typeArgs[0]->IsEnum()) {
+  if (!CangjieIRForTarget::IsReferenceType(valType)) {
     CompilerType basic_type = ast->GetBasicType(lldb::eBasicTypeInt);
     CompilerType enumType = ast->CreateEnumerationType(std::string("created"),
       ast->GetTranslationUnitDecl(), OptionalClangModuleID(), Declaration(), basic_type, false);
