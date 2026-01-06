@@ -106,7 +106,7 @@ public:
     Ptr<AST::Ty> GetMemberDeclTyByName(Ptr<AST::Ty>& ty, std::string& memberName, std::string& parentTypeName);
     size_t GetSubGenericTyIndex(const Ptr<Cangjie::AST::Decl>& decl, std::string memberName);
 
-    lldb_private::CompilerType dynamic_ype;
+    lldb_private::CompilerType dynamic_type;
     struct ParsedFunction {
         ParsedFunction(std::string fscope, std::string fName, std::string func_type, lldb_private::CompilerType type)
             : ScopeName(fscope), FuncName(fName), FuncTypeStr(func_type), funcType(type){};

@@ -493,8 +493,8 @@ lldb_private::CompilerType CangjieIRForTarget::GetCompilerTypeByName(std::string
       return child_type;
     }
   }
-  if (m_decl_map->IsInterfaceType(type) && m_decl_map->dynamic_ype.IsValid()) {
-    type = m_decl_map->dynamic_ype;
+  if (m_decl_map->IsInterfaceType(type) && m_decl_map->dynamic_type.IsValid()) {
+    type = m_decl_map->dynamic_type;
   }
   if (type.IsValid()) {
     if (log) {
