@@ -16,6 +16,9 @@
 #ifndef LLVM_ANALYSIS_CJFUNCTIONVARLIFETIME_H
 #define LLVM_ANALYSIS_CJFUNCTIONVARLIFETIME_H
 
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 
@@ -50,7 +53,8 @@ public:
 private:
   void linerByRPOT(Function &F, FunctionVarLifeTimeResult &LifeTimeResult);
   void analysisLiveInterval(Function &F,
-                            FunctionVarLifeTimeResult &LifeTimeResult);
+                            FunctionVarLifeTimeResult &LifeTimeResult,
+                            BatchAAResults &AA);
 };
 
 } // namespace llvm
