@@ -95,23 +95,30 @@ bool CJObjectReuseOpt::runImpl(Function &F,
                                FunctionVarLifeTimeResult &LifeTimeResult,
                                AliasAnalysis &AA, DominatorTree &DT,
                                LoopInfo &LI) {
+  // if (F.getName().str() != "_CN7default23func_1664128536854_2610HF0uT1_dtEE")
+  // {
+  //   return false;
+  // }
   clearMap();
   CandidateReuseMap BitSizeToNoEscapeVals;
   SmallPtrSet<const Value *, 32> EphValues;
   EarliestEscapeInfo EI(DT, LI, EphValues);
   BatchAAResults BatchAA(AA, &EI);
-
+#ifndef NDEBUG
+  LLVM_DEBUG(dbgs() << "CJObjectReuseOpt start in : " << F.getName().str()
+                    << "\n");
+#endif
   collectNoEscapeValue(F, BitSizeToNoEscapeVals);
   adjustForReuseByLiveInterval(F, BitSizeToNoEscapeVals, LifeTimeResult,
                                BatchAA);
   bool Changed = transformForMemReuse(DT, LifeTimeResult);
 #ifndef NDEBUG
   if (Changed) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "CJObjectReuseOpt changed in : " << F.getName().str()
-                   << "\n";
-    });
+    LLVM_DEBUG(dbgs() << "CJObjectReuseOpt changed in : " << F.getName().str()
+                      << "\n");
   }
+  LLVM_DEBUG(dbgs() << "CJObjectReuseOpt end in : " << F.getName().str()
+                    << "\n");
 #endif
   return Changed;
 }
@@ -172,6 +179,17 @@ inline static bool isCJMallocObj(Value *V) {
   return false;
 }
 
+inline static bool isAddrHasPadding(Value *Addr) {
+  auto *ST =
+      dyn_cast<StructType>(Addr->getType()->getNonOpaquePointerElementType());
+  if (!ST) {
+    return true;
+  }
+  auto &DL = dyn_cast<Instruction>(Addr)->getModule()->getDataLayout();
+  auto *SL = DL.getStructLayout(ST);
+  return SL->hasPadding();
+}
+
 static bool isDefChainConsistOfCastOrPHI(Value *V) {
   if (auto *Instr = dyn_cast<Instruction>(V)) {
     // Only process the source is the cj.malloc.object or alloc now
@@ -213,7 +231,6 @@ void CJObjectReuseOpt::collectNoEscapeValue(
             !GV->hasAttribute("NotModifiableClass")) {
           continue;
         }
-        auto &DL = F.getParent()->getDataLayout();
         auto *ClassInfo = GV->getInitializer();
         if (ClassInfo->getNumOperands() < ClassInfoFieldType::CIT_SIZE) {
           continue;
@@ -230,9 +247,8 @@ void CJObjectReuseOpt::collectNoEscapeValue(
         if (!isHeapZoneValue(Addr) || !PointerMayBeCaptured(Addr, true, true)) {
           BitSizeToNoEscapeVals[BitSize].push_back(CB);
 #ifndef NDEBUG
-          LLVM_DEBUG({
-            llvm::dbgs() << "CJObjectReuseOpt no escape CB: " << *CB << "\n";
-          });
+          LLVM_DEBUG(dbgs() << "BitSize: " << std::to_string(BitSize)
+                            << ", no escape CB:" << *CB << "\n");
 #endif
         }
       }
@@ -286,7 +302,9 @@ void CJObjectReuseOpt::adjustForReuseByLiveInterval(
               SkipCB.insert(CJVar);
               break;
             }
-            if (AliasRes == AliasResult::MustAlias) {
+            if (AliasRes == AliasResult::MustAlias &&
+                LifeTimeResult.SSAVarToLiveInterval[&Instr].second >=
+                    LifeTimeResult.InstrsToIndex[CJVar]) {
               this->CJVarToMemEquivalenceVars[CJVar].insert(&Instr);
               CJVarLiveInterval =
                   FunctionVarLifeTimeResult::combineLifeInterval(
@@ -302,11 +320,11 @@ void CJObjectReuseOpt::adjustForReuseByLiveInterval(
         CJVarToLiveInterval[CJVar] = CJVarLiveInterval;
 #ifndef NDEBUG
         LLVM_DEBUG({
-          llvm::dbgs() << *CJVar << "\n";
-          llvm::dbgs() << "CJVarLiveInterval = {"
-                       << std::to_string(CJVarLiveInterval.first) << ", "
-                       << std::to_string(CJVarLiveInterval.second) << "}"
-                       << "\n";
+          dbgs() << "CJ Var: " << *CJVar << "\n";
+          dbgs() << "CJVarLiveInterval = {"
+                 << std::to_string(CJVarLiveInterval.first) << ", "
+                 << std::to_string(CJVarLiveInterval.second) << "}"
+                 << "\n";
         });
 #endif
       }
@@ -353,6 +371,15 @@ void CJObjectReuseOpt::adjustForReuseByLiveInterval(
             if (ReuseGroup.size() > 1) {
               OutputMap.insert({BitSize, ReuseGroup});
             }
+#ifndef NDEBUG
+            LLVM_DEBUG({
+              dbgs() << "SameColorGroup BitSize: " << std::to_string(BitSize)
+                     << "\n";
+              for (auto *CB : ReuseGroup) {
+                dbgs() << *CB << "\n";
+              }
+            });
+#endif
           }
         }
       };
@@ -372,107 +399,126 @@ bool CJObjectReuseOpt::transformForMemReuse(
         Value *FinalReplacer = Replacer;
         if (Replacer->getType() != Replacee->getType()) {
           IRBuilder<> IRB(CJVar);
-          FinalReplacer = IRB.CreateBitCast(getUnderlyingObject(Replacer),
-                                            Replacee->getType());
+          bool SameAddrSpace = getUnderlyingObject(Replacer)
+                                   ->getType()
+                                   ->getPointerAddressSpace() ==
+                               Replacee->getType()->getPointerAddressSpace();
+          if (!SameAddrSpace) {
+            FinalReplacer =
+                IRB.CreateBitCast(getUnderlyingObject(Replacer),
+                                  getUnderlyingObject(Replacee)->getType());
+            FinalReplacer =
+                IRB.CreateAddrSpaceCast(FinalReplacer, Replacee->getType());
+          } else {
+            FinalReplacer = IRB.CreateBitCast(getUnderlyingObject(Replacer),
+                                              Replacee->getType());
+          }
         }
         Replacee->replaceUsesWithIf(
             FinalReplacer,
-            [&LifeTimeResult, &CJVarLifeTimeMap, &CJVar](Use &U) -> bool {
+            [&LifeTimeResult, &CJVarLifeTimeMap, &CJVar
+#ifndef NDEBUG
+             ,
+             &FinalReplacer
+#endif
+        ](Use &U) -> bool {
               auto *Instr = dyn_cast<Instruction>(U.getUser());
               bool DoReplace = LifeTimeResult.InstrsToIndex[Instr] >=
                                    CJVarLifeTimeMap[CJVar].first &&
                                LifeTimeResult.InstrsToIndex[Instr] <=
                                    CJVarLifeTimeMap[CJVar].second;
+#ifndef NDEBUG
+              if (DoReplace) {
+                LLVM_DEBUG({
+                  dbgs() << "FinalReplacer : "
+                         << *dyn_cast<Instruction>(FinalReplacer) << "\n";
+                  dbgs() << "BeReplaced : " << *Instr << "\n";
+                  dbgs() << "=================================" << "\n";
+                });
+              }
+#endif
               return DoReplace;
             });
       };
 
-  auto MemEquivalenceVarsTypeMatch = [this](CallBase *ReplaceeCB,
-                                            CallBase *ReplacerCB) -> bool {
-    auto &ReplacerMemEquivalence = this->CJVarToMemEquivalenceVars[ReplacerCB];
-    auto &BeReplacedMemEquivalence =
-        this->CJVarToMemEquivalenceVars[ReplaceeCB];
-    std::set<Type *> ReplacerTypeSet;
-    for (auto *E : ReplacerMemEquivalence) {
-      ReplacerTypeSet.insert(E->getType());
-    }
-    for (auto *V : BeReplacedMemEquivalence) {
-      if (ReplacerTypeSet.count(V->getType()) == 0 &&
-          !CastInst::castIsValid(
-              Instruction::CastOps::BitCast,
-              getUnderlyingObject(ReplacerCB->getArgOperand(0)),
-              V->getType())) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  auto ReplaceValueForReuse = [this, &Changed, &DT, &LifeTimeResult,
-                               &MemEquivalenceVarsTypeMatch,
-                               &ReplaceUseBetweenCJValLifeTime](
-                                  ReuseMultiMap &InputMap,
-                                  CJVarToLiveIntervalMap &CJVarLifeTimeMap) {
-    for (auto &[BitSize, VarArr] : InputMap) {
-      std::sort(VarArr.begin(), VarArr.end(),
-                [&LifeTimeResult](CallBase *LHS, CallBase *RHS) {
-                  return LifeTimeResult.InstrsToIndex[LHS] <
-                         LifeTimeResult.InstrsToIndex[RHS];
-                });
-      std::set<size_t> HaveBeenReplacedIndex;
-      for (size_t ReplacerIndex = 0; ReplacerIndex < VarArr.size() - 1;
-           ++ReplacerIndex) {
-        if (HaveBeenReplacedIndex.count(ReplacerIndex)) {
-          continue;
-        }
-        for (size_t BeReplacedIndex = ReplacerIndex + 1;
-             BeReplacedIndex < VarArr.size(); ++BeReplacedIndex) {
-          auto *ReplacerCB = VarArr[ReplacerIndex];
-          auto *BeReplacedCB = VarArr[BeReplacedIndex];
-          if (HaveBeenReplacedIndex.count(ReplacerIndex)) {
-            continue;
-          }
-          if (!DT.dominates(ReplacerCB->getParent(),
-                            BeReplacedCB->getParent())) {
-            continue;
-          }
-          Value *ReuseAddr = ReplacerCB->getArgOperand(0);
-          Value *BeReplacedAddr = BeReplacedCB->getArgOperand(0);
-          if (ReuseAddr->getType()->getPointerAddressSpace() !=
-              BeReplacedAddr->getType()->getPointerAddressSpace()) {
-            continue;
-          }
-          if (!MemEquivalenceVarsTypeMatch(BeReplacedCB, ReplacerCB)) {
-            continue;
-          }
-          ReplaceUseBetweenCJValLifeTime(BeReplacedAddr, ReuseAddr,
-                                         BeReplacedCB, CJVarLifeTimeMap);
-#ifndef NDEBUG
-          LLVM_DEBUG({
-            llvm::dbgs() << "ReplacerCB : " << *ReplacerCB << "\n";
-            llvm::dbgs() << "BeReplacedCB : " << *BeReplacedCB << "\n";
-            llvm::dbgs() << "=================================" << "\n";
-          });
-#endif
-          auto &BeReplacedMemEquivalence =
-              this->CJVarToMemEquivalenceVars[BeReplacedCB];
-          for (auto *V : BeReplacedMemEquivalence) {
-            if (V == BeReplacedAddr) {
+  auto ReplaceValueForReuse =
+      [this, &Changed, &DT, &LifeTimeResult, &ReplaceUseBetweenCJValLifeTime](
+          ReuseMultiMap &InputMap, CJVarToLiveIntervalMap &CJVarLifeTimeMap) {
+        for (auto &[BitSize, VarArr] : InputMap) {
+          std::sort(VarArr.begin(), VarArr.end(),
+                    [&LifeTimeResult](CallBase *LHS, CallBase *RHS) {
+                      return LifeTimeResult.InstrsToIndex[LHS] <
+                             LifeTimeResult.InstrsToIndex[RHS];
+                    });
+          std::set<size_t> HaveBeenReplacedIndex;
+          for (size_t ReplacerIndex = 0; ReplacerIndex < VarArr.size() - 1;
+               ++ReplacerIndex) {
+            if (HaveBeenReplacedIndex.count(ReplacerIndex)) {
               continue;
             }
-
-            IRBuilder<> IRB(BeReplacedCB);
-            Value *BitCastAdded =
-                IRB.CreateBitCast(getUnderlyingObject(ReuseAddr), V->getType());
-            ReplaceUseBetweenCJValLifeTime(V, BitCastAdded, BeReplacedCB,
-                                           CJVarLifeTimeMap);
+            auto *ReplacerCB = VarArr[ReplacerIndex];
+            std::unordered_map<Type *, Value *> ReplacerTypeToValue;
+            auto &ReplacerMemEquivalence =
+                this->CJVarToMemEquivalenceVars[ReplacerCB];
+            for (auto *E : ReplacerMemEquivalence) {
+              if (ReplacerTypeToValue.count(E->getType())) {
+                continue;
+              }
+              ReplacerTypeToValue[E->getType()] = E;
+            }
+            for (size_t BeReplacedIndex = ReplacerIndex + 1;
+                 BeReplacedIndex < VarArr.size(); ++BeReplacedIndex) {
+              auto *BeReplacedCB = VarArr[BeReplacedIndex];
+              if (HaveBeenReplacedIndex.count(ReplacerIndex)) {
+                continue;
+              }
+              Value *ReuseAddr = ReplacerCB->getArgOperand(0);
+              Value *BeReplacedAddr = BeReplacedCB->getArgOperand(0);
+              // when addr type isn't the same and one of them has padding,
+              // the replacement is not allowed for SROA pass may generates
+              // undef behavior instruction caused by using padding data.
+              if (ReuseAddr->getType() != BeReplacedAddr->getType() &&
+                  (isAddrHasPadding(ReuseAddr) ||
+                   isAddrHasPadding(BeReplacedAddr))) {
+                continue;
+              }
+              if (ReuseAddr->getType()->getPointerAddressSpace() !=
+                  BeReplacedAddr->getType()->getPointerAddressSpace()) {
+                continue;
+              }
+              if (!DT.dominates(ReplacerCB->getParent(),
+                                BeReplacedCB->getParent())) {
+                continue;
+              }
+#ifndef NDEBUG
+              LLVM_DEBUG({
+                dbgs() << "ReplacerCB : " << *ReplacerCB << "\n";
+                dbgs() << "BeReplacedCB : " << *BeReplacedCB << "\n";
+                dbgs() << "=================================" << "\n";
+              });
+#endif
+              ReplaceUseBetweenCJValLifeTime(BeReplacedAddr, ReuseAddr,
+                                             BeReplacedCB, CJVarLifeTimeMap);
+              auto &BeReplacedMemEquivalence =
+                  this->CJVarToMemEquivalenceVars[BeReplacedCB];
+              for (auto *V : BeReplacedMemEquivalence) {
+                if (V == BeReplacedAddr) {
+                  continue;
+                }
+                Value *ReplacerMemEquivalenceAddr = ReuseAddr;
+                if (ReplacerTypeToValue.count(V->getType())) {
+                  ReplacerMemEquivalenceAddr =
+                      ReplacerTypeToValue[V->getType()];
+                }
+                ReplaceUseBetweenCJValLifeTime(V, ReplacerMemEquivalenceAddr,
+                                               BeReplacedCB, CJVarLifeTimeMap);
+              }
+              HaveBeenReplacedIndex.insert(BeReplacedIndex);
+              Changed = true;
+            }
           }
-          HaveBeenReplacedIndex.insert(BeReplacedIndex);
-          Changed = true;
         }
-      }
-    }
-  };
+      };
 
   ReplaceValueForReuse(ReuseHeapVarMap, HeapCJVarToLiveInterval);
   ReplaceValueForReuse(ReuseStackVarMap, StackCJVarToLiveInterval);
