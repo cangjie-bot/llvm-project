@@ -13,6 +13,7 @@
 #include "lldb/Symbol/CompileUnit.h"
 #include "cangjie/Mangle/BaseMangler.h"
 #include "cangjie/Sema/TypeManager.h"
+#include <utility>
 
 using namespace Cangjie;
 using namespace Cangjie::AST;
@@ -35,18 +36,29 @@ inline const std::string GENERIC_TYPE_PREFIX_NAME = "$G_";
 inline const std::string CJDB_ADD_GENERIC_MEMBER_FUNC_NAME = "$GetGenericDef";
 inline const std::string LOCAL_FUNC_CAPTUREDVAR = "$CapturedVars";
 inline const std::string PACKAGE_SUFFIX = "::";
+
+struct AstTypeInfo {
+  std::string name;
+  CompilerType type;
+
+  AstTypeInfo() = default;
+  AstTypeInfo(std::string n, CompilerType t = CompilerType())
+      : name(std::move(n)), type(t) {}
+};
+
 class CangjieASTBuiler {
 public:
     OwnedPtr<AST::Type> CreateRefType(std::string name, Ptr<AST::Decl> target, std::string pkg,
                                       bool isGenericDeclFromTarget = true);
-    OwnedPtr<AST::Type> CreateFuncType(std::string name, Ptr<AST::Decl> target, std::string pkg);
+    OwnedPtr<AST::Type> CreateFuncType(Ptr<AST::Decl> target, std::string pkg,
+                                       const CompilerType &type);
     OwnedPtr<AST::Type> CreateTupleType(std::string name, Ptr<AST::Decl> target);
     std::vector<std::string> GetInstantiatedParamDeclName(const std::string& name);
     std::vector<std::string> SplitTupleName(std::string name);
     std::vector<std::string> SplitTypeName(std::string name);
     std::vector<std::string> SplitCollectionName(std::string name);
     OwnedPtr<AST::Type> CreateVArrayType(std::string name, Ptr<AST::Decl> target);
-    OwnedPtr<AST::Type> CreateAstType(std::string name, Ptr<AST::Decl> target, std::string pkg = "",
+    OwnedPtr<AST::Type> CreateAstType(AstTypeInfo info, Ptr<AST::Decl> target, std::string pkg = "",
                                       bool isGenericDeclFromTarget = true);
     static bool IsFunctionType(ConstString type_name);
     OwnedPtr<AST::VarDecl> CreateVarDecl(const CompilerType type, std::string name,
