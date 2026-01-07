@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CangjieDeclMap.h"
+#include "CangjieIRForTarget.h"
 #include "cangjie/AST/Create.h"
 #include "cangjie/AST/Utils.h"
 #include "lldb/Core/Module.h"
@@ -110,7 +111,9 @@ CompilerType CangjieDeclMap::GetVariableType(lldb::VariableSP var) {
       auto frame = m_exe_ctx.GetFramePtr();
       if (frame != nullptr) {
         auto valobj = frame->GetValueObjectForFrameVariable(var, lldb::DynamicValueType::eNoDynamicValues);
-        dynamic_ype = valobj->GetDynamicType();
+        dynamic_type = valobj->GetDynamicType();
+        m_parsed_types.insert({dynamic_type.GetTypeName().AsCString(), dynamic_type});
+        return dynamic_type;
       }
     }
     if (ConstString(type_name).GetStringRef().contains(GENERIC_TYPE_PREFIX_NAME)) {
@@ -2250,7 +2253,7 @@ CompilerType CangjieDeclMap::CreateOptionReturnType(Ptr<Cangjie::AST::Ty>& ty, s
   CompilerType type = ast->CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
       ConstString(typeName).GetCString(), clang::TTK_Struct, lldb::eLanguageTypeC);
   ast->StartTagDeclarationDefinition(type);
-  if (!ty->typeArgs[0]->IsClassLike() && !ty->typeArgs[0]->IsFunc() && !ty->typeArgs[0]->IsEnum()) {
+  if (!CangjieIRForTarget::IsReferenceType(valType)) {
     CompilerType basic_type = ast->GetBasicType(lldb::eBasicTypeInt);
     CompilerType enumType = ast->CreateEnumerationType(std::string("created"),
       ast->GetTranslationUnitDecl(), OptionalClangModuleID(), Declaration(), basic_type, false);
