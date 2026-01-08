@@ -26,7 +26,6 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include "llvm/Transforms/Utils/CtorUtils.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
 
@@ -45,6 +44,11 @@ static cl::opt<bool>
 static cl::opt<bool>
     ClEnableCJVFE("enable-cangjie-vfe", cl::Hidden, cl::init(true),
                 cl::desc("Enable cangjie virtual function elimination"));
+
+static cl::opt<bool>
+    ClEnableCJTIE("enable-cangjie-typeinfo-elimination", cl::Hidden,
+                  cl::init(true),
+                  cl::desc("Enable cangjie typeinfo elimination"));
 
 STATISTIC(NumAliases  , "Number of global aliases removed");
 STATISTIC(NumFunctions, "Number of functions removed");
@@ -148,6 +152,10 @@ void GlobalDCEPass::UpdateGVDependencies(GlobalValue &GV) {
                         << GV.getName() << "\n");
       continue;
     }
+    if (CJPipeline &&
+        CangjieDCE::maybeFakeLiveOfTypeMeta(dyn_cast<GlobalVariable>(GVU),
+                                            dyn_cast<GlobalVariable>(&GV)))
+      continue;
     GVDependencies[GVU].insert(&GV);
   }
 }
@@ -300,6 +308,7 @@ void GlobalDCEPass::AddVirtualFunctionDependencies(Module &M) {
 
 PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
   bool Changed = false;
+  CangjieDCE CJDCE(*this);
 
   // The algorithm first computes the set L of global variables that are
   // trivially live.  Then it walks the initialization of these variables to
@@ -328,10 +337,10 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
   // might call, if we have that information.
   AddVirtualFunctionDependencies(M);
 
-  if (CJPipeline && ClEnableCJVFE) {
-    CangjieVFE CVFE(*this);
-    CVFE.addCangjieVirtualFunctionDependencies(M);
-  }
+  if (CJPipeline && ClEnableCJVFE)
+    CJDCE.addCangjieVirtualFunctionDependencies(M);
+  if (CJPipeline && ClEnableCJTIE)
+    CJDCE.initTIE(M);
 
   // Loop over the module, adding globals which are obviously necessary.
   for (GlobalObject &GO : M.global_objects()) {
@@ -375,6 +384,9 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
     for (auto *GVD : GVDependencies[LGV])
       MarkLive(*GVD, &NewLiveGVs);
   }
+
+  if (CJPipeline && ClEnableCJTIE)
+    CJDCE.updateLiveExtensions();
 
   // Now that all globals which are needed are in the AliveGlobals set, we loop
   // through the program, deleting those which are not alive.
@@ -459,8 +471,12 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
   }
 
   NumVariables += DeadGlobalVars.size();
-  for (GlobalVariable *GV : DeadGlobalVars)
+  for (GlobalVariable *GV : DeadGlobalVars) {
+    if (CangjieDCE::isCangjieType(GV) ||
+        CangjieDCE::isMetaAssociatedWithType(GV))
+      GV->replaceNonMetadataUsesWith(ConstantPointerNull::get(GV->getType()));
     EraseUnusedGlobalValue(GV);
+  }
 
   NumAliases += DeadAliases.size();
   for (GlobalAlias *GA : DeadAliases)
@@ -469,6 +485,11 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
   NumIFuncs += DeadIFuncs.size();
   for (GlobalIFunc *GIF : DeadIFuncs)
     EraseUnusedGlobalValue(GIF);
+
+  if (CJPipeline && ClEnableCJTIE) {
+    CJDCE.rewriteExtensions(M);
+    CJDCE.rewriteLLVMUsed(M);
+  }
 
   // Make sure that all memory is released
   AliveGlobals.clear();
@@ -483,8 +504,8 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
   return PreservedAnalyses::all();
 }
 
-CangjieVFE::GenericFuncInfo *
-CangjieVFE::insertInstance(const SmallVectorImpl<GlobalVariable *> &Path,
+CangjieDCE::GenericFuncInfo *
+CangjieDCE::insertInstance(const SmallVectorImpl<GlobalVariable *> &Path,
                            GlobalVariable *FT = nullptr) {
   GenericFuncInfo *CurRoot = this->Root;
   for (GlobalVariable *GV : Path) {
@@ -504,8 +525,8 @@ CangjieVFE::insertInstance(const SmallVectorImpl<GlobalVariable *> &Path,
   return CurRoot;
 }
 
-CangjieVFE::GenericFuncInfo *
-CangjieVFE::findTargetInstance(const SmallVectorImpl<GlobalVariable *> &Path) {
+CangjieDCE::GenericFuncInfo *
+CangjieDCE::findTargetInstance(const SmallVectorImpl<GlobalVariable *> &Path) {
   GenericFuncInfo *Root = this->Root;
   for (GlobalVariable *GV : Path) {
     auto It = Root->Next.find(GV);
@@ -516,7 +537,7 @@ CangjieVFE::findTargetInstance(const SmallVectorImpl<GlobalVariable *> &Path) {
   return Root->IsValid ? Root : nullptr;
 }
 
-CangjieVFE::GenericFuncInfo *CangjieVFE::resolveVFEMeta(Metadata *MD,
+CangjieDCE::GenericFuncInfo *CangjieDCE::resolveVFEMeta(Metadata *MD,
                                                         Module &M) {
   SmallVector<GlobalVariable *, 4> Path;
   MDNode *N;
@@ -543,7 +564,7 @@ CangjieVFE::GenericFuncInfo *CangjieVFE::resolveVFEMeta(Metadata *MD,
 
 // Obtain the function table FT that achieves P from C, return {C, P, FT}.
 std::tuple<GlobalVariable *, GlobalVariable *, GlobalVariable *>
-CangjieVFE::scanVTable(GlobalVariable &GV) {
+CangjieDCE::scanVTable(GlobalVariable &GV) {
   assert(GV.hasInitializer());
   assert(GV.getType()->getNonOpaquePointerElementType()->getStructName() ==
          "ExtensionDef");
@@ -573,7 +594,7 @@ CangjieVFE::scanVTable(GlobalVariable &GV) {
     // O is typeinfo
     auto *TT = cast<GlobalVariable>(O)
                    ->getInitializer()
-                   ->getOperand(CalssInfoFieldType::CIT_GENERIC_FROM)
+                   ->getOperand(ClassInfoFieldType::CIT_GENERIC_FROM)
                    ->stripPointerCasts();
     O = isa<ConstantPointerNull>(TT) ? O : TT;
   }
@@ -583,7 +604,7 @@ CangjieVFE::scanVTable(GlobalVariable &GV) {
   return {TI, IF, FT};
 }
 
-void CangjieVFE::updateDependencies(
+void CangjieDCE::updateDependencies(
     Function *Caller,
     DenseMap<GenericFuncInfo *, SmallSet<uint64_t, 4>> &Relation) {
   auto Mark = [Caller, this](SmallPtrSetImpl<GlobalVariable *> &FTs,
@@ -621,7 +642,7 @@ void CangjieVFE::updateDependencies(
   }
 }
 
-void CangjieVFE::addCangjieVirtualFunctionDependencies(Module &M) {
+void CangjieDCE::addCangjieVirtualFunctionDependencies(Module &M) {
   // For cangjie, it has the following rules:
   //  - If A implements I, then apart from extend, the visibility of I must be
   //  greater than or equal to that of A.
@@ -633,7 +654,7 @@ void CangjieVFE::addCangjieVirtualFunctionDependencies(Module &M) {
   // can be performed.
   for (auto &GV : M.globals()) {
     // If typeArgs >= 2, skip it.
-    if (!GV.hasAttribute("CFileMTable") || !GV.hasMetadata("inheritedType"))
+    if (!GV.isCJMTable() || !GV.hasMetadata("inheritedType"))
       continue;
     if (!GV.hasInitializer())
       report_fatal_error("ExtensionDef must be initialized.");
@@ -674,7 +695,7 @@ void CangjieVFE::addCangjieVirtualFunctionDependencies(Module &M) {
   }
 }
 
-CangjieVFE::~CangjieVFE() {
+CangjieDCE::~CangjieDCE() {
   SmallVector<GenericFuncInfo *> Worklist = {Root};
   SmallVector<GenericFuncInfo *> Stack;
   while (!Worklist.empty()) {
@@ -685,4 +706,173 @@ CangjieVFE::~CangjieVFE() {
   }
   while (!Stack.empty())
     delete Stack.pop_back_val();
+}
+
+bool CangjieDCE::maybeFakeLiveOfTypeMeta(GlobalVariable *GVU,
+                                         GlobalVariable *GV) {
+  if (!GV || !GVU)
+    return false;
+  // All metadata about typeinfo should be regarded as a whole.
+  if (GVU->isCJInnerTypeExtensions()) {
+    assert(GV->isCJMTable());
+    return true;
+  }
+  if (GVU->isCJStaticGenericTI()) {
+    assert(GV->isCJTypeInfo());
+    return true;
+  }
+  if (GV->isCJTypeExt()) {
+    assert(GVU->getName().startswith("llvm.used"));
+    return true;
+  }
+  // For the extended function, if both target type and interface are public,
+  // mtable needs to remain alive even though neither target type nor interface
+  // is in use.
+  if (GVU->isCJOuterTypeExtensions()) {
+    auto IsInternalType = [](GlobalVariable *TI) {
+      auto *TT = TI->getInitializer()
+                     ->getOperand(ClassInfoFieldType::CIT_GENERIC_FROM)
+                     ->stripPointerCasts();
+      if (isa<ConstantPointerNull>(TT))
+        return GlobalVariable::isInternalLinkage(TI->getLinkage());
+
+      return GlobalVariable::isInternalLinkage(
+          cast<GlobalVariable>(TT)->getLinkage());
+    };
+    bool IsTypeInternal = false, IsIFInternal = false;
+    auto *TI = cast<GlobalVariable>(
+        GV->getInitializer()
+            ->getOperand(ExtensionDefFieldType::ET_TARGET_TYPE)
+            ->stripPointerCasts());
+    if (TI->hasInitializer())
+      IsTypeInternal = IsInternalType(TI);
+    auto *IFN = GV->getInitializer()
+                    ->getOperand(ExtensionDefFieldType::ET_INTERFACE_FN)
+                    ->stripPointerCasts();
+    if (auto *IF = dyn_cast<GlobalVariable>(IFN))
+      IsIFInternal = IF->hasInitializer() && IsInternalType(IF);
+    else if (auto *F =
+                 dyn_cast<Function>(IFN)) // TODO check whether tt is internal
+      IsIFInternal = false;
+    return IsTypeInternal || IsIFInternal;
+  }
+  return false;
+}
+
+void CangjieDCE::initTIE(Module &M) {
+  for (GlobalVariable &GV : M.globals())
+    if (int Idx = getReverseDepsIndex(&GV); Idx != -1) {
+      ReverseDeps[GV.getInitializer()->getOperand(Idx)->stripPointerCasts()]
+          .insert(&GV);
+    }
+}
+
+void CangjieDCE::updateLiveExtensions() {
+  auto NeedToUpdate = [this](GlobalValue *G) {
+    auto *GV = dyn_cast<GlobalVariable>(G);
+    if (GV && ReverseDeps.count(GV)) {
+      // If typeinfo is alive, then the associated metadata are also alive. Some
+      // typeinfo or typetemplate are declaration and do not have attribute.
+      assert(isCangjieType(GV) || GV->isDeclaration());
+      return true;
+    }
+    return false;
+  };
+  auto MarkRelatedMeta = [this, &NeedToUpdate](
+                             SmallPtrSetImpl<GlobalVariable *> &LiveSet,
+                             SmallVectorImpl<GlobalVariable *> &Updates) {
+    // Note that in scenarios where the type and target type are the same,
+    // filtering is required to avoid duplicate marking, which could lead to an
+    // infinite loop.
+    for (auto *GV : LiveSet)
+      DCE.MarkLive(*GV);
+    SmallVector<GlobalValue *, 8> NewLiveGVs{LiveSet.begin(), LiveSet.end()};
+    while (!NewLiveGVs.empty()) {
+      GlobalValue *LGV = NewLiveGVs.pop_back_val();
+      for (auto *GVD : DCE.GVDependencies[LGV]) {
+        DCE.MarkLive(*GVD, &NewLiveGVs);
+        if (NeedToUpdate(GVD)) // Recursively handle typeinfo.
+          Updates.push_back(cast<GlobalVariable>(GVD));
+      }
+    }
+  };
+
+  SmallVector<GlobalVariable *, 8> LiveTypes;
+  for (GlobalValue *G : DCE.AliveGlobals) {
+    if (NeedToUpdate(G))
+      LiveTypes.push_back(cast<GlobalVariable>(G));
+  }
+  SmallPtrSet<GlobalVariable *, 8> Visited;
+  while (!LiveTypes.empty()) {
+    auto *Ty = LiveTypes.pop_back_val();
+    if (!Visited.insert(Ty).second)
+      continue;
+    assert(ReverseDeps.count(Ty));
+    MarkRelatedMeta(ReverseDeps[Ty], LiveTypes);
+  }
+}
+
+void CangjieDCE::rewriteExtensions(Module &M) {
+  SmallPtrSet<GlobalVariable *, 4> Candidates;
+  // There might also be InnerTypeExtensions. Considering the runtime's parsing
+  // method, not rewriting this part does not affect correctness; it only
+  // slightly impacts the optimization effect on code size.
+  for (GlobalVariable &GV : M.globals())
+    if (GV.isCJStaticGenericTI() || GV.isCJOuterTypeExtensions())
+      Candidates.insert(&GV);
+  for (auto *GV : Candidates) {
+    if (!GV->hasInitializer())
+      report_fatal_error("Must have initializer");
+    auto *C = GV->getInitializer();
+    std::vector<Constant *> LiveGVs;
+    Type *ATy = nullptr;
+    // Create NewGV
+    for (unsigned I = 0, E = C->getNumOperands(); I != E; ++I) {
+      if (isa<ConstantPointerNull>(C->getOperand(I)))
+        continue;
+      ATy = cast<GlobalVariable>(C->getOperand(I))->getType();
+      LiveGVs.push_back(cast<GlobalVariable>(C->getOperand(I)));
+    }
+    if (LiveGVs.empty() || LiveGVs.size() == C->getNumOperands())
+      continue;
+    ArrayType *AT = ArrayType::get(ATy, LiveGVs.size());
+    Constant *NewC = ConstantArray::get(AT, LiveGVs);
+    GlobalVariable *NewGV = cast<GlobalVariable>(
+        M.getOrInsertGlobal(GV->getName().str() + ".new", AT));
+    NewGV->setLinkage(GlobalVariable::PrivateLinkage);
+    NewGV->setInitializer(NewC);
+    NewGV->copyAttributesFrom(GV);
+    NewGV->copyMetadata(GV, /*Offset=*/0);
+    // Replace GV
+    if (GV->getNumUses() != 1) // 1: llvm.used
+      report_fatal_error("User number should be one");
+    auto *Expr = dyn_cast<ConstantExpr>(GV->use_begin()->getUser());
+    Expr->handleOperandChange(GV, NewGV);
+    GV->eraseFromParent();
+  }
+}
+
+void CangjieDCE::rewriteLLVMUsed(Module &M) {
+  GlobalVariable *GV = M.getNamedGlobal("llvm.used");
+  if (!GV)
+    return;
+  auto *C = GV->getInitializer();
+  std::vector<Constant *> LiveGVs;
+  for (unsigned I = 0, E = C->getNumOperands(); I != E; ++I) {
+    if (isa<ConstantPointerNull>(C->getOperand(I)))
+      continue;
+    LiveGVs.push_back(cast<Constant>(C->getOperand(I)));
+  }
+  if (LiveGVs.empty() || LiveGVs.size() == C->getNumOperands())
+    return;
+  auto *AT = ArrayType::get(Type::getInt8PtrTy(M.getContext()), LiveGVs.size());
+  auto *NewC = ConstantArray::get(AT, LiveGVs);
+  GV->setName("llvm.used.old");
+  GlobalVariable *NewGV =
+      cast<GlobalVariable>(M.getOrInsertGlobal("llvm.used", AT));
+  NewGV->setLinkage(GlobalVariable::AppendingLinkage);
+  NewGV->setInitializer(NewC);
+  NewGV->copyAttributesFrom(GV);
+  NewGV->copyMetadata(GV, /*Offset=*/0);
+  GV->eraseFromParent();
 }
