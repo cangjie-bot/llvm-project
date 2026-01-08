@@ -23,6 +23,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include <unordered_map>
 
 namespace llvm {
@@ -73,10 +74,10 @@ private:
 
   void ComputeDependencies(Value *V, SmallPtrSetImpl<GlobalValue *> &U);
 
-  friend struct CangjieVFE;
+  friend struct CangjieDCE;
 };
 
-struct CangjieVFE {
+struct CangjieDCE {
   struct GenericFuncInfo {
     bool IsValid= false;
     GenericFuncInfo *Prev = nullptr;
@@ -85,12 +86,33 @@ struct CangjieVFE {
     DenseMap<GlobalVariable *, GenericFuncInfo *> Next;
   };
 
+  // These are used for eliminating the useless virtual func.
   GlobalDCEPass &DCE;
   GenericFuncInfo *Root;
 
-  CangjieVFE() = delete;
-  CangjieVFE(GlobalDCEPass &DCE) : DCE(DCE) { Root = new GenericFuncInfo; }
-  ~CangjieVFE();
+  // This is used for eliminating the useless typeinfo.
+  DenseMap<Value *, SmallPtrSet<GlobalVariable *, 8>> ReverseDeps;
+
+  CangjieDCE() = delete;
+  CangjieDCE(GlobalDCEPass &DCE) : DCE(DCE) { Root = new GenericFuncInfo; }
+  ~CangjieDCE();
+
+  static bool isCangjieType(GlobalVariable *GV) {
+    return GV->isCJTypeInfo() || GV->isCJTypeTemplate();
+  }
+  static bool isMetaAssociatedWithType(GlobalVariable *GV) {
+    return GV->isCJTypeExt() || GV->isCJMTable();
+  }
+
+  static bool maybeFakeLiveOfTypeMeta(GlobalVariable *GVU, GlobalVariable *GV);
+
+  int getReverseDepsIndex(GlobalVariable *GV) {
+    if (GV->isCJMTable())
+      return ExtensionDefFieldType::ET_TARGET_TYPE;
+    if (GV->isCJTypeExt())
+      return 0; // 0: dependence typeinfo
+    return -1;
+  }
 
   GenericFuncInfo *insertInstance(const SmallVectorImpl<GlobalVariable *> &,
                                   GlobalVariable *FT);
@@ -110,6 +132,11 @@ struct CangjieVFE {
   // Add dependencies between caller and callee.
   void updateDependencies(Function *,
                           DenseMap<GenericFuncInfo *, SmallSet<uint64_t, 4>> &);
+
+  void initTIE(Module &);
+  void updateLiveExtensions();
+  void rewriteExtensions(Module &);
+  void rewriteLLVMUsed(Module &);
 };
 
 }
