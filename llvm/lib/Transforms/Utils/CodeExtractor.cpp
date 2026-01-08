@@ -697,12 +697,8 @@ void CodeExtractor::insertStructBaseInArguments(Function *F, ValueSet &Values,
         }
       }
 
-      if (I < F->arg_size()) {
+      if (I < F->arg_size())
         BasePtrCands[V] = F->getArg(I - 1);
-      } else {
-        Type *NullBasePtr = Type::getInt8PtrTy(F->getContext(), 1);
-        BasePtrCands[V] = Constant::getNullValue(NullBasePtr);
-      }
     }
   }
 }

@@ -33,6 +33,10 @@
 using namespace llvm;
 using namespace IRSimilarity;
 
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+}
+
 // A command flag to be used for debugging to exclude branches from similarity
 // matching and outlining.
 namespace llvm {
@@ -648,6 +652,8 @@ Function *IROutliner::createFunction(Module &M, OutlinableGroup &Group,
   Group.OutlinedFunction = Function::Create(
       Group.OutlinedFunctionType, GlobalValue::InternalLinkage,
       "outlined_ir_func_" + std::to_string(FunctionNameSuffix), M);
+  if (CJPipeline)
+    Group.OutlinedFunction->setGC("cangjie");
 
   // Transfer the swifterr attribute to the correct function parameter.
   if (Group.SwiftErrorArgument)
