@@ -184,6 +184,7 @@ public:
   bool isCJGlobalValue() const { return hasAttribute("CJGlobalValue"); }
   bool isCJGCTib() const { return hasAttribute("CFileGCTib"); }
   bool isCJMTable() const { return hasAttribute("CFileMTable"); }
+  bool isCJTypeExt() const { return hasAttribute("CFileTIExt"); }
   bool isCJInnerTypeExtensions() const {
     return hasAttribute("InnerTypeExtensions");
   }
