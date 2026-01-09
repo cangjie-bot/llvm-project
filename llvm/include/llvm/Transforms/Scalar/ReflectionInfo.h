@@ -53,6 +53,11 @@ enum EnumReflectionType : uint8_t {
   ERT_MAX,
 };
 
+enum EnumCtorReflectionType : uint8_t {
+  ECRT_ATTRIBUTE = 0,
+  ECRT_MAX,
+};
+
 enum EnumDebugInfoType : uint8_t {
   EDT_TYPE_NAME = 0,
   EDT_ENUM_CTOR,
@@ -105,6 +110,12 @@ enum FillEnumReflectInfoType : uint8_t {
   FET_STATIC_METHOD,
   FET_ANNOTATION = 5,
   FET_PTRS,
+};
+
+enum FillEnumCtorReflectInfoType : uint8_t {
+  FECT_MODIFIER = 0,
+  FECT_ANNOTATION,
+  FECT_PTRS,
 };
 
 struct BaseInfo {
@@ -200,6 +211,12 @@ struct EnumReflectInfo : BaseInfo {
   Constant *fillEnumCtorInfos(StringRef TypeInfoName);
 };
 
+struct EnumCtorReflectInfo : BaseInfo {
+  unsigned Modifier = 0;
+  Constant *Annotation;
+  explicit EnumCtorReflectInfo(Module &M) : BaseInfo(M) {}
+};
+
 class ReflectInfo : BaseInfo {
 public:
   explicit ReflectInfo(Module &M);
@@ -254,6 +271,8 @@ private:
                             SmallVector<Constant *, 0> &BodyVec);
   void fillEnumReflectInfo(EnumReflectInfo &Info,
                            SmallVector<Constant *, 0> &BodyVec);
+  void fillEnumCtorReflectInfo(EnumCtorReflectInfo &Info,
+                               SmallVector<Constant *, 0> &BodyVec);
   void getGlobalsFromNamedMD(SetVector<GlobalVariable *> &GVs,
                              NamedMDNode *MDNode);
   MethodInfo *getMethodInfo() {
