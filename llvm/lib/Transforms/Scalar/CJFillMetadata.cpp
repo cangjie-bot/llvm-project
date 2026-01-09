@@ -843,20 +843,25 @@ Constant *ReflectInfo::getReflectionInfo(GlobalVariable *GV, bool IsEnum) {
   TIName = GV->getName();
   if (enable(M)) {
     if (GV->hasAttribute(CFileKlassStr)) {
-      if (!TypeInfos.contains(GV)) {
+      if (!IsEnum && !TypeInfos.contains(GV)) {
         report_fatal_error(GV->getName() +
                            ": typeinfo's reflect info don't exist in package "
                            "info at the same time!");
       }
     } else if (GV->hasAttribute("cj_tt")) {
-      if (!TypeTemplates.contains(GV)) {
+      if (!IsEnum && !TypeTemplates.contains(GV)) {
         report_fatal_error(GV->getName() +
                            ": type_template's reflect info don't exist in "
                            "package info at the same time!");
       }
     }
     if (IsEnum) {
-      return getEnumReflectInfo(ReflectMD);
+      if (ReflectMD->getNumOperands() == ERT_MAX)
+        return getEnumReflectInfo(ReflectMD);
+      if (ReflectMD->getNumOperands() == ECRT_MAX)
+        return getEnumCtorReflectInfo(ReflectMD);
+      report_fatal_error(GV->getName() +
+                         ": enum reflect info's operand number error!");
     } else {
       return getClassReflectInfo(ReflectMD);
     }
@@ -907,6 +912,20 @@ Constant *ReflectInfo::getEnumReflectInfo(const MDTuple *ReflectMD) {
 
   SmallVector<Constant *, 0> BodyVec(FET_PTRS);
   fillEnumReflectInfo(Info, BodyVec);
+
+  std::string GVName = TIName.str() + ".reflect";
+  auto *ReflectGV = createGlobalVal(GVName, GVName + "Type", BodyVec);
+  return ConstantExpr::getBitCast(ReflectGV, Int8PtrTy);
+}
+
+// Reflection: !{type attributes}
+Constant *ReflectInfo::getEnumCtorReflectInfo(const MDTuple *ReflectMD) {
+  EnumReflectInfo Info(M);
+  parseAttributes(getMDOperand(ReflectMD, ERT_ATTRIBUTE), Info.Modifier,
+                  Info.Annotation);
+
+  SmallVector<Constant *, 0> BodyVec(FET_PTRS);
+  fillEnumCtorReflectInfo(Info, BodyVec);
 
   std::string GVName = TIName.str() + ".reflect";
   auto *ReflectGV = createGlobalVal(GVName, GVName + "Type", BodyVec);
@@ -1128,6 +1147,13 @@ void ReflectInfo::fillEnumReflectInfo(EnumReflectInfo &Info,
   for (unsigned Idx = 0; Idx < Info.StaticMethods.size(); ++Idx) {
     BodyVec.push_back(Info.StaticMethods[Idx]->fillMethodInfo(Idx, TIName));
   }
+}
+
+void ReflectInfo::fillEnumCtorReflectInfo(EnumReflectInfo &Info,
+                                          SmallVector<Constant *, 0> &BodyVec) {
+  BodyVec[FECT_MODIFIER] = ConstantInt::get(Int32Ty, Info.Modifier);
+      ConstantInt::get(Int32Ty, Info.InstanceMethods.size());
+  BodyVec[FECT_ANNOTATION] = Info.Annotation;
 }
 
 void ReflectInfo::parseAttributes(MDTuple *Attr, unsigned &Modifier,
