@@ -113,7 +113,6 @@ CompilerType CangjieDeclMap::GetVariableType(lldb::VariableSP var) {
         auto valobj = frame->GetValueObjectForFrameVariable(var, lldb::DynamicValueType::eNoDynamicValues);
         dynamic_type = valobj->GetDynamicType();
         m_parsed_types.insert({dynamic_type.GetTypeName().AsCString(), dynamic_type});
-        return dynamic_type;
       }
     }
     if (ConstString(type_name).GetStringRef().contains(GENERIC_TYPE_PREFIX_NAME)) {
