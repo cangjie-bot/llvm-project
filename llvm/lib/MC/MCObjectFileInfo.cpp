@@ -338,7 +338,8 @@ void MCObjectFileInfo::initMachOMCObjectFileInfo(const Triple &T) {
                                            SectionKind::getReadOnly());
   CJTypeFieldsSection = Ctx->getMachOSection("__CJ_METADATA", "__cj_fields", 0,
                                              SectionKind::getReadOnly());
-
+  CJTypeExtSection = Ctx->getMachOSection("__CJ_METADATA", "__cjtype_ext", 0,
+                                          SectionKind::getReadOnly());
   CJMtableSection = Ctx->getMachOSection("__CJ_METADATA", "__cjmtable", 0,
                                          SectionKind::getReadOnly());
   CJInnerTypeExtensionsSection = Ctx->getMachOSection(
@@ -592,7 +593,8 @@ void MCObjectFileInfo::initELFMCObjectFileInfo(const Triple &T, bool Large) {
   CJTypeFieldsSection =
       Ctx->getELFSection(".cjmetadata.type.fields", ELF::SHT_PROGBITS,
                          ELF::SHF_ALLOC | ELF::SHF_WRITE);
-
+  CJTypeExtSection = Ctx->getELFSection(".cjmetadata.type.ext", ELF::SHT_PROGBITS,
+                                       ELF::SHF_ALLOC | ELF::SHF_WRITE);
   // VTable/ITable
   CJMtableSection = Ctx->getELFSection(".cjmetadata.mtable", ELF::SHT_PROGBITS,
                                        ELF::SHF_ALLOC | ELF::SHF_WRITE);
@@ -952,7 +954,11 @@ void MCObjectFileInfo::initCOFFMCObjectFileInfo(const Triple &T) {
       COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
           COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getData());
-
+  CJTypeExtSection = Ctx->getCOFFSection(".cjmetadata.type.ext",
+                                        COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                            COFF::IMAGE_SCN_MEM_READ |
+                                            COFF::IMAGE_SCN_MEM_WRITE,
+                                        SectionKind::getCJTypeExt());
   // VTable/ITable
   CJMtableSection = Ctx->getCOFFSection(".cjmtbl",
                                         COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
