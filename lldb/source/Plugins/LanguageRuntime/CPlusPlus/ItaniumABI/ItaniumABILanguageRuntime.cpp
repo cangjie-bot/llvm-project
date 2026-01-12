@@ -293,6 +293,12 @@ ConstString GetTypeName(Process& process, TypeInfo& typeInfo) {
       }
       pos = temp_name.find(":", pos + 2); // size of "::" is 2
     }
+    // "org/pkg::CC"  ==>  "org::pkg::CC"
+    pos = temp_name.find("/");
+    while (pos != std::string::npos) {
+      temp_name.replace(pos, 1, "::");
+      pos = temp_name.find("/", pos + 2); // size of "::" is 2
+    }
     return ConstString(temp_name.c_str());
 }
 
