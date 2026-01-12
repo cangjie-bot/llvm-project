@@ -114,6 +114,42 @@ std::string lldb_private::DeleteAllPkgname(const std::string& name, std::string&
   return typeName;
 }
 
+std::string lldb_private::DeleteAllStdPkgname(const std::string& name) {
+  size_t start = name.find('<');
+  size_t end = name.find('>');
+  if (start == std::string::npos || end == std::string::npos || start >= end) {
+      return name;
+  }
+
+  std::string prefix = name.substr(0, start);
+  std::string content = name.substr(start + 1, end - start - 1);
+  std::string delimiter = ",";
+  std::string result = prefix + "<";
+
+  size_t pos = 0;
+  bool first = true;
+  while (pos < content.length()) {
+      size_t found = content.find(delimiter, pos);
+      if (found == std::string::npos) {
+          found = content.length();
+      }
+      std::string token = content.substr(pos, found - pos);
+      size_t colonPos = token.find("::");
+      if (colonPos != std::string::npos) {
+          token = token.substr(colonPos + 2);
+      }
+
+      if (!first) {
+          result += delimiter;
+      }
+      result += token;
+      first = false;
+      pos = found + 1;
+  }
+  result += ">";
+  return result;
+}
+
 std::string lldb_private::GetSubNameWithoutPkgname(std::string& name, std::string& pkg)
 {
   if (pkg.empty()) {
