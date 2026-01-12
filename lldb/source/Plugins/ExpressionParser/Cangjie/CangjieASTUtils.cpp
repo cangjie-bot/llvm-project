@@ -98,6 +98,29 @@ std::string lldb_private::GetTypeNameWithoutPrefix(ConstString type_name, std::s
     return subname.empty() ? name : subname;
 }
 
+std::string lldb_private::GetTypeNameWithoutNamespace(const CompilerType& type)
+{
+  if (!type.IsValid()) {
+    return "";
+  }
+  std::string fullName = type.GetTypeName().GetCString();
+  
+  // Find the position of the last "::" before any template parameters
+  // For example, "default::MyClass<default::Inner>" -> "MyClass<default::Inner>"
+  size_t templatePos = fullName.find('<');
+  size_t searchEnd = (templatePos != std::string::npos) ? templatePos : fullName.length();
+  
+  // Find the last "::" in the type name part (before template parameters)
+  size_t lastColonPos = fullName.rfind("::", searchEnd);
+  if (lastColonPos != std::string::npos) {
+    // Return the part after the last "::"
+    return fullName.substr(lastColonPos + 2);
+  }
+  
+  // No namespace found, return the original name
+  return fullName;
+}
+
 std::string lldb_private::DeleteAllPkgname(const std::string& name, std::string& pkg) {
   // Multiple package names may exist. for example, default::Test<default::I>.
   std::string prefix = pkg + PACKAGE_SUFFIX;
@@ -112,6 +135,42 @@ std::string lldb_private::DeleteAllPkgname(const std::string& name, std::string&
     pos = typeName.find(prefix);
   }
   return typeName;
+}
+
+std::string lldb_private::DeleteAllStdPkgname(const std::string& name) {
+  size_t start = name.find('<');
+  size_t end = name.find('>');
+  if (start == std::string::npos || end == std::string::npos || start >= end) {
+      return name;
+  }
+
+  std::string prefix = name.substr(0, start);
+  std::string content = name.substr(start + 1, end - start - 1);
+  std::string delimiter = ",";
+  std::string result = prefix + "<";
+
+  size_t pos = 0;
+  bool first = true;
+  while (pos < content.length()) {
+      size_t found = content.find(delimiter, pos);
+      if (found == std::string::npos) {
+          found = content.length();
+      }
+      std::string token = content.substr(pos, found - pos);
+      size_t colonPos = token.find("::");
+      if (colonPos != std::string::npos) {
+          token = token.substr(colonPos + 2);
+      }
+
+      if (!first) {
+          result += delimiter;
+      }
+      result += token;
+      first = false;
+      pos = found + 1;
+  }
+  result += ">";
+  return result;
 }
 
 std::string lldb_private::GetSubNameWithoutPkgname(std::string& name, std::string& pkg)

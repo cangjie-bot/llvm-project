@@ -151,6 +151,7 @@ void CangjieUserExpression::ScanContext(ExecutionContext &exe_ctx, Status &err) 
         std::string type_name = dynamic_Type.GetTypeName().GetCString();
         m_class_name = DeleteAllPkgname(type_name, pkg_name);
         m_class_name = DeletePrefixOfType(m_class_name);
+        m_class_name = DeleteAllStdPkgname(m_class_name);
         LLDB_LOGF(log, "class name %s -> %s", type_name.c_str(), m_class_name.c_str());
       }
     }

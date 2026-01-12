@@ -77,6 +77,7 @@ bool StartsWith(const std::string& str, const std::string& pre);
 std::string GetPkgNameFromCompilerUnit(const CompileUnit& compUnit);
 std::string GetSubNameWithoutPkgname(std::string& name, std::string& pkg);
 std::string DeleteAllPkgname(const std::string& name, std::string& pkg);
+std::string lldb_private::DeleteAllStdPkgname(const std::string& name);
 std::string DeletePrefixOfType(const std::string& name);
 bool IsGenericTypeParameters(const std::string& type_name);
 bool IsGenericType(const std::string& type_name);
@@ -85,6 +86,7 @@ bool IsGenericFromFuncDecl(std::vector<std::string>& instantiatedNames, std::str
 std::string GetGenericDeclName(const std::string& type_name);
 std::string GetGenericParamDeclName(const std::string& name);
 std::string GetTypeNameWithoutPrefix(ConstString type_name, std::string& pkgname);
+std::string GetTypeNameWithoutNamespace(const CompilerType& type);
 }
 
 #endif
