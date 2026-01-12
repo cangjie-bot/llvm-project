@@ -1459,6 +1459,11 @@ void CangjieDeclMap::CollectImportPkgName()
       // "org::a" -> "org:a"
       pkgname.replace(pos, 1, "");
     }
+    pos = pkgname.find("/");
+    if (pos != std::string::npos) {
+      // "org/a" -> "org:a"
+      pkgname.replace(pos, 1, ":");
+    }
     m_fullpkgs.insert(pkgname);
     Log *log = GetLog(LLDBLog::Expressions);
     if (log) {
