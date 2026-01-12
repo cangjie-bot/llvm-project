@@ -349,6 +349,8 @@ static bool devirtual(DevirtualCallData &CallData) {
     if (ED == nullptr || !ED->hasInitializer())
       return false;
     ExtensionDefData Data(ED);
+    if (!dyn_cast<ConstantArray>(Data.FuncTable->getInitializer()))
+      return false;
     replaceIVCall(I, Data, FuncIndex);
     return true;
   };
