@@ -550,6 +550,19 @@ CompilerType CompilerType::GetFieldAtIndex(size_t idx, std::string &name,
                                         bitfield_bit_size_ptr, is_bitfield_ptr);
 }
 
+CompilerType CompilerType::GetFieldWithName(std::string &name) const {
+  uint32_t num_fields = GetNumFields();
+  for (uint32_t i = 0; i < num_fields; i++) {
+    std::string field_name = "";
+    auto field = GetFieldAtIndex(i, field_name, nullptr, nullptr, nullptr);
+    if (field_name == name) {
+      return field;
+    }
+  }
+
+  return CompilerType();
+}
+
 uint32_t CompilerType::GetNumDirectBaseClasses() const {
   if (IsValid())
     return m_type_system->GetNumDirectBaseClasses(m_type);

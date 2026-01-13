@@ -196,27 +196,36 @@ static std::map<std::string, Cangjie::AST::TypeKind> base_type_map = {
     { "Float64", Cangjie::AST::TypeKind::TYPE_FLOAT64 },
 };
 
-OwnedPtr<AST::Type> CangjieASTBuiler::CreateFuncType(std::string name, Ptr<Decl> target, std::string pkg)
+OwnedPtr<AST::Type> CangjieASTBuiler::CreateFuncType(Ptr<Decl> target, std::string pkg,
+                                                     const CompilerType &type)
 {
-    // For example, a func name can be "(Object, Int8, Int8) -> Int8".
-    OwnedPtr<FuncType> ret = MakeOwned<FuncType>();
-    name.erase(std::remove(name.begin(), name.end(), ' '), name.end());
-    auto arrowPos = name.rfind("->");
-    if (arrowPos == std::string::npos) {
-        return ret;
-    }
-    auto paramsStr = name.substr(1, arrowPos - 2);
-    std::stringstream ss(paramsStr);
-    std::string param;
-    while (std::getline(ss, param, ',')) {
-        if (param.empty()) {
-            break;
-        }
-        ret->paramTypes.emplace_back(CreateAstType(param, target, pkg));
-    }
-    auto retTypeStr = name.substr(arrowPos + 2);
-    ret->retType = CreateAstType(retTypeStr, target, pkg);
+  // Prefer using the CompilerType to derive parameter and return types.
+  OwnedPtr<FuncType> ret = MakeOwned<FuncType>();
+  if (!type.IsValid()) {
     return ret;
+  }
+
+  auto func_type = type;
+  if (!func_type.IsFunctionType()) {
+    auto field = func_type.GetFieldWithName("ptr");
+    if (field.IsValid() && field.IsPointerType() && field.IsFunctionType()) {
+      func_type = field.GetPointeeType();
+    }
+  }
+
+  auto paramCount = type.GetFunctionArgumentCount();
+  for (uint32_t i = 0; i < paramCount; i++) {
+    auto paramType = type.GetFunctionArgumentAtIndex(i);
+    std::string paramTypeStr = paramType.GetTypeName().GetCString();
+    ret->paramTypes.emplace_back(CreateAstType({paramTypeStr, paramType}, target, pkg, true));
+  }
+
+  auto retType = type.GetFunctionReturnType();
+  if (retType.IsValid()) {
+    std::string retTypeStr = retType.GetTypeName().GetCString();
+    ret->retType = CreateAstType({retTypeStr, retType}, target, pkg, true);
+  }
+  return ret;
 }
 
 bool CheckTypeCorrect(std::string& typeStr)
@@ -282,7 +291,7 @@ OwnedPtr<AST::Type> CangjieASTBuiler::CreateRefType(std::string name, Ptr<Decl> 
   auto args = name.substr(idLen + 1, name.size() - idLen - 2);
   auto elements = SplitTypeName(args);
   for (auto& ele:elements) {
-    ret->typeArguments.emplace_back(CreateAstType(ele, target, pkg));
+    ret->typeArguments.emplace_back(CreateAstType({ele}, target, pkg));
   }
   return ret;
 }
@@ -351,7 +360,7 @@ OwnedPtr<AST::Type> CangjieASTBuiler::CreateTupleType(std::string name, Ptr<Decl
   OwnedPtr<TupleType> ret = MakeOwned<TupleType>();
   std::vector<std::string> elements = SplitTupleName(name);
   for (auto& ele:elements) {
-    ret->fieldTypes.emplace_back(CreateAstType(ele, target));
+    ret->fieldTypes.emplace_back(CreateAstType({ele}, target));
   }
   return ret;
 }
@@ -383,28 +392,55 @@ OwnedPtr<AST::Type> CangjieASTBuiler::CreateVArrayType(std::string name, Ptr<Dec
             constType->constantExpr = std::move(lit);
             ret->constantType = std::move(constType);
         } else {
-            ret->typeArgument = CreateAstType(typeStr, target);
+            ret->typeArgument = CreateAstType({typeStr}, target);
         }
         typeStr = "";
     }
     return ret;
 }
 
-OwnedPtr<AST::Type> CangjieASTBuiler::CreateAstType(std::string name, Ptr<Decl> target, std::string pkg,
+OwnedPtr<AST::Type> CangjieASTBuiler::CreateOptionType(CompilerType type, Ptr<Decl> target, std::string pkg)
+{
+  if (type.IsValid()) {
+    return nullptr;
+  }
+
+  std::string name = "";
+  auto val_type = type.GetFieldWithName("val");
+  if (!val_type.IsValid()) {
+    return nullptr;
+  }
+  if (val_type.IsPointerType) {
+    val_type = val_type.GetPointeeType();
+  }
+
+  OwnedPtr<RefType> ret = MakeOwned<RefType>();
+  ret->ref.target = target;
+  ret->ref.identifier = "Option";
+  ret->typeArguments.emplace_back(CreateAstType({val_type.GetTypeName().AsCString(), val_type}, target, pkg));
+  return ret;
+}
+
+OwnedPtr<AST::Type> CangjieASTBuiler::CreateAstType(AstTypeInfo info, Ptr<Decl> target, std::string pkg,
                                                     bool isGenericDeclFromTarget)
 {
+  auto name = info.name;
+  CompilerType type = info.type;
   auto subname = GetSubNameWithoutPkgname(name, pkg);
   if (!subname.empty()) {
-    return CreateAstType(subname, target, pkg, isGenericDeclFromTarget);
+    return CreateAstType({subname, type}, target, pkg, isGenericDeclFromTarget);
   }
   if (IsFunctionType(ConstString(name))) {
-    return CreateFuncType(name, target, pkg);
+    return CreateFuncType(target, pkg, type);
   }
   if (StartsWith(name, TUPLE_NAME)) {
     return CreateTupleType(name, target);
   }
   if (StartsWith(name, VARRAY_NAME)) {
     return CreateVArrayType(name, target);
+  }
+  if (StartsWith(name, Option_NAME)) {
+    return CreateOptionType(name, target);
   }
   if (base_type_map.find(name) != base_type_map.end()) {
     OwnedPtr<PrimitiveType> primType = MakeOwned<PrimitiveType>();
@@ -490,8 +526,7 @@ OwnedPtr<Cangjie::AST::VarDecl> CangjieASTBuiler::CreateVarDecl(
     const CompilerType type, std::string name, std::string prefix, Ptr<Decl> target) {
   auto decl = MakeOwned<Cangjie::AST::VarDecl>();
   decl->identifier = name;
-  std::string typeStr = type.GetTypeName().GetCString();
-  decl->type = CreateAstType(typeStr, target, prefix);
+  decl->type = CreateAstType({type.GetTypeName().GetCString(), type}, target, prefix, true);
   decl->EnableAttr(Attribute::PUBLIC, Attribute::GLOBAL);
   decl->isVar = true;
   if (decl->type) {
@@ -507,7 +542,7 @@ OwnedPtr<Cangjie::AST::FuncDecl> CangjieASTBuiler::CreateEnumFuncDecl(
   decl->funcBody = MakeOwned<FuncBody>();
   // For example, a generic type's name can be default::Enum$RGBColor<$G_T>.
   std::string typeStr = enumType.GetTypeName().GetCString();
-  decl->funcBody->retType = CreateAstType(typeStr, pdecl, m_current_pkgname);
+  decl->funcBody->retType = CreateAstType({typeStr, enumType}, pdecl, m_current_pkgname, true);
   auto paramList = MakeOwned<FuncParamList>();
 
   if (typeStr.find(E2_PREFIX_NAME_OPTION_LIKE) != std::string::npos) {
@@ -519,7 +554,7 @@ OwnedPtr<Cangjie::AST::FuncDecl> CangjieASTBuiler::CreateEnumFuncDecl(
     OwnedPtr<FuncParam> param = MakeOwned<FuncParam>();
     param->identifier = "a" + std::to_string(1);
     auto tempDecl = isMember ? pdecl: decl.get();
-    param->type = CreateAstType(paramTypeStr, tempDecl, m_current_pkgname);
+    param->type = CreateAstType({paramTypeStr, ctorFuncType}, tempDecl, m_current_pkgname, true);
     paramList->params.emplace_back(std::move(param));
   } else {
     for (uint32_t i = 1; i < ctorFuncType.GetNumFields(); i++) {
@@ -530,7 +565,7 @@ OwnedPtr<Cangjie::AST::FuncDecl> CangjieASTBuiler::CreateEnumFuncDecl(
       OwnedPtr<FuncParam> param = MakeOwned<FuncParam>();
       param->identifier = "a" + std::to_string(i);
       auto tempDecl = isMember ? pdecl: decl.get();
-      param->type = CreateAstType(paramTypeStr, tempDecl, m_current_pkgname);
+      param->type = CreateAstType({paramTypeStr, field}, tempDecl, m_current_pkgname, true);
       paramList->params.emplace_back(std::move(param));
     }
   }
@@ -584,11 +619,12 @@ OwnedPtr<Cangjie::AST::FuncDecl> CangjieASTBuiler::CreateFuncDecl(
   if (pdecl && (identifier == "init" || identifier == pdecl->identifier)) {
     decl->EnableAttr(Attribute::CONSTRUCTOR);
     decl->EnableAttr(Attribute::TOOL_ADD);
-    decl->funcBody->retType = CreateAstType(pdecl->identifier, pdecl, m_current_pkgname);
+    decl->funcBody->retType = CreateAstType({pdecl->identifier, CompilerType()}, pdecl, m_current_pkgname);
   } else {
-    std::string retTypeStr = type.GetFunctionReturnType().GetTypeName().GetCString();
+    auto retType = type.GetFunctionReturnType();
+    std::string retTypeStr = retType.GetTypeName().GetCString();
     auto tempDecl = lldb_private::IsGenericFromFuncDecl(instantiatedNames, retTypeStr) ? decl.get():pdecl;
-    decl->funcBody->retType = CreateAstType(retTypeStr, tempDecl, m_current_pkgname);
+    decl->funcBody->retType = CreateAstType({retTypeStr, retType}, tempDecl, m_current_pkgname, true);
   }
   auto paramList = MakeOwned<FuncParamList>();
   for (int i = 0; i < type.GetFunctionArgumentCount(); i++) {
@@ -602,7 +638,7 @@ OwnedPtr<Cangjie::AST::FuncDecl> CangjieASTBuiler::CreateFuncDecl(
     OwnedPtr<FuncParam> param = MakeOwned<FuncParam>();
     param->identifier = "a" + std::to_string(i);
     auto tempDecl = lldb_private::IsGenericFromFuncDecl(instantiatedNames, paramTypeStr) ? decl.get():pdecl;
-    param->type = CreateAstType(paramTypeStr, tempDecl, m_current_pkgname);
+    param->type = CreateAstType({paramTypeStr, paramType}, tempDecl, m_current_pkgname, true);
     paramList->params.emplace_back(std::move(param));
   }
   decl->funcBody->paramLists.emplace_back(std::move(paramList));
