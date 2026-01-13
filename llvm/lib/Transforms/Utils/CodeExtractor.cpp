@@ -1210,8 +1210,8 @@ Function *CodeExtractor::constructFunction(const ValueSet &Inputs,
           SourceElementType, newFunction->getArg(ArgNo),
           ConstantInt::get(M->getContext(), APInt(32, Offset)), "pi_gep",
           InsertBefore);
-      RewriteVal = new BitCastInst(NewGEP, Bitcast->getType(), "pi_bitcastgep",
-                                   InsertBefore);
+      RewriteVal = CastInst::CreatePointerCast(NewGEP, Bitcast->getType(),
+                                               "pi_bitcastgep", InsertBefore);
     }
 
     std::vector<User *> Users(Bitcast->user_begin(), Bitcast->user_end());
