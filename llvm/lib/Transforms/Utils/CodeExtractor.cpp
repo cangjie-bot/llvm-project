@@ -1204,14 +1204,22 @@ Function *CodeExtractor::constructFunction(const ValueSet &Inputs,
         ++ArgNo;
       }
 
-      Type *SourceElementType =
-          Base->getType()->getNonOpaquePointerElementType();
+      // Offset is in bytes; rebuild the derived pointer via i8* GEP.
+      auto *BaseArg = newFunction->getArg(ArgNo);
+      auto *BasePtrTy = dyn_cast<PointerType>(BaseArg->getType());
+      assert(BasePtrTy && "Expected pointer type for base argument");
+      unsigned AS = BasePtrTy->getAddressSpace();
+      Type *I8PtrTy = Type::getInt8PtrTy(M->getContext(), AS);
+      Value *I8Base =
+          CastInst::CreatePointerCast(BaseArg, I8PtrTy, "pi_i8base",
+                                      InsertBefore);
+      Type *IdxTy = M->getDataLayout().getIndexType(I8PtrTy);
+      Value *OffsetVal = ConstantInt::get(IdxTy, Offset);
       auto *NewGEP = GetElementPtrInst::CreateInBounds(
-          SourceElementType, newFunction->getArg(ArgNo),
-          ConstantInt::get(M->getContext(), APInt(32, Offset)), "pi_gep",
+          Type::getInt8Ty(M->getContext()), I8Base, OffsetVal, "pi_gep",
           InsertBefore);
-      RewriteVal = new BitCastInst(NewGEP, Bitcast->getType(), "pi_bitcastgep",
-                                   InsertBefore);
+      RewriteVal = CastInst::CreatePointerCast(NewGEP, Bitcast->getType(),
+                                               "pi_bitcastgep", InsertBefore);
     }
 
     std::vector<User *> Users(Bitcast->user_begin(), Bitcast->user_end());
