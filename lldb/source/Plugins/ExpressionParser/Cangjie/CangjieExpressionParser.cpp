@@ -158,6 +158,7 @@ bool CangjieExpressionParser::Parse(ExecutionContext &exeCtx, const std::string 
   invocation->globalOptions.chirLLVM = true;
   invocation->globalOptions.aggressiveParallelCompile = 1;
   invocation->globalOptions.disableInstantiation = true;
+  invocation->globalOptions.cjdbMode = true;
 
   DiagnosticEngine diag;
   diag.SetDisableWarning(true);
