@@ -410,6 +410,39 @@ static bool isEligibleForMerging(Function &F) {
   return !F.isDeclaration() && !F.hasAvailableExternallyLinkage();
 }
 
+static bool isAddrSpaceMismatchCast(Value *V) {
+  auto IsMismatch = [](Type *SrcTy, Type *DstTy) {
+    auto *SrcPtr = dyn_cast<PointerType>(SrcTy);
+    auto *DstPtr = dyn_cast<PointerType>(DstTy);
+    return SrcPtr && DstPtr &&
+           SrcPtr->getAddressSpace() != DstPtr->getAddressSpace();
+  };
+
+  if (auto *Cast = dyn_cast<CastInst>(V))
+    return IsMismatch(Cast->getSrcTy(), Cast->getDestTy());
+  if (auto *CE = dyn_cast<ConstantExpr>(V)) {
+    if (CE->isCast())
+      return IsMismatch(CE->getOperand(0)->getType(), CE->getType());
+  }
+  return false;
+}
+
+static bool isAllowedOutlineCallee(Function *Callee) {
+  if (!Callee)
+    return false;
+  StringRef CalleeName = Callee->getName();
+  if (CalleeName == "llvm.cj.throw.exception" ||
+      CalleeName == "llvm.cj.malloc.object" ||
+      CalleeName == "llvm.cj.memset.p0i8")
+    return true;
+  if (Callee->isIntrinsic())
+    return false;
+  if (CalleeName.isSetDebugLocation() || CalleeName.isGetGCPhase() ||
+      CalleeName.startswith("__builtin_") || CalleeName.startswith("llvm."))
+    return false;
+  return true;
+}
+
 static bool isBBEligibleForOutline(llvm::BasicBlock *BB) {
   if (!BB)
     return false;
@@ -421,30 +454,21 @@ static bool isBBEligibleForOutline(llvm::BasicBlock *BB) {
   if (BB->getParent()->getName().equals("rt$ThrowImplicitException"))
     return false;
   for (auto &Inst : *BB) {
-    if (const GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(&Inst)) {
+    if (isAddrSpaceMismatchCast(&Inst))
       return false;
-    }
     if (CallInst *CI = dyn_cast<CallInst>(&Inst)) {
-      Function *Callee = CI->getCalledFunction();
-      if (!Callee)
+      if (!isAllowedOutlineCallee(CI->getCalledFunction()))
         return false;
-      if (Callee->isIntrinsic()) {
-        return false;
-      }
-      if (Callee->getName().isSetDebugLocation() ||
-          Callee->getName().isGetGCPhase() ||
-          Callee->getName().startswith("__builtin_") ||
-          Callee->getName().startswith("llvm.")) {
-        return false;
-      }
     }
     for (auto &Use : Inst.operands()) {
       if (auto *User = Use.get()) {
+        if (isAddrSpaceMismatchCast(User))
+          return false;
         if (auto *UserInst = llvm::dyn_cast<llvm::Instruction>(User)) {
           // If it's not a Instruction, there's no need to use it in the current
           // context. For example GV.
           if (UserInst->getParent() != BB) {
-            return false;
+            continue;
           }
         }
       }
@@ -456,7 +480,8 @@ static bool isBBEligibleForOutline(llvm::BasicBlock *BB) {
 static bool isThrowExceptionInstruction(llvm::Instruction *Inst) {
   if (auto *CallInst = llvm::dyn_cast<llvm::CallInst>(Inst)) {
     if (auto *Callee = CallInst->getCalledFunction()) {
-      return Callee->getName() == "CJ_MCC_ThrowException";
+      return Callee->getName() == "CJ_MCC_ThrowException" ||
+             Callee->getName() == "llvm.cj.throw.exception";
     }
   }
   return false;
@@ -478,8 +503,6 @@ static void getInputArgs(llvm::BasicBlock *BB, SetVector<Value *> &ArgInputs) {
         } else if (auto *CE = dyn_cast<ConstantExpr>(User)) {
           if (CE->getOpcode() == Instruction::BitCast)
             ArgInputs.insert(CE);
-        } else if (ConstantInt *CI = dyn_cast<ConstantInt>(User)) {
-          ArgInputs.insert(CI);
         }
       }
     }
