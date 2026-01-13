@@ -44,9 +44,9 @@ static cl::opt<unsigned> CJMaxStackObject("cj-max-stack-obj", cl::Hidden,
                                           cl::init(1024));
 static cl::opt<unsigned> CJMaxNonMoveArraySize("cj-max-nonmove-array-size",
                                                cl::Hidden, cl::init(64 * 1024));
-static cl::opt<bool> CJDisablePEA("cj-disable-partial-ea",
-                                  cl::Hidden, cl::init(false));
 namespace llvm {
+cl::opt<bool> CJDisablePEA("cj-disable-partial-ea",
+                                  cl::Hidden, cl::init(false));
 
 GlobalVariable *getNewKlass(CallBase *I) {
   GlobalVariable *Klass =
@@ -2237,7 +2237,8 @@ Value *CJEscapeAnalysis::getBaseValue(Value *CV, int &Offset) {
         V = CI->getOperand(0);
       }
     } else if (auto *GEPI = dyn_cast<GetElementPtrInst>(V)) {
-      APInt GEPOffset(64, 0);
+      APInt GEPOffset(GEPI->getModule()->getDataLayout().getIndexSizeInBits(0),
+                      0);
       if (GEPI->accumulateConstantOffset(GEPI->getModule()->getDataLayout(),
                                          GEPOffset)) {
         Offset += GEPOffset.getZExtValue();

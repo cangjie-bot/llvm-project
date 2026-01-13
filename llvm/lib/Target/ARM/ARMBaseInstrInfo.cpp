@@ -40,6 +40,7 @@
 #include "llvm/CodeGen/MultiHazardRecognizer.h"
 #include "llvm/CodeGen/ScoreboardHazardRecognizer.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
+#include "llvm/CodeGen/StackMaps.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSchedule.h"
@@ -808,9 +809,9 @@ unsigned ARMBaseInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
     return Size;
   }
   case TargetOpcode::STATEPOINT:
-    auto NumBytes = StatepointOpers(&MI).getNumPatchBytes();
-    const MachineOperand &MO = MI.getOperand(3);
-
+    const StatepointOpers SO(&MI);
+    auto NumBytes = SO.getNumPatchBytes();
+    const MachineOperand &MO = SO.getCallTarget();
     if (MO.isGlobal()){
       const auto *Callee = dyn_cast<const Function>(MO.getGlobal());
       if (Callee != nullptr) {

@@ -124,7 +124,7 @@ static bool hasUndefSource(AnyMemTransferInst *MI) {
 // If can find actual type, return it.
 // Others, return nullptr.
 static Type *getMatchedType(Value *V, const DataLayout &DL, uint64_t Size) {
-  APInt Offset(64, 0);
+  APInt Offset(DL.getIndexSizeInBits(0u), 0);
   auto *Base = V->stripAndAccumulateConstantOffsets(DL, Offset, true);
   Type *Ty = Base->getType()->getNonOpaquePointerElementType();
   if (Ty->isPointerTy()) {

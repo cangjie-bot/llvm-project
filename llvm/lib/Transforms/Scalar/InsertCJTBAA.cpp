@@ -414,8 +414,8 @@ static bool IsArrayLayoutElement(TBAAProcessUnit &TBAAUnit,
       GEP->getNumIndices() > 4) {
     return false;
   }
-  APInt Offset(64, SL->getElementOffset(1));
-  APInt SubOffset(64, -1);
+  APInt Offset(TBAAUnit.DL.getIndexSizeInBits(0u), SL->getElementOffset(1));
+  APInt SubOffset(TBAAUnit.DL.getIndexSizeInBits(0u), -1);
   // 3: ArrayLayout.xxx = type { %ArrayBase, [0 * xxx] },
   // indices of gep is 0, 1 and x
   if (GEP->getNumIndices() == 3) {
@@ -439,8 +439,9 @@ static bool IsArrayLayoutElement(TBAAProcessUnit &TBAAUnit,
   if (Index3 == nullptr || ArrayET == nullptr) {
     return false;
   }
-  SubOffset = APInt(64, TBAAUnit.DL.getStructLayout(ArrayET)->getElementOffset(
-                            Index3->getZExtValue()));
+  SubOffset = APInt(TBAAUnit.DL.getIndexSizeInBits(0u),
+                    TBAAUnit.DL.getStructLayout(ArrayET)->getElementOffset(
+                        Index3->getZExtValue()));
   return insertArrayLayoutMeta(TBAAUnit, Offset, SubOffset);
 }
 
@@ -600,7 +601,7 @@ bool llvm::prepareCJTBAA(const DataLayout &DL, Instruction *I, Value *OP,
   auto GEP = dyn_cast<GEPOperator>(SrcOP);
   TBAAProcessUnit TBAAUnit(DL, MDB, Context, I, nullptr, DstTy, GEP, false,
                            OriginOff);
-  APInt Offset(64, 0);
+  APInt Offset(DL.getIndexSizeInBits(0u), 0);
   bool CanAccuOffset = true;
   if (!getSrcTyAndOffset(TBAAUnit, SrcOP, Offset, CanAccuOffset)) {
     return tryToInsertTBAAForGEPGEP(TBAAUnit);
@@ -660,7 +661,7 @@ static MDNode *getTBAAStructTypeNode(Value *I, const DataLayout &DL,
     // Ty1 maybe a sub struct of Ty2, and the tbaa of MDI is based on Ty1.
     // We want the tbaa based on the I's real type, so we need to check for
     // that.
-    APInt Offset(64, 0);
+    APInt Offset(DL.getIndexSizeInBits(0u), 0);
     auto *PtrBase = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
     // 1. I must be pointer base of memory instruction.
     if (PtrBase == I && MDI->hasMetadata(LLVMContext::MD_tbaa)) {
@@ -707,7 +708,7 @@ static MDNode *getInstStructTBAANode(const DataLayout &DL, Value *I) {
 // exact type instead of i8 addrspace(1) *, so that the type can be read from
 // the parent (base) tbaa, which can help the child instruction insert tbaa.
 static bool updateBySibling(const DataLayout &DL, Instruction *I, Value *Ptr) {
-  APInt Offset(64, 0);
+  APInt Offset(DL.getIndexSizeInBits(0u), 0);
   auto *BasePtr = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
   // {i64, [0 x %record.T]}
   // Sibling: getelementptr %base, 0, 0
