@@ -1,0 +1,1253 @@
+diff --git a/1.patch b/1.patch
+new file mode 100644
+index 000000000000..faddeaf7a483
+--- /dev/null
++++ b/1.patch
+@@ -0,0 +1,181 @@
++diff --git a/llvm/include/llvm/CodeGen/CodeGenPassBuilder.h b/llvm/include/llvm/CodeGen/CodeGenPassBuilder.h
++index c39890ff1c2f..47c712817a59 100644
++--- a/llvm/include/llvm/CodeGen/CodeGenPassBuilder.h
+++++ b/llvm/include/llvm/CodeGen/CodeGenPassBuilder.h
++@@ -26,6 +26,7 @@
++ #include "llvm/Analysis/TargetTransformInfo.h"
++ #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
++ #include "llvm/CodeGen/ExpandReductions.h"
+++#include "llvm/CodeGen/GlobalMergeFunctions.h"
++ #include "llvm/CodeGen/MachinePassManager.h"
++ #include "llvm/CodeGen/PreISelIntrinsicLowering.h"
++ #include "llvm/CodeGen/ReplaceWithVeclib.h"
++@@ -186,6 +187,14 @@ protected:
++       MPM.addPass(std::forward<PassT>(Pass));
++     }
++ 
+++    void flushFunctionPasses() {
+++      if (!AddingFunctionPasses || !*AddingFunctionPasses)
+++        return;
+++      MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+++      FPM = FunctionPassManager();
+++      AddingFunctionPasses = false;
+++    }
+++
++   private:
++     ModulePassManager &MPM;
++     FunctionPassManager FPM;
++@@ -675,6 +684,11 @@ void CodeGenPassBuilder<Derived>::addIRPasses(AddIRPass &addPass) const {
++   // Convert conditional moves to conditional jumps when profitable.
++   if (getOptLevel() != CodeGenOpt::None && !Opt.DisableSelectOptimize)
++     addPass(SelectOptimizePass());
+++
+++  if (Opt.EnableGlobalMergeFunc) {
+++    addPass.flushFunctionPasses();
+++    addPass(GlobalMergeFuncPass());
+++  }
++ }
++ 
++ /// Turn exception handling constructs into something the code generators can
++diff --git a/llvm/include/llvm/CodeGen/MachinePassRegistry.def b/llvm/include/llvm/CodeGen/MachinePassRegistry.def
++index 7748055f5d35..b8cbdf78a6c6 100644
++--- a/llvm/include/llvm/CodeGen/MachinePassRegistry.def
+++++ b/llvm/include/llvm/CodeGen/MachinePassRegistry.def
++@@ -23,6 +23,7 @@ MODULE_ANALYSIS("pass-instrumentation", PassInstrumentationAnalysis, (PIC))
++ #define MODULE_PASS(NAME, PASS_NAME, CONSTRUCTOR)
++ #endif
++ MODULE_PASS("pre-isel-intrinsic-lowering", PreISelIntrinsicLoweringPass, ())
+++MODULE_PASS("global-merge-func", GlobalMergeFuncPass, ())
++ #undef MODULE_PASS
++ 
++ #ifndef FUNCTION_ANALYSIS
++diff --git a/llvm/include/llvm/CodeGen/Passes.h b/llvm/include/llvm/CodeGen/Passes.h
++index 85fb0e1b1a5c..61bd8afcf46d 100644
++--- a/llvm/include/llvm/CodeGen/Passes.h
+++++ b/llvm/include/llvm/CodeGen/Passes.h
++@@ -454,6 +454,9 @@ namespace llvm {
++                               bool OnlyOptimizeForSize = false,
++                               bool MergeExternalByDefault = false);
++ 
+++  /// GlobalMergeFunc - This pass merges functions by parameterizing constants.
+++  ModulePass *createGlobalMergeFuncPass();
+++
++   /// This pass splits the stack into a safe stack and an unsafe stack to
++   /// protect against stack-based overflow vulnerabilities.
++   FunctionPass *createSafeStackPass();
++diff --git a/llvm/include/llvm/InitializePasses.h b/llvm/include/llvm/InitializePasses.h
++index b6df3bdc7928..da1d925b5f3e 100644
++--- a/llvm/include/llvm/InitializePasses.h
+++++ b/llvm/include/llvm/InitializePasses.h
++@@ -184,6 +184,7 @@ void initializeGVNLegacyPassPass(PassRegistry&);
++ void initializeGVNSinkLegacyPassPass(PassRegistry&);
++ void initializeGlobalDCELegacyPassPass(PassRegistry&);
++ void initializeGlobalMergePass(PassRegistry&);
+++void initializeGlobalMergeFuncPassWrapperPass(PassRegistry &);
++ void initializeGlobalOptLegacyPassPass(PassRegistry&);
++ void initializeGlobalSplitPass(PassRegistry&);
++ void initializeGlobalsAAWrapperPassPass(PassRegistry&);
++diff --git a/llvm/include/llvm/LinkAllPasses.h b/llvm/include/llvm/LinkAllPasses.h
++index e660ea05ddcf..b491884bf921 100644
++--- a/llvm/include/llvm/LinkAllPasses.h
+++++ b/llvm/include/llvm/LinkAllPasses.h
++@@ -103,6 +103,7 @@ namespace {
++       (void) llvm::createFunctionInliningPass();
++       (void) llvm::createAlwaysInlinerLegacyPass();
++       (void) llvm::createGlobalDCEPass();
+++      (void) llvm::createGlobalMergeFuncPass();
++       (void) llvm::createGlobalOptimizerPass();
++       (void) llvm::createGlobalsAAWrapperPass();
++       (void) llvm::createGuardWideningPass();
++diff --git a/llvm/include/llvm/Target/CGPassBuilderOption.h b/llvm/include/llvm/Target/CGPassBuilderOption.h
++index 7a6d91061701..21641bfc3203 100644
++--- a/llvm/include/llvm/Target/CGPassBuilderOption.h
+++++ b/llvm/include/llvm/Target/CGPassBuilderOption.h
++@@ -33,6 +33,7 @@ struct CGPassBuilderOption {
++   bool DisableVerify = false;
++   bool EnableImplicitNullChecks = false;
++   bool EnableBlockPlacementStats = false;
+++  bool EnableGlobalMergeFunc = false;
++   bool MISchedPostRA = false;
++   bool EarlyLiveIntervals = false;
++ 
++diff --git a/llvm/lib/CodeGen/CMakeLists.txt b/llvm/lib/CodeGen/CMakeLists.txt
++index 1868e405ba07..8ece7269d0a5 100644
++--- a/llvm/lib/CodeGen/CMakeLists.txt
+++++ b/llvm/lib/CodeGen/CMakeLists.txt
++@@ -68,6 +68,7 @@ add_llvm_component_library(LLVMCodeGen
++   GCMetadataPrinter.cpp
++   GCRootLowering.cpp
++   GlobalMerge.cpp
+++  GlobalMergeFunctions.cpp
++   HardwareLoops.cpp
++   IfConversion.cpp
++   ImplicitNullChecks.cpp
++diff --git a/llvm/lib/CodeGen/TargetPassConfig.cpp b/llvm/lib/CodeGen/TargetPassConfig.cpp
++index ec46d90f13b3..ec26bd705662 100644
++--- a/llvm/lib/CodeGen/TargetPassConfig.cpp
+++++ b/llvm/lib/CodeGen/TargetPassConfig.cpp
++@@ -143,6 +143,9 @@ static cl::opt<RunOutliner> EnableMachineOutliner(
++                           "Disable all outlining"),
++                // Sentinel value for unspecified option.
++                clEnumValN(RunOutliner::AlwaysOutline, "", "")));
+++static cl::opt<bool> EnableGlobalMergeFunc(
+++    "enable-global-merge-func", cl::Hidden,
+++    cl::desc("Enable global merge functions that are based on hash function"));
++ // Disable the pass to fix unwind information. Whether the pass is included in
++ // the pipeline is controlled via the target options, this option serves as
++ // manual override.
++@@ -500,6 +503,7 @@ CGPassBuilderOption llvm::getCGPassBuilderOption() {
++ 
++   SET_BOOLEAN_OPTION(EarlyLiveIntervals)
++   SET_BOOLEAN_OPTION(EnableBlockPlacementStats)
+++  SET_BOOLEAN_OPTION(EnableGlobalMergeFunc)
++   SET_BOOLEAN_OPTION(EnableImplicitNullChecks)
++   SET_BOOLEAN_OPTION(EnableMachineOutliner)
++   SET_BOOLEAN_OPTION(MISchedPostRA)
++@@ -955,6 +959,9 @@ void TargetPassConfig::addIRPasses() {
++   // Convert conditional moves to conditional jumps when profitable.
++   if (getOptLevel() != CodeGenOpt::None && !DisableSelectOptimize)
++     addPass(createSelectOptimizePass());
+++
+++  if (EnableGlobalMergeFunc)
+++    addPass(createGlobalMergeFuncPass());
++ }
++ 
++ /// Turn exception handling constructs into something the code generators can
++diff --git a/llvm/lib/Passes/CMakeLists.txt b/llvm/lib/Passes/CMakeLists.txt
++index c2992aa79c35..71025c05ec54 100644
++--- a/llvm/lib/Passes/CMakeLists.txt
+++++ b/llvm/lib/Passes/CMakeLists.txt
++@@ -17,6 +17,7 @@ add_llvm_component_library(LLVMPasses
++   AggressiveInstCombine
++   Analysis
++   CJCFI
+++  CodeGen
++   CjcObf
++   Core
++   Coroutines
++diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
++index a1fa7709616c..ae2e7188257e 100644
++--- a/llvm/lib/Passes/PassBuilder.cpp
+++++ b/llvm/lib/Passes/PassBuilder.cpp
++@@ -74,6 +74,7 @@
++ #include "llvm/Analysis/TargetLibraryInfo.h"
++ #include "llvm/Analysis/TargetTransformInfo.h"
++ #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
+++#include "llvm/CodeGen/GlobalMergeFunctions.h"
++ #include "llvm/IR/Dominators.h"
++ #include "llvm/IR/IRPrintingPasses.h"
++ #include "llvm/IR/PassManager.h"
++diff --git a/llvm/lib/Passes/PassRegistry.def b/llvm/lib/Passes/PassRegistry.def
++index 7854c507c3c8..a61ac68d732f 100644
++--- a/llvm/lib/Passes/PassRegistry.def
+++++ b/llvm/lib/Passes/PassRegistry.def
++@@ -85,6 +85,7 @@ MODULE_PASS("lower-global-dtors", LowerGlobalDtorsPass())
++ MODULE_PASS("lowertypetests", LowerTypeTestsPass())
++ MODULE_PASS("metarenamer", MetaRenamerPass())
++ MODULE_PASS("mergefunc", MergeFunctionsPass())
+++MODULE_PASS("global-merge-func", GlobalMergeFuncPass())
++ MODULE_PASS("name-anon-globals", NameAnonGlobalPass())
++ MODULE_PASS("no-op-module", NoOpModulePass())
++ MODULE_PASS("objc-arc-apelim", ObjCARCAPElimPass())
+diff --git a/llvm/include/llvm/CodeGen/CodeGenPassBuilder.h b/llvm/include/llvm/CodeGen/CodeGenPassBuilder.h
+index c39890ff1c2f..47c712817a59 100644
+--- a/llvm/include/llvm/CodeGen/CodeGenPassBuilder.h
++++ b/llvm/include/llvm/CodeGen/CodeGenPassBuilder.h
+@@ -26,6 +26,7 @@
+ #include "llvm/Analysis/TargetTransformInfo.h"
+ #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
+ #include "llvm/CodeGen/ExpandReductions.h"
++#include "llvm/CodeGen/GlobalMergeFunctions.h"
+ #include "llvm/CodeGen/MachinePassManager.h"
+ #include "llvm/CodeGen/PreISelIntrinsicLowering.h"
+ #include "llvm/CodeGen/ReplaceWithVeclib.h"
+@@ -186,6 +187,14 @@ protected:
+       MPM.addPass(std::forward<PassT>(Pass));
+     }
+ 
++    void flushFunctionPasses() {
++      if (!AddingFunctionPasses || !*AddingFunctionPasses)
++        return;
++      MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
++      FPM = FunctionPassManager();
++      AddingFunctionPasses = false;
++    }
++
+   private:
+     ModulePassManager &MPM;
+     FunctionPassManager FPM;
+@@ -675,6 +684,11 @@ void CodeGenPassBuilder<Derived>::addIRPasses(AddIRPass &addPass) const {
+   // Convert conditional moves to conditional jumps when profitable.
+   if (getOptLevel() != CodeGenOpt::None && !Opt.DisableSelectOptimize)
+     addPass(SelectOptimizePass());
++
++  if (Opt.EnableGlobalMergeFunc) {
++    addPass.flushFunctionPasses();
++    addPass(GlobalMergeFuncPass());
++  }
+ }
+ 
+ /// Turn exception handling constructs into something the code generators can
+diff --git a/llvm/include/llvm/CodeGen/GlobalMergeFunctions.h b/llvm/include/llvm/CodeGen/GlobalMergeFunctions.h
+new file mode 100644
+index 000000000000..cc399cd3936b
+--- /dev/null
++++ b/llvm/include/llvm/CodeGen/GlobalMergeFunctions.h
+@@ -0,0 +1,52 @@
++//===------ GlobalMergeFunctions.h - Global merge functions -----*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This pass implements a function merging mechanism that parameterizes
++// differing constants to enable identical code folding.
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLVM_CODEGEN_GLOBALMERGEFUNCTIONS_H
++#define LLVM_CODEGEN_GLOBALMERGEFUNCTIONS_H
++
++#include "llvm/IR/Module.h"
++#include "llvm/IR/PassManager.h"
++#include "llvm/Pass.h"
++
++namespace llvm {
++
++class ModuleSummaryIndex;
++
++/// GlobalMergeFunc is a ModulePass that merges functions with matching
++/// structural hashes by parameterizing constant differences.
++class GlobalMergeFunc {
++  const ModuleSummaryIndex *Index;
++
++public:
++  /// The suffix used to identify the merged function that parameterizes
++  /// the constant values. Note that the original function, without this suffix,
++  /// becomes a thunk supplying contexts to the merged function via parameters.
++  static constexpr char MergingInstanceSuffix[] = ".Tgm";
++
++  explicit GlobalMergeFunc(const ModuleSummaryIndex *Index) : Index(Index) {}
++
++  bool run(Module &M);
++};
++
++/// Global function merging pass for new pass manager.
++struct GlobalMergeFuncPass : public PassInfoMixin<GlobalMergeFuncPass> {
++  const ModuleSummaryIndex *ImportSummary = nullptr;
++  GlobalMergeFuncPass() = default;
++  explicit GlobalMergeFuncPass(const ModuleSummaryIndex *ImportSummary)
++      : ImportSummary(ImportSummary) {}
++  PreservedAnalyses run(Module &M, ModuleAnalysisManager &);
++};
++
++} // end namespace llvm
++
++#endif // LLVM_CODEGEN_GLOBALMERGEFUNCTIONS_H
+diff --git a/llvm/include/llvm/CodeGen/MachinePassRegistry.def b/llvm/include/llvm/CodeGen/MachinePassRegistry.def
+index 7748055f5d35..b8cbdf78a6c6 100644
+--- a/llvm/include/llvm/CodeGen/MachinePassRegistry.def
++++ b/llvm/include/llvm/CodeGen/MachinePassRegistry.def
+@@ -23,6 +23,7 @@ MODULE_ANALYSIS("pass-instrumentation", PassInstrumentationAnalysis, (PIC))
+ #define MODULE_PASS(NAME, PASS_NAME, CONSTRUCTOR)
+ #endif
+ MODULE_PASS("pre-isel-intrinsic-lowering", PreISelIntrinsicLoweringPass, ())
++MODULE_PASS("global-merge-func", GlobalMergeFuncPass, ())
+ #undef MODULE_PASS
+ 
+ #ifndef FUNCTION_ANALYSIS
+diff --git a/llvm/include/llvm/CodeGen/Passes.h b/llvm/include/llvm/CodeGen/Passes.h
+index 85fb0e1b1a5c..61bd8afcf46d 100644
+--- a/llvm/include/llvm/CodeGen/Passes.h
++++ b/llvm/include/llvm/CodeGen/Passes.h
+@@ -454,6 +454,9 @@ namespace llvm {
+                               bool OnlyOptimizeForSize = false,
+                               bool MergeExternalByDefault = false);
+ 
++  /// GlobalMergeFunc - This pass merges functions by parameterizing constants.
++  ModulePass *createGlobalMergeFuncPass();
++
+   /// This pass splits the stack into a safe stack and an unsafe stack to
+   /// protect against stack-based overflow vulnerabilities.
+   FunctionPass *createSafeStackPass();
+diff --git a/llvm/include/llvm/InitializePasses.h b/llvm/include/llvm/InitializePasses.h
+index b6df3bdc7928..da1d925b5f3e 100644
+--- a/llvm/include/llvm/InitializePasses.h
++++ b/llvm/include/llvm/InitializePasses.h
+@@ -184,6 +184,7 @@ void initializeGVNLegacyPassPass(PassRegistry&);
+ void initializeGVNSinkLegacyPassPass(PassRegistry&);
+ void initializeGlobalDCELegacyPassPass(PassRegistry&);
+ void initializeGlobalMergePass(PassRegistry&);
++void initializeGlobalMergeFuncPassWrapperPass(PassRegistry &);
+ void initializeGlobalOptLegacyPassPass(PassRegistry&);
+ void initializeGlobalSplitPass(PassRegistry&);
+ void initializeGlobalsAAWrapperPassPass(PassRegistry&);
+diff --git a/llvm/include/llvm/LinkAllPasses.h b/llvm/include/llvm/LinkAllPasses.h
+index e660ea05ddcf..b491884bf921 100644
+--- a/llvm/include/llvm/LinkAllPasses.h
++++ b/llvm/include/llvm/LinkAllPasses.h
+@@ -103,6 +103,7 @@ namespace {
+       (void) llvm::createFunctionInliningPass();
+       (void) llvm::createAlwaysInlinerLegacyPass();
+       (void) llvm::createGlobalDCEPass();
++      (void) llvm::createGlobalMergeFuncPass();
+       (void) llvm::createGlobalOptimizerPass();
+       (void) llvm::createGlobalsAAWrapperPass();
+       (void) llvm::createGuardWideningPass();
+diff --git a/llvm/include/llvm/Target/CGPassBuilderOption.h b/llvm/include/llvm/Target/CGPassBuilderOption.h
+index 7a6d91061701..21641bfc3203 100644
+--- a/llvm/include/llvm/Target/CGPassBuilderOption.h
++++ b/llvm/include/llvm/Target/CGPassBuilderOption.h
+@@ -33,6 +33,7 @@ struct CGPassBuilderOption {
+   bool DisableVerify = false;
+   bool EnableImplicitNullChecks = false;
+   bool EnableBlockPlacementStats = false;
++  bool EnableGlobalMergeFunc = false;
+   bool MISchedPostRA = false;
+   bool EarlyLiveIntervals = false;
+ 
+diff --git a/llvm/lib/CodeGen/CMakeLists.txt b/llvm/lib/CodeGen/CMakeLists.txt
+index 1868e405ba07..8ece7269d0a5 100644
+--- a/llvm/lib/CodeGen/CMakeLists.txt
++++ b/llvm/lib/CodeGen/CMakeLists.txt
+@@ -68,6 +68,7 @@ add_llvm_component_library(LLVMCodeGen
+   GCMetadataPrinter.cpp
+   GCRootLowering.cpp
+   GlobalMerge.cpp
++  GlobalMergeFunctions.cpp
+   HardwareLoops.cpp
+   IfConversion.cpp
+   ImplicitNullChecks.cpp
+diff --git a/llvm/lib/CodeGen/GlobalMergeFunctions.cpp b/llvm/lib/CodeGen/GlobalMergeFunctions.cpp
+new file mode 100644
+index 000000000000..3975e2562fc9
+--- /dev/null
++++ b/llvm/lib/CodeGen/GlobalMergeFunctions.cpp
+@@ -0,0 +1,821 @@
++//===---- GlobalMergeFunctions.cpp - Global merge functions -------*- C++ -===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This pass implements the global merge function pass.
++//
++//===----------------------------------------------------------------------===//
++
++#include "llvm/CodeGen/GlobalMergeFunctions.h"
++#include "llvm/ADT/ArrayRef.h"
++#include "llvm/ADT/DenseMap.h"
++#include "llvm/ADT/MapVector.h"
++#include "llvm/ADT/STLExtras.h"
++#include "llvm/ADT/SmallPtrSet.h"
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/ADT/Statistic.h"
++#include "llvm/Analysis/ModuleSummaryAnalysis.h"
++#include "llvm/CodeGen/Passes.h"
++#include "llvm/IR/CFG.h"
++#include "llvm/IR/Constants.h"
++#include "llvm/IR/Function.h"
++#include "llvm/IR/IRBuilder.h"
++#include "llvm/IR/InstrTypes.h"
++#include "llvm/IR/Instructions.h"
++#include "llvm/IR/Module.h"
++#include "llvm/InitializePasses.h"
++#include "llvm/Pass.h"
++#include "llvm/Support/CommandLine.h"
++#include "llvm/Support/Debug.h"
++#include "llvm/Support/raw_ostream.h"
++#include "llvm/Support/xxhash.h"
++#include <cstdint>
++#include <functional>
++#include <limits>
++#include <map>
++#include <memory>
++#include <utility>
++#include <vector>
++
++#define DEBUG_TYPE "global-merge-func"
++
++using namespace llvm;
++
++STATISTIC(NumMergedFunctions,
++          "Number of functions that are actually merged using function hash");
++STATISTIC(NumAnalyzedModues, "Number of modules that are analyzed");
++STATISTIC(NumAnalyzedFunctions, "Number of functions that are analyzed");
++STATISTIC(NumEligibleFunctions, "Number of functions that are eligible");
++
++static cl::opt<unsigned>
++    GlobalMergingMinMerges("global-merging-min-merges",
++                           cl::desc("Minimum number of similar functions with "
++                                    "the same hash required for merging."),
++                           cl::init(2), cl::Hidden);
++static cl::opt<unsigned> GlobalMergingMinInstrs(
++    "global-merging-min-instrs",
++    cl::desc("The minimum instruction count required when merging functions."),
++    cl::init(1), cl::Hidden);
++static cl::opt<unsigned> GlobalMergingMaxParams(
++    "global-merging-max-params",
++    cl::desc(
++        "The maximum number of parameters allowed when merging functions."),
++    cl::init(std::numeric_limits<unsigned>::max()), cl::Hidden);
++static cl::opt<bool> GlobalMergingSkipNoParams(
++    "global-merging-skip-no-params",
++    cl::desc("Skip merging functions with no parameters."), cl::init(true),
++    cl::Hidden);
++
++namespace {
++
++using stable_hash = uint64_t;
++using IndexPair = std::pair<unsigned, unsigned>;
++using IndexInstrMap = MapVector<unsigned, Instruction *>;
++using IndexOperandHashMapType = DenseMap<IndexPair, stable_hash>;
++using IgnoreOperandFunc = std::function<bool(const Instruction *, unsigned)>;
++
++// A vector of locations (the pair of (instruction, operand) indices) reachable
++// from a parameter.
++using ParamLocs = SmallVector<IndexPair, 4>;
++// A vector of parameters.
++using ParamLocsVecTy = SmallVector<ParamLocs, 8>;
++
++struct FunctionHashInfo {
++  stable_hash FunctionHash;
++  std::unique_ptr<IndexInstrMap> IndexInstruction;
++  std::unique_ptr<IndexOperandHashMapType> IndexOperandHashMap;
++
++  FunctionHashInfo(stable_hash FuntionHash,
++                   std::unique_ptr<IndexInstrMap> IndexInstruction,
++                   std::unique_ptr<IndexOperandHashMapType> IndexOperandHashMap)
++      : FunctionHash(FuntionHash),
++        IndexInstruction(std::move(IndexInstruction)),
++        IndexOperandHashMap(std::move(IndexOperandHashMap)) {}
++};
++
++static stable_hash stableHashCombine(ArrayRef<stable_hash> Hashes) {
++  const auto *Ptr = reinterpret_cast<const uint8_t *>(Hashes.data());
++  size_t Size = Hashes.size() * sizeof(stable_hash);
++  return xxHash64(ArrayRef<uint8_t>(Ptr, Size));
++}
++
++static StringRef getStableName(StringRef Name) {
++  StringRef S0 = Name.rsplit(".content.").second;
++  if (!S0.empty())
++    return S0;
++  StringRef P1 = Name.rsplit(".llvm.").first;
++  return P1.rsplit(".__uniq.").first;
++}
++
++static stable_hash stableHashName(StringRef Name) {
++  return xxHash64(getStableName(Name));
++}
++
++class StructuralHashImpl {
++  stable_hash Hash = 4;
++  bool DetailedHash;
++
++  static constexpr stable_hash BlockHeaderHash = 45798;
++  static constexpr stable_hash FunctionHeaderHash = 0x62642d6b6b2d6b72;
++
++  IgnoreOperandFunc IgnoreOp = nullptr;
++  std::unique_ptr<IndexInstrMap> IndexInstruction = nullptr;
++  std::unique_ptr<IndexOperandHashMapType> IndexOperandHashMap = nullptr;
++
++  DenseMap<const Value *, unsigned> ValueToId;
++
++  static stable_hash hashType(Type *ValueType) {
++    SmallVector<stable_hash, 2> Hashes;
++    Hashes.emplace_back(ValueType->getTypeID());
++    if (ValueType->isIntegerTy())
++      Hashes.emplace_back(ValueType->getIntegerBitWidth());
++    return stableHashCombine(Hashes);
++  }
++
++  static stable_hash hashAPInt(const APInt &I) {
++    SmallVector<stable_hash, 8> Hashes;
++    Hashes.emplace_back(I.getBitWidth());
++    auto RawVals = ArrayRef<uint64_t>(I.getRawData(), I.getNumWords());
++    Hashes.append(RawVals.begin(), RawVals.end());
++    return stableHashCombine(Hashes);
++  }
++
++  static stable_hash hashAPFloat(const APFloat &F) {
++    return hashAPInt(F.bitcastToAPInt());
++  }
++
++  static stable_hash hashGlobalValue(const GlobalValue *GV) {
++    if (!GV->hasName())
++      return 0;
++    return stableHashName(GV->getName());
++  }
++
++  static stable_hash hashGlobalVariable(const GlobalVariable &GVar) {
++    if (!GVar.hasInitializer())
++      return hashGlobalValue(&GVar);
++
++    if (GVar.getName().startswith(".str")) {
++      auto *C = GVar.getInitializer();
++      if (const auto *Seq = dyn_cast<ConstantDataSequential>(C))
++        if (Seq->isString())
++          return stableHashName(Seq->getAsString());
++    }
++
++    static constexpr const char *SectionNames[] = {
++        "__cfstring",      "__cstring",      "__objc_classrefs",
++        "__objc_methname", "__objc_selrefs",
++    };
++    if (GVar.hasSection()) {
++      StringRef SectionName = GVar.getSection();
++      for (const char *Name : SectionNames)
++        if (SectionName.contains(Name))
++          return hashConstant(GVar.getInitializer());
++    }
++
++    return hashGlobalValue(&GVar);
++  }
++
++  static stable_hash hashConstant(const Constant *C) {
++    SmallVector<stable_hash, 8> Hashes;
++    Hashes.emplace_back(hashType(C->getType()));
++
++    if (C->isNullValue()) {
++      Hashes.emplace_back(static_cast<stable_hash>('N'));
++      return stableHashCombine(Hashes);
++    }
++
++    if (auto *GVar = dyn_cast<GlobalVariable>(C)) {
++      Hashes.emplace_back(hashGlobalVariable(*GVar));
++      return stableHashCombine(Hashes);
++    }
++
++    if (auto *G = dyn_cast<GlobalValue>(C)) {
++      Hashes.emplace_back(hashGlobalValue(G));
++      return stableHashCombine(Hashes);
++    }
++
++    if (const auto *Seq = dyn_cast<ConstantDataSequential>(C)) {
++      if (Seq->isString()) {
++        Hashes.emplace_back(stableHashName(Seq->getAsString()));
++        return stableHashCombine(Hashes);
++      }
++    }
++
++    switch (C->getValueID()) {
++    case Value::ConstantIntVal: {
++      const APInt &Int = cast<ConstantInt>(C)->getValue();
++      Hashes.emplace_back(hashAPInt(Int));
++      return stableHashCombine(Hashes);
++    }
++    case Value::ConstantFPVal: {
++      const APFloat &APF = cast<ConstantFP>(C)->getValueAPF();
++      Hashes.emplace_back(hashAPFloat(APF));
++      return stableHashCombine(Hashes);
++    }
++    case Value::ConstantArrayVal:
++    case Value::ConstantStructVal:
++    case Value::ConstantVectorVal:
++    case Value::ConstantExprVal: {
++      for (const auto &Op : C->operands())
++        Hashes.emplace_back(hashConstant(cast<Constant>(Op)));
++      return stableHashCombine(Hashes);
++    }
++    case Value::BlockAddressVal: {
++      const BlockAddress *BA = cast<BlockAddress>(C);
++      Hashes.emplace_back(hashGlobalValue(BA->getFunction()));
++      return stableHashCombine(Hashes);
++    }
++    case Value::DSOLocalEquivalentVal: {
++      const auto *Equiv = cast<DSOLocalEquivalent>(C);
++      Hashes.emplace_back(hashGlobalValue(Equiv->getGlobalValue()));
++      return stableHashCombine(Hashes);
++    }
++    default:
++      return stableHashCombine(Hashes);
++    }
++  }
++
++  stable_hash hashValue(Value *V) {
++    if (Constant *C = dyn_cast<Constant>(V))
++      return hashConstant(C);
++
++    SmallVector<stable_hash, 2> Hashes;
++    if (Argument *Arg = dyn_cast<Argument>(V))
++      Hashes.emplace_back(Arg->getArgNo());
++
++    auto It = ValueToId.try_emplace(V, ValueToId.size()).first;
++    Hashes.emplace_back(It->second);
++    return stableHashCombine(Hashes);
++  }
++
++  stable_hash hashOperand(Value *Operand) {
++    SmallVector<stable_hash, 2> Hashes;
++    Hashes.emplace_back(hashType(Operand->getType()));
++    Hashes.emplace_back(hashValue(Operand));
++    return stableHashCombine(Hashes);
++  }
++
++  stable_hash hashInstruction(const Instruction &Inst) {
++    SmallVector<stable_hash, 8> Hashes;
++    Hashes.emplace_back(Inst.getOpcode());
++
++    if (!DetailedHash)
++      return stableHashCombine(Hashes);
++
++    Hashes.emplace_back(hashType(Inst.getType()));
++    if (const auto *Cmp = dyn_cast<CmpInst>(&Inst))
++      Hashes.emplace_back(Cmp->getPredicate());
++
++    unsigned InstIdx = 0;
++    if (IndexInstruction) {
++      InstIdx = IndexInstruction->size();
++      (*IndexInstruction)[InstIdx] = const_cast<Instruction *>(&Inst);
++    }
++
++    for (unsigned OpndIdx = 0; OpndIdx < Inst.getNumOperands(); ++OpndIdx) {
++      Value *Op = Inst.getOperand(OpndIdx);
++      auto OpndHash = hashOperand(Op);
++      if (IgnoreOp && IgnoreOp(&Inst, OpndIdx)) {
++        assert(IndexOperandHashMap);
++        IndexOperandHashMap->try_emplace({InstIdx, OpndIdx}, OpndHash);
++      } else {
++        Hashes.emplace_back(OpndHash);
++      }
++    }
++
++    return stableHashCombine(Hashes);
++  }
++
++  void update(const Function &F) {
++    if (F.isDeclaration())
++      return;
++
++    SmallVector<stable_hash, 16> Hashes;
++    Hashes.emplace_back(Hash);
++    Hashes.emplace_back(FunctionHeaderHash);
++    Hashes.emplace_back(F.isVarArg());
++    Hashes.emplace_back(F.arg_size());
++
++    SmallVector<const BasicBlock *, 8> BBs;
++    SmallPtrSet<const BasicBlock *, 16> VisitedBBs;
++
++    BBs.push_back(&F.getEntryBlock());
++    VisitedBBs.insert(BBs[0]);
++    while (!BBs.empty()) {
++      const BasicBlock *BB = BBs.pop_back_val();
++
++      Hashes.emplace_back(BlockHeaderHash);
++      for (const Instruction &Inst : *BB)
++        Hashes.emplace_back(hashInstruction(Inst));
++
++      for (const BasicBlock *Succ : successors(BB))
++        if (VisitedBBs.insert(Succ).second)
++          BBs.push_back(Succ);
++    }
++
++    Hash = stableHashCombine(Hashes);
++  }
++
++public:
++  StructuralHashImpl() = delete;
++  explicit StructuralHashImpl(bool DetailedHash,
++                              IgnoreOperandFunc IgnoreOp = nullptr)
++      : DetailedHash(DetailedHash), IgnoreOp(IgnoreOp) {
++    if (IgnoreOp) {
++      IndexInstruction = std::make_unique<IndexInstrMap>();
++      IndexOperandHashMap = std::make_unique<IndexOperandHashMapType>();
++    }
++  }
++
++  stable_hash getHash() const { return Hash; }
++
++  std::unique_ptr<IndexInstrMap> takeIndexInstrMap() {
++    return std::move(IndexInstruction);
++  }
++
++  std::unique_ptr<IndexOperandHashMapType> takeIndexOperandHashMap() {
++    return std::move(IndexOperandHashMap);
++  }
++
++  void updateFunction(const Function &F) { update(F); }
++};
++
++static FunctionHashInfo
++structuralHashWithDifferences(const Function &F, IgnoreOperandFunc IgnoreOp) {
++  StructuralHashImpl H(/*DetailedHash=*/true, IgnoreOp);
++  H.updateFunction(F);
++  return FunctionHashInfo(H.getHash(), H.takeIndexInstrMap(),
++                          H.takeIndexOperandHashMap());
++}
++
++struct FunctionInfo {
++  Function *F = nullptr;
++  FunctionHashInfo HashInfo;
++
++  FunctionInfo(Function *F, FunctionHashInfo &&HashInfo)
++      : F(F), HashInfo(std::move(HashInfo)) {}
++};
++
++struct FuncMergeInfo {
++  Function *F;
++  FunctionHashInfo *FHI;
++  FuncMergeInfo(Function *F, FunctionHashInfo *FHI) : F(F), FHI(FHI) {}
++};
++
++/// Returns true if the \p OpIdx operand of \p CI is the callee operand.
++static bool isCalleeOperand(const CallBase *CI, unsigned OpIdx) {
++  return &CI->getCalledOperandUse() == &CI->getOperandUse(OpIdx);
++}
++
++static bool canParameterizeCallOperand(const CallBase *CI, unsigned OpIdx) {
++  if (CI->isInlineAsm())
++    return false;
++  Function *Callee = CI->getCalledOperand()
++                         ? dyn_cast_or_null<Function>(
++                               CI->getCalledOperand()->stripPointerCasts())
++                         : nullptr;
++  if (Callee) {
++    if (Callee->isIntrinsic())
++      return false;
++    auto Name = Callee->getName();
++    if (Name.startswith("objc_msgSend$"))
++      return false;
++    if (Name.startswith("__dtrace"))
++      return false;
++  }
++  if (isCalleeOperand(CI, OpIdx)) {
++    if (CI->getOperandBundle(LLVMContext::OB_ptrauth))
++      return false;
++  } else {
++    if (CI->isOperandBundleOfType(LLVMContext::OB_clang_arc_attachedcall,
++                                  OpIdx))
++      return false;
++  }
++  return true;
++}
++
++/// Returns true if function \p F is eligible for merging.
++static bool isEligibleFunction(Function *F) {
++  if (F->isDeclaration())
++    return false;
++
++  if (F->hasFnAttribute(Attribute::NoMerge) ||
++      F->hasFnAttribute(Attribute::AlwaysInline))
++    return false;
++
++  if (F->hasAvailableExternallyLinkage())
++    return false;
++
++  if (F->getFunctionType()->isVarArg())
++    return false;
++
++  if (F->getCallingConv() == CallingConv::SwiftTail)
++    return false;
++
++  // Unnamed functions are skipped for simplicity.
++  if (!F->hasName())
++    return false;
++
++  for (const BasicBlock &BB : *F) {
++    for (const Instruction &I : BB) {
++      const auto *CB = dyn_cast<CallBase>(&I);
++      if (CB && CB->isMustTailCall())
++        return false;
++    }
++  }
++
++  return true;
++}
++
++static bool isEligibleInstructionForConstantSharing(const Instruction *I) {
++  switch (I->getOpcode()) {
++  case Instruction::Load:
++  case Instruction::Store:
++  case Instruction::Call:
++  case Instruction::Invoke:
++    return true;
++  default:
++    return false;
++  }
++}
++
++// This function takes an instruction, \p I, and an operand index, \p OpIdx.
++// It returns true if the operand should be ignored in the hash computation.
++// If \p OpIdx is out of range based on the other instruction context, it cannot
++// be ignored.
++static bool ignoreOp(const Instruction *I, unsigned OpIdx) {
++  if (OpIdx >= I->getNumOperands())
++    return false;
++
++  if (!isEligibleInstructionForConstantSharing(I))
++    return false;
++
++  if (!isa<Constant>(I->getOperand(OpIdx)))
++    return false;
++
++  if (const auto *CI = dyn_cast<CallBase>(I))
++    return canParameterizeCallOperand(CI, OpIdx);
++
++  return true;
++}
++
++static Value *createAggregateCast(IRBuilder<> &Builder, Value *V,
++                                  Type *DestTy) {
++  Type *SrcTy = V->getType();
++  if (SrcTy == DestTy)
++    return V;
++
++  if (SrcTy->isAggregateType()) {
++    unsigned NumElements;
++    if (SrcTy->isStructTy()) {
++      assert(DestTy->isStructTy() && "Expected StructType");
++      assert(SrcTy->getStructNumElements() == DestTy->getStructNumElements() &&
++             "Expected StructTypes with equal number of elements");
++      NumElements = SrcTy->getStructNumElements();
++    } else {
++      assert(SrcTy->isArrayTy() && DestTy->isArrayTy() && "Expected ArrayType");
++      assert(SrcTy->getArrayNumElements() == DestTy->getArrayNumElements() &&
++             "Expected ArrayTypes with equal number of elements");
++      NumElements = SrcTy->getArrayNumElements();
++    }
++
++    Value *Result = PoisonValue::get(DestTy);
++    for (unsigned I = 0; I < NumElements; ++I) {
++      Type *ElementTy = SrcTy->isStructTy() ? DestTy->getStructElementType(I)
++                                            : DestTy->getArrayElementType();
++      unsigned Indices[] = {I};
++      Value *Element = createAggregateCast(
++          Builder, Builder.CreateExtractValue(V, Indices), ElementTy);
++      Result = Builder.CreateInsertValue(Result, Element, Indices);
++    }
++    return Result;
++  }
++
++  return Builder.CreateBitOrPointerCast(V, DestTy);
++}
++
++// Given the func info, and the parameterized locations, create and return
++// a new merged function by replacing the original constants with the new
++// parameters.
++static Function *createMergedFunction(FuncMergeInfo &FI,
++                                      ArrayRef<Type *> ConstParamTypes,
++                                      const ParamLocsVecTy &ParamLocsVec) {
++  auto *MergedFunc = FI.F;
++  std::string NewFunctionName =
++      MergedFunc->getName().str() + GlobalMergeFunc::MergingInstanceSuffix;
++  auto *M = MergedFunc->getParent();
++  assert(!M->getFunction(NewFunctionName));
++
++  FunctionType *OrigTy = MergedFunc->getFunctionType();
++  SmallVector<Type *, 8> ParamTypes(OrigTy->param_begin(), OrigTy->param_end());
++  ParamTypes.append(ConstParamTypes.begin(), ConstParamTypes.end());
++  FunctionType *FuncType = FunctionType::get(OrigTy->getReturnType(),
++                                             ParamTypes, /*isVarArg=*/false);
++
++  Function *NewFunction =
++      Function::Create(FuncType, MergedFunc->getLinkage(), NewFunctionName);
++  if (auto *SP = MergedFunc->getSubprogram())
++    NewFunction->setSubprogram(SP);
++  NewFunction->copyAttributesFrom(MergedFunc);
++  NewFunction->setDLLStorageClass(GlobalValue::DefaultStorageClass);
++
++  NewFunction->setLinkage(GlobalValue::InternalLinkage);
++  NewFunction->addFnAttr(Attribute::NoInline);
++
++  M->getFunctionList().insert(MergedFunc->getIterator(), NewFunction);
++
++  NewFunction->splice(NewFunction->begin(), MergedFunc);
++
++  auto NewArgIter = NewFunction->arg_begin();
++  for (Argument &OrigArg : MergedFunc->args()) {
++    Argument &NewArg = *NewArgIter++;
++    OrigArg.replaceAllUsesWith(&NewArg);
++  }
++
++  unsigned NumOrigArgs = MergedFunc->arg_size();
++  for (unsigned ParamIdx = 0; ParamIdx < ParamLocsVec.size(); ++ParamIdx) {
++    Argument *NewArg = NewFunction->getArg(NumOrigArgs + ParamIdx);
++    for (const auto &Loc : ParamLocsVec[ParamIdx]) {
++      auto *Inst = FI.FHI->IndexInstruction->lookup(Loc.first);
++      auto *OrigC = Inst->getOperand(Loc.second);
++      if (OrigC->getType() != NewArg->getType()) {
++        IRBuilder<> Builder(Inst->getParent(), Inst->getIterator());
++        Inst->setOperand(
++            Loc.second,
++            createAggregateCast(Builder, NewArg, OrigC->getType()));
++      } else {
++        Inst->setOperand(Loc.second, NewArg);
++      }
++    }
++  }
++
++  return NewFunction;
++}
++
++// Given the original function (Thunk) and the merged function (ToFunc), create
++// a thunk to the merged function.
++static void createThunk(FuncMergeInfo &FI, ArrayRef<Constant *> Params,
++                        Function *ToFunc) {
++  auto *Thunk = FI.F;
++
++  assert(Thunk->arg_size() + Params.size() ==
++         ToFunc->getFunctionType()->getNumParams());
++  Thunk->dropAllReferences();
++
++  BasicBlock *BB = BasicBlock::Create(Thunk->getContext(), "", Thunk);
++  IRBuilder<> Builder(BB);
++
++  SmallVector<Value *, 8> Args;
++  unsigned ParamIdx = 0;
++  FunctionType *ToFuncTy = ToFunc->getFunctionType();
++
++  for (Argument &AI : Thunk->args()) {
++    Args.push_back(createAggregateCast(
++        Builder, &AI, ToFuncTy->getParamType(ParamIdx)));
++    ++ParamIdx;
++  }
++
++  for (auto *Param : Params) {
++    assert(ParamIdx < ToFuncTy->getNumParams());
++    Args.push_back(createAggregateCast(
++        Builder, Param, ToFuncTy->getParamType(ParamIdx)));
++    ++ParamIdx;
++  }
++
++  CallInst *CI = Builder.CreateCall(ToFunc, Args);
++  bool isSwiftTailCall = ToFunc->getCallingConv() == CallingConv::SwiftTail &&
++                         Thunk->getCallingConv() == CallingConv::SwiftTail;
++  CI->setTailCallKind(isSwiftTailCall ? llvm::CallInst::TCK_MustTail
++                                      : llvm::CallInst::TCK_Tail);
++  CI->setCallingConv(ToFunc->getCallingConv());
++  CI->setAttributes(ToFunc->getAttributes());
++  if (Thunk->getReturnType()->isVoidTy())
++    Builder.CreateRetVoid();
++  else
++    Builder.CreateRet(
++        createAggregateCast(Builder, CI, Thunk->getReturnType()));
++}
++
++static bool
++hasCompatibleIgnoredOps(const FunctionHashInfo &Ref,
++                        const FunctionHashInfo &Cand) {
++  if (Ref.IndexInstruction->size() != Cand.IndexInstruction->size())
++    return false;
++  if (Ref.IndexOperandHashMap->size() != Cand.IndexOperandHashMap->size())
++    return false;
++  for (const auto &Entry : *Ref.IndexOperandHashMap)
++    if (!Cand.IndexOperandHashMap->count(Entry.first))
++      return false;
++  return true;
++}
++
++static bool checkConstLocationCompatible(const FunctionHashInfo &FHI,
++                                         const ParamLocsVecTy &ParamLocsVec) {
++  for (const auto &ParamLocs : ParamLocsVec) {
++    bool HasOld = false;
++    stable_hash OldHash = 0;
++    Constant *OldConst = nullptr;
++    for (const auto &Loc : ParamLocs) {
++      auto *Inst = FHI.IndexInstruction->lookup(Loc.first);
++      auto *CurrConst = dyn_cast<Constant>(Inst->getOperand(Loc.second));
++      if (!CurrConst)
++        return false;
++      auto It = FHI.IndexOperandHashMap->find(Loc);
++      if (It == FHI.IndexOperandHashMap->end())
++        return false;
++      stable_hash CurrHash = It->second;
++      if (!HasOld) {
++        HasOld = true;
++        OldHash = CurrHash;
++        OldConst = CurrConst;
++      } else if (OldHash != CurrHash || OldConst != CurrConst) {
++        return false;
++      }
++    }
++  }
++  return true;
++}
++
++static ParamLocsVecTy computeParamInfo(ArrayRef<FunctionHashInfo *> Infos) {
++  std::map<std::vector<stable_hash>, ParamLocs> HashSeqToLocs;
++  const auto &Ref = *Infos[0];
++  unsigned FunctionCount = Infos.size();
++
++  for (const auto &Entry : *Ref.IndexOperandHashMap) {
++    const auto &Index = Entry.first;
++    std::vector<stable_hash> ConstHashSeq;
++    ConstHashSeq.reserve(FunctionCount);
++    ConstHashSeq.push_back(Entry.second);
++    bool Identical = true;
++    for (unsigned J = 1; J < FunctionCount; ++J) {
++      auto It = Infos[J]->IndexOperandHashMap->find(Index);
++      if (It == Infos[J]->IndexOperandHashMap->end())
++        return ParamLocsVecTy();
++      stable_hash H = It->second;
++      if (H != ConstHashSeq[0])
++        Identical = false;
++      ConstHashSeq.push_back(H);
++    }
++
++    if (Identical)
++      continue;
++
++    HashSeqToLocs[ConstHashSeq].push_back(Index);
++  }
++
++  ParamLocsVecTy ParamLocsVec;
++  for (auto &Entry : HashSeqToLocs)
++    ParamLocsVec.push_back(std::move(Entry.second));
++
++  llvm::sort(ParamLocsVec, [&](const ParamLocs &L, const ParamLocs &R) {
++    return L[0] < R[0];
++  });
++
++  return ParamLocsVec;
++}
++
++} // namespace
++
++constexpr char GlobalMergeFunc::MergingInstanceSuffix[];
++
++bool GlobalMergeFunc::run(Module &M) {
++  (void)Index;
++  DenseMap<stable_hash, SmallVector<FunctionInfo, 4>> HashToFuncs;
++
++  ++NumAnalyzedModues;
++  for (Function &Func : M) {
++    ++NumAnalyzedFunctions;
++    if (!isEligibleFunction(&Func))
++      continue;
++    ++NumEligibleFunctions;
++
++    auto FI = structuralHashWithDifferences(Func, ignoreOp);
++    HashToFuncs[FI.FunctionHash].emplace_back(&Func, std::move(FI));
++  }
++
++  bool Changed = false;
++  for (auto &Entry : HashToFuncs) {
++    auto &Funcs = Entry.second;
++    if (Funcs.size() < GlobalMergingMinMerges)
++      continue;
++
++    FunctionHashInfo &Ref = Funcs[0].HashInfo;
++    if (Ref.IndexInstruction->size() < GlobalMergingMinInstrs)
++      continue;
++
++    SmallVector<FunctionHashInfo *, 4> CompatibleInfos;
++    for (auto &FI : Funcs) {
++      if (!hasCompatibleIgnoredOps(Ref, FI.HashInfo))
++        continue;
++      CompatibleInfos.push_back(&FI.HashInfo);
++    }
++    if (CompatibleInfos.size() < GlobalMergingMinMerges)
++      continue;
++
++    ParamLocsVecTy ParamLocsVec = computeParamInfo(CompatibleInfos);
++    if (GlobalMergingSkipNoParams && ParamLocsVec.empty())
++      continue;
++    if (ParamLocsVec.size() > GlobalMergingMaxParams)
++      continue;
++
++    SmallVector<FuncMergeInfo, 4> MergeInfos;
++    for (auto &FI : Funcs) {
++      if (!hasCompatibleIgnoredOps(Ref, FI.HashInfo))
++        continue;
++      if (!checkConstLocationCompatible(FI.HashInfo, ParamLocsVec))
++        continue;
++      MergeInfos.emplace_back(FI.F, &FI.HashInfo);
++    }
++    if (MergeInfos.size() < GlobalMergingMinMerges)
++      continue;
++
++    LLVM_DEBUG(dbgs() << "[GlobalMergeFunc] Merging function count "
++                      << MergeInfos.size() << " for hash:  " << Entry.first
++                      << "\n");
++
++    for (auto &FMI : MergeInfos) {
++      Changed = true;
++
++      SmallVector<Constant *, 8> Params;
++      SmallVector<Type *, 8> ParamTypes;
++      for (const auto &ParamLocs : ParamLocsVec) {
++        auto &FirstLoc = ParamLocs[0];
++        auto *Inst = FMI.FHI->IndexInstruction->lookup(FirstLoc.first);
++        auto *Opnd = cast<Constant>(Inst->getOperand(FirstLoc.second));
++        Params.push_back(Opnd);
++        ParamTypes.push_back(Opnd->getType());
++      }
++
++      Function *MergedFunc =
++          createMergedFunction(FMI, ParamTypes, ParamLocsVec);
++
++      LLVM_DEBUG({
++        dbgs() << "[GlobalMergeFunc] Merged function generated from "
++               << FMI.F->getName() << ":\n";
++        MergedFunc->dump();
++      });
++
++      createThunk(FMI, Params, MergedFunc);
++      LLVM_DEBUG({
++        dbgs() << "[GlobalMergeFunc] Thunk generated: \n";
++        FMI.F->dump();
++      });
++      ++NumMergedFunctions;
++    }
++  }
++
++  return Changed;
++}
++
++namespace {
++
++class GlobalMergeFuncPassWrapper : public ModulePass {
++public:
++  static char ID;
++
++  GlobalMergeFuncPassWrapper();
++
++  void getAnalysisUsage(AnalysisUsage &AU) const override {
++    AU.addUsedIfAvailable<ImmutableModuleSummaryIndexWrapperPass>();
++    AU.setPreservesAll();
++    ModulePass::getAnalysisUsage(AU);
++  }
++
++  StringRef getPassName() const override { return "Global Merge Functions"; }
++
++  bool runOnModule(Module &M) override;
++};
++
++} // namespace
++
++char GlobalMergeFuncPassWrapper::ID = 0;
++INITIALIZE_PASS(GlobalMergeFuncPassWrapper, "global-merge-func",
++                "Global merge function pass", false, false)
++
++ModulePass *llvm::createGlobalMergeFuncPass() {
++  return new GlobalMergeFuncPassWrapper();
++}
++
++GlobalMergeFuncPassWrapper::GlobalMergeFuncPassWrapper() : ModulePass(ID) {
++  initializeGlobalMergeFuncPassWrapperPass(
++      *llvm::PassRegistry::getPassRegistry());
++}
++
++bool GlobalMergeFuncPassWrapper::runOnModule(Module &M) {
++  const ModuleSummaryIndex *Index = nullptr;
++  if (auto *IndexWrapperPass =
++          getAnalysisIfAvailable<ImmutableModuleSummaryIndexWrapperPass>())
++    Index = IndexWrapperPass->getIndex();
++
++  return GlobalMergeFunc(Index).run(M);
++}
++
++PreservedAnalyses GlobalMergeFuncPass::run(Module &M,
++                                           ModuleAnalysisManager &) {
++  bool Changed = GlobalMergeFunc(ImportSummary).run(M);
++  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
++}
+diff --git a/llvm/lib/CodeGen/TargetPassConfig.cpp b/llvm/lib/CodeGen/TargetPassConfig.cpp
+index ec46d90f13b3..ec26bd705662 100644
+--- a/llvm/lib/CodeGen/TargetPassConfig.cpp
++++ b/llvm/lib/CodeGen/TargetPassConfig.cpp
+@@ -143,6 +143,9 @@ static cl::opt<RunOutliner> EnableMachineOutliner(
+                           "Disable all outlining"),
+                // Sentinel value for unspecified option.
+                clEnumValN(RunOutliner::AlwaysOutline, "", "")));
++static cl::opt<bool> EnableGlobalMergeFunc(
++    "enable-global-merge-func", cl::Hidden,
++    cl::desc("Enable global merge functions that are based on hash function"));
+ // Disable the pass to fix unwind information. Whether the pass is included in
+ // the pipeline is controlled via the target options, this option serves as
+ // manual override.
+@@ -500,6 +503,7 @@ CGPassBuilderOption llvm::getCGPassBuilderOption() {
+ 
+   SET_BOOLEAN_OPTION(EarlyLiveIntervals)
+   SET_BOOLEAN_OPTION(EnableBlockPlacementStats)
++  SET_BOOLEAN_OPTION(EnableGlobalMergeFunc)
+   SET_BOOLEAN_OPTION(EnableImplicitNullChecks)
+   SET_BOOLEAN_OPTION(EnableMachineOutliner)
+   SET_BOOLEAN_OPTION(MISchedPostRA)
+@@ -955,6 +959,9 @@ void TargetPassConfig::addIRPasses() {
+   // Convert conditional moves to conditional jumps when profitable.
+   if (getOptLevel() != CodeGenOpt::None && !DisableSelectOptimize)
+     addPass(createSelectOptimizePass());
++
++  if (EnableGlobalMergeFunc)
++    addPass(createGlobalMergeFuncPass());
+ }
+ 
+ /// Turn exception handling constructs into something the code generators can
+diff --git a/llvm/lib/Passes/CMakeLists.txt b/llvm/lib/Passes/CMakeLists.txt
+index c2992aa79c35..71025c05ec54 100644
+--- a/llvm/lib/Passes/CMakeLists.txt
++++ b/llvm/lib/Passes/CMakeLists.txt
+@@ -17,6 +17,7 @@ add_llvm_component_library(LLVMPasses
+   AggressiveInstCombine
+   Analysis
+   CJCFI
++  CodeGen
+   CjcObf
+   Core
+   Coroutines
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index a1fa7709616c..ae2e7188257e 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -74,6 +74,7 @@
+ #include "llvm/Analysis/TargetLibraryInfo.h"
+ #include "llvm/Analysis/TargetTransformInfo.h"
+ #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
++#include "llvm/CodeGen/GlobalMergeFunctions.h"
+ #include "llvm/IR/Dominators.h"
+ #include "llvm/IR/IRPrintingPasses.h"
+ #include "llvm/IR/PassManager.h"
+diff --git a/llvm/lib/Passes/PassRegistry.def b/llvm/lib/Passes/PassRegistry.def
+index 7854c507c3c8..a61ac68d732f 100644
+--- a/llvm/lib/Passes/PassRegistry.def
++++ b/llvm/lib/Passes/PassRegistry.def
+@@ -85,6 +85,7 @@ MODULE_PASS("lower-global-dtors", LowerGlobalDtorsPass())
+ MODULE_PASS("lowertypetests", LowerTypeTestsPass())
+ MODULE_PASS("metarenamer", MetaRenamerPass())
+ MODULE_PASS("mergefunc", MergeFunctionsPass())
++MODULE_PASS("global-merge-func", GlobalMergeFuncPass())
+ MODULE_PASS("name-anon-globals", NameAnonGlobalPass())
+ MODULE_PASS("no-op-module", NoOpModulePass())
+ MODULE_PASS("objc-arc-apelim", ObjCARCAPElimPass())
