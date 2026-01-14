@@ -3267,12 +3267,15 @@ bool ValueObject::GetCangjieDynamicType(
     // "::" size is 2.
     pos = dynamic_name.find(":", pos + 2);
   }
+  pos = dynamic_name.find("/");
+  while (pos != std::string::npos) {
+    dynamic_name.replace(pos, 1, "::");
+    pos = dynamic_name.find("/", pos + 2);  // size of "::" is 2
+  }
   lldb_private::TypeList types;
   llvm::DenseSet<SymbolFile *> searched_symbol_files;
-  pos = dynamic_name.rfind(".ti");
   bool is_ti_type = false;
   if (!GetTypeName().GetStringRef().contains("E1$")) {
-    dynamic_name = dynamic_name.substr(0, pos);
     if (dynamic_name != GetTypeName().AsCString()) {
       is_ti_type = true;
     }
