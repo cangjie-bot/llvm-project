@@ -29,10 +29,16 @@ using namespace llvm;
 AnalysisKey CJFunctionVarLifeTime::Key;
 
 FunctionVarLifeTimeResult
-CJFunctionVarLifeTime::run(Function &F, FunctionAnalysisManager &AM) {
+CJFunctionVarLifeTime::run(Function &F, FunctionAnalysisManager &FAM) {
   FunctionVarLifeTimeResult Res = FunctionVarLifeTimeResult();
+  auto &AA = FAM.getResult<AAManager>(F);
+  auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
+  auto &LI = FAM.getResult<LoopAnalysis>(F);
+  SmallPtrSet<const Value *, 32> EphValues;
+  EarliestEscapeInfo EI(DT, LI, EphValues);
+  BatchAAResults BatchAA(AA, &EI);
   linerByRPOT(F, Res);
-  analysisLiveInterval(F, Res);
+  analysisLiveInterval(F, Res, BatchAA);
   return Res;
 }
 
@@ -51,16 +57,32 @@ void CJFunctionVarLifeTime::linerByRPOT(
 }
 
 void CJFunctionVarLifeTime::analysisLiveInterval(
-    Function &F, FunctionVarLifeTimeResult &LifeTimeResult) {
+    Function &F, FunctionVarLifeTimeResult &LifeTimeResult,
+    BatchAAResults &AA) {
   for (auto &Instr : instructions(F)) {
-    if (!Instr.getType()->isVoidTy()) {
+    if (Instr.getType()->isPointerTy()) {
       uint64_t LiveStart = LifeTimeResult.InstrsToIndex[&Instr];
       uint64_t LiveEnd = 0;
+      SmallVector<Instruction *, 4> UsesCollected;
       for (User *U : Instr.users()) {
-        LiveEnd = std::max(
-            LiveEnd, LifeTimeResult.InstrsToIndex[dyn_cast<Instruction>(U)]);
+        UsesCollected.push_back(dyn_cast<Instruction>(U));
       }
-      LifeTimeResult.SSAVarToLiveInterval[&Instr] = {LiveStart, LiveEnd};
+      std::sort(UsesCollected.begin(), UsesCollected.end(),
+                [&LifeTimeResult](Instruction *LHS, Instruction *RHS) {
+                  return LifeTimeResult.InstrsToIndex[LHS] <
+                         LifeTimeResult.InstrsToIndex[RHS];
+                });
+      for (int I = UsesCollected.size() - 1; I >= 0; --I) {
+        auto MRI = AA.getModRefInfo(UsesCollected[I],
+                                    MemoryLocation::getAfter(&Instr));
+        if (static_cast<int>(MRI) & static_cast<int>(ModRefInfo::Ref)) {
+          LiveEnd = LifeTimeResult.InstrsToIndex[UsesCollected[I]];
+          break;
+        }
+      }
+      if (LiveStart < LiveEnd) {
+        LifeTimeResult.SSAVarToLiveInterval[&Instr] = {LiveStart, LiveEnd};
+      }
     }
   }
 }
