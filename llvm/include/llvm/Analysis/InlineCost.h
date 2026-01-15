@@ -246,6 +246,8 @@ InlineParams getInlineParams(unsigned OptLevel, unsigned SizeOptLevel);
 /// and the call/return instruction.
 int getCallsiteCost(CallBase &Call, const DataLayout &DL);
 
+bool checkCJStackMapThreshold(CallBase &Call, Function &F);
+
 /// Get an InlineCost object representing the cost of inlining this
 /// callsite.
 ///
