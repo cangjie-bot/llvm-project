@@ -49,7 +49,7 @@ struct AstTypeInfo {
 
 class CangjieASTBuiler {
 public:
-    OwnedPtr<AST::Type> CreateRefType(std::string name, Ptr<AST::Decl> target, std::string pkg,
+    OwnedPtr<AST::Type> CreateRefType(AstTypeInfo info, Ptr<AST::Decl> target, std::string pkg,
                                       bool isGenericDeclFromTarget = true);
     OwnedPtr<AST::Type> CreateFuncType(Ptr<AST::Decl> target, std::string pkg,
                                        const CompilerType &type);
