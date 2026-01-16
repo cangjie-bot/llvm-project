@@ -245,11 +245,64 @@ bool CheckTypeCorrect(std::string& typeStr)
   return false;
 }
 
-OwnedPtr<AST::Type> CangjieASTBuiler::CreateRefType(std::string name, Ptr<Decl> target, std::string pkg,
+static bool IsEnumWithArgs(ConstString type_name)
+{
+  ConstString compare("(.+)?E[1-3]\\$");
+  RegularExpression regex(compare.GetStringRef());
+  return regex.Execute(type_name.AsCString());
+}
+
+static std::vector<CompilerType>
+GetEnumElementsType(std::vector<std::string> elements, CompilerType type, std::string pkg)
+{
+  std::vector<CompilerType> elements_type(elements.size());
+  if (!type.IsValid()) {
+    return elements_type;
+  }
+  if (type.IsPointerType()) {
+    type = type.GetPointeeType();
+  }
+  CompilerType arg;
+  if (type.GetTypeName().GetStringRef().contains("E2$")) {
+    arg = type.GetFieldWithName("val");
+    if (!arg.IsValid()) {
+      return elements_type;
+    }
+    if (arg.IsPointerType()) {
+      arg = arg.GetPointeeType();
+    }
+    elements_type[0] = arg;
+    return elements_type;
+  }
+
+  for (int i = 0; i < type.GetNumDirectBaseClasses(); i++) {
+    auto base = type.GetDirectBaseClassAtIndex(i, nullptr);
+    auto num_fields = base.GetNumFields();
+    if (num_fields != elements.size() + 1) {
+      continue;
+    }
+    for (int j = 1; j < num_fields; j++) {
+      std::string name;
+      arg = base.GetFieldAtIndex(j, name, nullptr, nullptr, nullptr);
+      if (arg.IsPointerType()) {
+        arg = arg.GetPointeeType();
+      }
+      auto arg_name = arg.GetTypeName();
+      if (arg_name != elements[j - 1].c_str() && arg_name != (pkg + std::string("::") + elements[j - 1]).c_str()) {
+        break;
+      }
+      elements_type[j - 1] = arg;
+    }
+  }
+  return elements_type;
+}
+
+OwnedPtr<AST::Type> CangjieASTBuiler::CreateRefType(AstTypeInfo info, Ptr<Decl> target, std::string pkg,
                                                     bool isGenericDeclFromTarget)
 {
   // For example, a reference type name can be "Range<Int64>" or "Array<String>" or "HashMap<String, Int64>".
   OwnedPtr<RefType> ret = MakeOwned<RefType>();
+  auto name = info.name;
   ret->ref.target = target;
   name.erase(std::remove(name.begin(), name.end(), ' '), name.end());
   if (EndsWith(name, "*")) {
@@ -296,8 +349,12 @@ OwnedPtr<AST::Type> CangjieASTBuiler::CreateRefType(std::string name, Ptr<Decl> 
   // typeArg: String,Array<ArrayList<HashMap<Int64,Object>>>,String
   auto args = name.substr(idLen + 1, name.size() - idLen - 2);
   auto elements = SplitTypeName(args);
-  for (auto& ele:elements) {
-    ret->typeArguments.emplace_back(CreateAstType({ele}, target, pkg));
+  std::vector<CompilerType> elements_type(elements.size());
+  if (IsEnumWithArgs(ConstString(info.name)) && !IsGenericType(name)) {
+    elements_type = GetEnumElementsType(elements, info.type, pkg);
+  }
+  for(size_t i = 0; i < elements.size(); i++) {
+    ret->typeArguments.emplace_back(CreateAstType({elements[i], elements_type[i]}, target, pkg));
   }
   return ret;
 }
@@ -360,13 +417,22 @@ std::vector<std::string> CangjieASTBuiler::SplitTupleName(std::string name) {
   return SplitTypeName(args);
 }
 
-OwnedPtr<AST::Type> CangjieASTBuiler::CreateTupleType(std::string name, Ptr<Decl> target)
+OwnedPtr<AST::Type> CangjieASTBuiler::CreateTupleType(CompilerType type, Ptr<Decl> target, std::string pkg)
 {
-  // For example, a tuple name can be "Tuple<Bool, String, Array<UInt8>>".
   OwnedPtr<TupleType> ret = MakeOwned<TupleType>();
-  std::vector<std::string> elements = SplitTupleName(name);
-  for (auto& ele:elements) {
-    ret->fieldTypes.emplace_back(CreateAstType({ele}, target));
+  if (!type.IsValid()) {
+    return nullptr;
+  }
+  for (uint32_t i = 0; i < type.GetNumFields(); i++) {
+    std::string name;
+    auto field = type.GetFieldAtIndex(i, name, nullptr, nullptr, nullptr);
+    if (!field.IsValid()) {
+      return nullptr;
+    }
+    if (field.IsPointerType()) {
+      field = field.GetPointeeType();
+    }
+    ret->fieldTypes.emplace_back(CreateAstType({field.GetTypeName().AsCString(), field}, target, pkg));
   }
   return ret;
 }
@@ -440,7 +506,7 @@ OwnedPtr<AST::Type> CangjieASTBuiler::CreateAstType(AstTypeInfo info, Ptr<Decl> 
     return CreateFuncType(target, pkg, type);
   }
   if (StartsWith(name, TUPLE_NAME)) {
-    return CreateTupleType(name, target);
+    return CreateTupleType(type, target, pkg);
   }
   if (StartsWith(name, VARRAY_NAME)) {
     return CreateVArrayType(name, target);
@@ -457,7 +523,7 @@ OwnedPtr<AST::Type> CangjieASTBuiler::CreateAstType(AstTypeInfo info, Ptr<Decl> 
     primType->str = name;
     return primType;
   }
-  return CreateRefType(name, target, pkg, isGenericDeclFromTarget);
+  return CreateRefType({name, type}, target, pkg, isGenericDeclFromTarget);
 }
 
 void CangjieASTBuiler::CreateFuncDeclGeneric(Ptr<AST::FuncDecl> decl, CompilerType& type, std::string& name,
