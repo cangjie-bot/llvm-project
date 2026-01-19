@@ -1055,10 +1055,6 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
     // Check if we're done. This can happen due to bonuses and penalties.
     if (Cost >= Threshold && !ComputeFullInlineCost)
       return InlineResult::failure("high cost");
-
-    if (CJPipeline && !checkCJStackMapThreshold(CandidateCall, F))
-      return InlineResult::failure("high stackmap cost");
-
     return InlineResult::success();
   }
 
@@ -2876,51 +2872,6 @@ int llvm::getCallsiteCost(CallBase &Call, const DataLayout &DL) {
   // The call instruction also disappears after inlining.
   Cost += InlineConstants::InstrCost + CallPenalty;
   return Cost;
-}
-
-// Calculate the cost of the stackmap based on the number of callsites. This
-// check is not precises.
-bool llvm::checkCJStackMapThreshold(CallBase &Call, Function &F) {
-  Function *Caller = Call.getCaller();
-  Function *Callee = &F;
-  int CallerSiteNum = 0;
-  int CalleeSiteNum = 0;
-  for (auto &I : instructions(Caller)) {
-    CallBase *CB = dyn_cast<CallBase>(&I);
-    if (CB && !isa<IntrinsicInst>(&I)) {
-      Function *F = CB->getCalledFunction();
-      // Functions has cj-runtime, gc-leaf-function and gc-safepoint does not
-      // need relocate
-      if (!F || F->hasFnAttribute("cj-runtime") ||
-          F->hasFnAttribute("gc-leaf-function") ||
-          F->hasFnAttribute("gc-safepoint"))
-        continue;
-      ++CallerSiteNum;
-      if (CallerSiteNum > CJInlineStackMapCalleecallnumThreshold * 10)
-        return false;
-    }
-  }
-  if (CallerSiteNum == 0)
-    return true;
-
-  for (auto &I : instructions(Callee)) {
-    CallBase *CB = dyn_cast<CallBase>(&I);
-    if (CB && !isa<IntrinsicInst>(&I)) {
-      Function *F = CB->getCalledFunction();
-      // Functions has cj-runtime, gc-leaf-function and gc-safepoint does not
-      // need relocate
-      if (!F || F->hasFnAttribute("cj-runtime") ||
-          F->hasFnAttribute("gc-leaf-function") ||
-          F->hasFnAttribute("gc-safepoint"))
-        continue;
-      ++CalleeSiteNum;
-      if (CalleeSiteNum > CJInlineStackMapCalleecallnumThreshold)
-        return false;
-    }
-  }
-
-  // CalleeSiteNum / CallerSiteNum <= 15%
-  return CalleeSiteNum * 100 <= CallerSiteNum * CJInlinePerStackMapThreshold;
 }
 
 InlineCost llvm::getInlineCost(
