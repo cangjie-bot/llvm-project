@@ -1376,6 +1376,9 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   addVectorPasses(Level, OptimizePM, /* IsFullLTO */ false);
 
   if (CJPipeline) {
+    if (Level == OptimizationLevel::O2) {
+      OptimizePM.addPass(CJAfterInlineSimpleOpt());
+    }
     OptimizePM.addPass(createFunctionToLoopPassAdaptor(IndVarSimplifyPass()));
     OptimizePM.addPass(EarlyCSEPass());
   }

@@ -20,6 +20,10 @@ namespace llvm {
 struct CJSimpleOpt : public PassInfoMixin<CJSimpleOpt> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &) const;
 };
+
+struct CJAfterInlineSimpleOpt : public PassInfoMixin<CJAfterInlineSimpleOpt> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &) const;
+};
 } // namespace llvm
 
 #endif // LLVM_TRANSFORMS_SCALAR_CJ_EARLY_OPT_H
