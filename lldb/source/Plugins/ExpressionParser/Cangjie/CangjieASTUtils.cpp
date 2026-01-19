@@ -84,10 +84,6 @@ std::string lldb_private::GetEnumNameWithoutPrefix(std::string& name, std::strin
 std::string lldb_private::GetTypeNameWithoutPrefix(ConstString type_name, std::string& pkgname)
 {
     std::string name = type_name.GetCString();
-    name.erase(std::remove(name.begin(), name.end(), ' '), name.end());
-    if (EndsWith(name, "*")) {
-      name = name.substr(0, name.size() - 1);
-    }
     name = DeletePrefixOfType(name);
     auto subname = GetSubNameWithoutPkgname(name, pkgname);
     // For example, default::A<UInt32> 's type name is A.
