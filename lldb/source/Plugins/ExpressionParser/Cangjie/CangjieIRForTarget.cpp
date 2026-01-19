@@ -253,7 +253,6 @@ bool CangjieIRForTarget::IsReferenceType(const lldb_private::CompilerType &ty) {
   }
   if (ty.GetTypeClass() == lldb::eTypeClassStruct &&
       type_name.find(lldb_private::E2_PREFIX_NAME_OPTION_LIKE) != std::string::npos) {
-    // Option like enum's ref is based on args type.
     for (uint32_t i = 0; i < ty.GetNumFields(); i++) {
       std::string member_name;
       auto child_type = ty.GetFieldAtIndex(i, member_name, nullptr, nullptr, nullptr);
@@ -421,19 +420,24 @@ void CangjieIRForTarget::SetPlatformInfo() {
       m_module->setDataLayout("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128");
     }
   }
-  if (ostype == llvm::Triple::Darwin) {
+  if (ostype == llvm::Triple::Darwin || ostype == llvm::Triple::MacOSX) {
     if (archtype == llvm::Triple::ArchType::aarch64) {
+      m_module->setTargetTriple(arch.GetTriple().str().c_str());
       m_module->setDataLayout("e-m:o-i64:64-i128:128-n32:64-S128");
     } else if (archtype == llvm::Triple::ArchType::x86_64) {
       m_module->setDataLayout("e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128");
     }
+  }
+  if (ostype == llvm::Triple::IOS && archtype == llvm::Triple::ArchType::aarch64) {
+    m_module->setTargetTriple(arch.GetTriple().str().c_str());
+    m_module->setDataLayout("e-m:o-i64:64-i128:128-n32:64-S128-Fn32");
   }
 }
 
 llvm::StringRef CangjieIRForTarget::FindExtendFunction()
 {
   for (llvm::Function &func : m_module->functions()) {
-    if (func.getName().startswith("_CN4exprUexpr.temp$X") && func.getName().endswith("__lldb_wrapped_exprHPu")) {
+    if (func.getName().startswith("_CN11__cjdb_exprUexpr.temp$X") && func.getName().endswith("__lldb_wrapped_exprHPu")) {
       return func.getName();
     }
   }
@@ -475,6 +479,11 @@ bool CangjieIRForTarget::HandleIRForExecute() {
 lldb_private::CompilerType CangjieIRForTarget::GetCompilerTypeByName(std::string &name) {
   std::string demangled_name = lldb_private::Mangled::GetDemangledTypeName(name);
   lldb_private::Log *log = GetLog(LLDBLog::Expressions);
+  auto pos = demangled_name.find(":");
+  if (pos != std::string::npos && pos != demangled_name.find("::")) {
+    // org:a::AA
+    demangled_name.replace(pos, 1, "::");
+  }
   auto type = m_decl_map->FindParsedTypesByName(demangled_name);
   if (type.GetTypeClass() == lldb::eTypeClassStruct &&
     type.GetTypeName().GetStringRef().contains(lldb_private::E0_PREFIX_NAME)) {
@@ -484,8 +493,8 @@ lldb_private::CompilerType CangjieIRForTarget::GetCompilerTypeByName(std::string
       return child_type;
     }
   }
-  if (m_decl_map->IsInterfaceType(type) && m_decl_map->dynamic_ype.IsValid()) {
-    type = m_decl_map->dynamic_ype;
+  if (m_decl_map->IsInterfaceType(type) && m_decl_map->dynamic_type.IsValid()) {
+    type = m_decl_map->dynamic_type;
   }
   if (type.IsValid()) {
     if (log) {
@@ -514,7 +523,8 @@ bool CangjieIRForTarget::CreateResultVariable(lldb_private::Materializer::Persis
     LLDB_LOGF(log, "Result variable Decl:\n %s", s.GetData());
   }
 
-  auto offset = m_materializer->AddResultVariable(result_type, false, true, result_delegate, err);
+  bool isref = IsReferenceType(result_type);
+  auto offset = m_materializer->AddResultVariable(result_type, isref, true, result_delegate, err);
 
   // There are two wrapper kind: Function and MemberFunction.
   lldb_private::ConstString replaceFunc = m_func_name;

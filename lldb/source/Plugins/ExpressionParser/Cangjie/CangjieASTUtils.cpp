@@ -55,6 +55,8 @@ std::string lldb_private::GetEnumPrefix(const std::string& name) {
   } else if (name.find(E3_PREFIX_NAME) != std::string::npos) {
     return E3_PREFIX_NAME;
   }
+
+  return "";
 }
 
 std::string lldb_private::GetEnumNameWithoutPrefix(std::string& name, std::string& pkgname) {
@@ -82,6 +84,10 @@ std::string lldb_private::GetEnumNameWithoutPrefix(std::string& name, std::strin
 std::string lldb_private::GetTypeNameWithoutPrefix(ConstString type_name, std::string& pkgname)
 {
     std::string name = type_name.GetCString();
+    name.erase(std::remove(name.begin(), name.end(), ' '), name.end());
+    if (EndsWith(name, "*")) {
+      name = name.substr(0, name.size() - 1);
+    }
     name = DeletePrefixOfType(name);
     auto subname = GetSubNameWithoutPkgname(name, pkgname);
     // For example, default::A<UInt32> 's type name is A.
@@ -106,6 +112,42 @@ std::string lldb_private::DeleteAllPkgname(const std::string& name, std::string&
     pos = typeName.find(prefix);
   }
   return typeName;
+}
+
+std::string lldb_private::DeleteAllGenericParamsPkgname(const std::string& name) {
+  size_t start = name.find('<');
+  size_t end = name.find('>');
+  if (start == std::string::npos || end == std::string::npos || start >= end) {
+      return name;
+  }
+
+  std::string prefix = name.substr(0, start);
+  std::string content = name.substr(start + 1, end - start - 1);
+  std::string delimiter = ",";
+  std::string result = prefix + "<";
+
+  size_t pos = 0;
+  bool first = true;
+  while (pos < content.length()) {
+      size_t found = content.find(delimiter, pos);
+      if (found == std::string::npos) {
+          found = content.length();
+      }
+      std::string token = content.substr(pos, found - pos);
+      size_t colonPos = token.find("::");
+      if (colonPos != std::string::npos) {
+          token = token.substr(colonPos + 2);
+      }
+
+      if (!first) {
+          result += delimiter;
+      }
+      result += token;
+      first = false;
+      pos = found + 1;
+  }
+  result += ">";
+  return result;
 }
 
 std::string lldb_private::GetSubNameWithoutPkgname(std::string& name, std::string& pkg)
@@ -159,7 +201,7 @@ OwnedPtr<AST::Type> CangjieASTBuiler::CreateFuncType(std::string name, Ptr<Decl>
     // For example, a func name can be "(Object, Int8, Int8) -> Int8".
     OwnedPtr<FuncType> ret = MakeOwned<FuncType>();
     name.erase(std::remove(name.begin(), name.end(), ' '), name.end());
-    auto arrowPos = name.find("->");
+    auto arrowPos = name.rfind("->");
     if (arrowPos == std::string::npos) {
         return ret;
     }

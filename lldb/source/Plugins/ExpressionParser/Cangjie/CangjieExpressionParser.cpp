@@ -94,16 +94,27 @@ static void SetTripleInfoIfNeed(ArchSpec target_arch, Cangjie::Triple::Info &tar
     target_triple.os = Cangjie::Triple::OSType::LINUX;
   } else if (os == llvm::Triple::Win32) {
     target_triple.os = Cangjie::Triple::OSType::WINDOWS;
-  } else {
+  } else if (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX) {
     target_triple.os = Cangjie::Triple::OSType::DARWIN;
+    target_triple.vendor = Cangjie::Triple::Vendor::APPLE;
+    target_triple.env = Cangjie::Triple::Environment::NOT_AVAILABLE;
+    return;
+  } else if (os == llvm::Triple::IOS) {
+    target_triple.os = Cangjie::Triple::OSType::IOS;
+    target_triple.env = Cangjie::Triple::Environment::SIMULATOR;
+    target_triple.vendor = Cangjie::Triple::Vendor::APPLE;
+    return;
+  } else {
+    target_triple.os = Cangjie::Triple::OSType::UNKNOWN;
   }
-
-  if (target_arch.GetTriple().getEnvironment() == llvm::Triple::GNU) {
+  auto env = target_arch.GetTriple().getEnvironment();
+  if (env == llvm::Triple::GNU) {
     target_triple.env = Cangjie::Triple::Environment::GNU;
+  } else if (env == llvm::Triple::Android) {
+    target_triple.env = Cangjie::Triple::Environment::ANDROID;
   } else {
     target_triple.env = Cangjie::Triple::Environment::OHOS;
   }
-
   target_triple.vendor = Cangjie::Triple::Vendor::UNKNOWN;
   return;
 }
@@ -117,12 +128,27 @@ bool CangjieExpressionParser::Parse(ExecutionContext &exeCtx, const std::string 
     LLDB_LOGF(log, "CANGJIE_HOME is not set!");
     return false;
   }
+  auto cangjie_path = getenv("CANGJIE_PATH");
+  if (cangjie_path != nullptr) {
+    std::stringstream sstream(cangjie_path);
+    std::string tmp_path;
+    while (std::getline(sstream, tmp_path, ':')) {
+      if (!tmp_path.empty()) {
+        LLDB_LOGF(log, "add [%s] to env CANGJIE_PATH\n", tmp_path.c_str());
+        invocation->globalOptions.environment.cangjiePaths.emplace_back(tmp_path);
+      }
+    }
+  }
   Cangjie::Triple::Info target_triple;
   ArchSpec target_arch = exeCtx.GetTargetSP()->GetArchitecture();
   auto triple = target_arch.GetTriple();
   SetTripleInfoIfNeed(target_arch, target_triple);
-  LLDB_LOGF(log, "using target triple %s %s\n", triple.str().c_str(),
-            target_arch.GetTriple().getEnvironmentName().data());
+  LLDB_LOGF(log, "using target triple %s %s %s %s %s\n", triple.str().c_str(),
+            triple.getArchName().data(), triple.getVendorName().data(),
+            triple.getOSName().data(), triple.getEnvironmentName().data());
+  if (target_triple.env == Cangjie::Triple::Environment::ANDROID) {
+    target_triple.apiLevel = "31";
+  }
   invocation->globalOptions.target = target_triple;
   invocation->globalOptions.environment.cangjieHome = cangjie_home;
   invocation->globalOptions.srcFiles.push_back(cangjieExprTempFile);
@@ -183,6 +209,10 @@ bool CangjieExpressionParser::Parse(ExecutionContext &exeCtx, const std::string 
   }
   m_result_type_name = instance->m_result_type_name;
   std::string demangled_name = lldb_private::Mangled::GetDemangledTypeName(m_result_type_name);
+  if (!m_expr_result_type.IsValid() && demangled_name.find("std.core::Option<") == 0) {
+    m_expr_result_type = m_expr_decl_map_up->CreateOptionReturnType(instance->m_expr_result->ty, demangled_name);
+    return true;
+  }
   if (!instance->m_expr_result->ty->typeArgs.empty()) {
     std::string typeName = GetSubNameWithoutPkgname(demangled_name, m_expr_decl_map_up->m_current_pkgname);
     if (typeName.empty()) {
@@ -220,7 +250,7 @@ lldb_private::Status CangjieExpressionParser::PrepareForExecution(
     sym_ctx.target_sp = target_sp;
   }
 
-  lldb_private::ConstString function_name("_CN4expr11__lldb_exprHPu");
+  lldb_private::ConstString function_name("_CN11__cjdb_expr11__lldb_exprHPu");
   std::vector<std::string> cpu_features;
   execution_unit_sp = std::make_shared<IRExecutionUnit>(
       context_up, m_module, function_name, target_sp, sym_ctx, cpu_features);

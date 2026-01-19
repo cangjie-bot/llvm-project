@@ -287,8 +287,17 @@ ConstString GetTypeName(Process& process, TypeInfo& typeInfo) {
     // type_name: "default:A"  ==> "default::A"
     while (pos != std::string::npos) {
       // type_name: "default:$Captured_Int64"  ==> "default::$Captured_Int64"
-      temp_name.replace(pos, 1, "::");
+      if (pos != temp_name.find("::")) {
+        // type_name: "org::default:C1", if type_name has org, no need to replace ":" with "::"
+        temp_name.replace(pos, 1, "::");
+      }
       pos = temp_name.find(":", pos + 2); // size of "::" is 2
+    }
+    // "org/pkg::CC"  ==>  "org::pkg::CC"
+    pos = temp_name.find("/");
+    while (pos != std::string::npos) {
+      temp_name.replace(pos, 1, "::");
+      pos = temp_name.find("/", pos + 2); // size of "::" is 2
     }
     return ConstString(temp_name.c_str());
 }
@@ -418,6 +427,14 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicClassType(
     return dynamic_type;
 }
 
+CompilerType ItaniumABILanguageRuntime::GetDynamicInterfaceType(
+    TypeSystemClang& ast, ConstString& type_name) {
+    std::string interface_name = std::string("Interface$") + std::string(type_name.AsCString());
+    auto dynamic_type = ast.CreateRecordType(nullptr, OptionalClangModuleID(), lldb::eAccessPublic,
+                                             interface_name.c_str(), clang::TTK_Class, lldb::eLanguageTypeC);
+    return dynamic_type.CreateTypedef(type_name.GetCString(), ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
+}
+
 CompilerType ItaniumABILanguageRuntime::GetDynamicRawArrayType(
     TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
     CompilerType dynamic_type = ast.GetTypeForIdentifier<clang::CXXRecordDecl>(type_name);
@@ -474,8 +491,18 @@ bool IsFunctionType(ConstString& type_name) {
 
 ConstString GetFunctionTypeName(std::string type_name,
     uint64_t para_num, std::vector<CompilerType>& param_types, CompilerType& return_type) {
-    std::string name = type_name.substr(0, type_name.find(":")) + "::(";
+    std::string name = "";
+    if (auto pos = type_name.find(":"); pos != std::string::npos) {
+      name = type_name.substr(0, pos) + "::(";
+    } else {
+      name = "(";
+    }
+    std::string expression_package_name = "__cjdb_expr::";
     uint64_t para_id = 0;
+    if (name.find(expression_package_name) == 0) {
+      // If the function type is created by cangjie expression. Delete package name.
+      name = name.substr(expression_package_name.size());
+    }
     for (auto& para : param_types) {
       para_id++;
       name += std::string(para.GetTypeName().GetCString());
@@ -718,8 +745,6 @@ static CompilerType CreateEnumType(TypeSystemClang& ast, Process& process,
 
 void ItaniumABILanguageRuntime::CreateAndAddInheritTypeToRecordType(CompilerType& dynamic_type, CompilerType& enum_type,
     TypeSystemClang& ast, uint64_t ctor_num, uint64_t ctors_addr) {
-    CompilerType basic_type = ast.GetBasicType(eBasicTypeLongLong).CreateTypedef(
-            "Int64", ast.CreateDeclContext(ast.GetTranslationUnitDecl()), 0);
     auto ti_type = ast.GetBasicType(eBasicTypeVoid).GetPointerType();
     TypeInfo ctor_ti;
     Status error;
@@ -858,7 +883,7 @@ CompilerType ItaniumABILanguageRuntime::CreateEnum2Type(TypeSystemClang& ast,
 }
 
 CompilerType ItaniumABILanguageRuntime::GetDynamicOptionType(
-    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name, CompilerType& enum_type) {
+    TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
     Status error;
     uint64_t val_ti_addr = 0;
     TypeInfo valti;
@@ -874,7 +899,23 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicOptionType(
     if (IsRefType(valti.type)) {
       ast.AddFieldToRecordType(option_type, "val", val_type.GetPointerType(), lldb::eAccessPublic, 0);
     } else {
-      ast.AddFieldToRecordType(option_type, "constructor", enum_type, lldb::eAccessPublic, 0);
+      CompilerType basic_type = ast.GetBasicType(lldb::eBasicTypeInt);
+      CompilerType enumType = ast.CreateEnumerationType(std::string("created"),
+              ast.GetTranslationUnitDecl(), OptionalClangModuleID(), Declaration(), basic_type, false);
+      ast.StartTagDeclarationDefinition(enumType);
+      ast.AddEnumerationValueToEnumerationType(enumType, Declaration(), "Some", 0, 4);
+      ast.AddEnumerationValueToEnumerationType(enumType, Declaration(), "None", 1, 4);
+      ast.CompleteTagDeclarationDefinition(enumType);
+      auto field = ast.AddFieldToRecordType(option_type, "constructor", enumType, lldb::eAccessPublic, 0);
+      uint64_t size = val_type.GetByteSize(nullptr).value_or(0);
+      if (size < 8) {
+        clang::ASTContext &clang_ast =  ast.getASTContext();
+        llvm::APInt bitfield_bit_size_apint(clang_ast.getTypeSize(clang_ast.IntTy), 1);
+        auto bit_width = new (clang_ast)
+            clang::IntegerLiteral(clang_ast, bitfield_bit_size_apint,
+                                  clang_ast.IntTy, clang::SourceLocation());
+        field->setBitWidth(bit_width);
+      }
       ast.AddFieldToRecordType(option_type, "val", val_type, lldb::eAccessPublic, 0);
     }
     ast.CompleteTagDeclarationDefinition(option_type);
@@ -956,7 +997,7 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicEnumType(
     ConstString match("^std[.]core::(Enum\\$)?Option<.+>( \\*)?$");
     RegularExpression regex(match.GetStringRef());
     if (regex.Execute(type_name.AsCString())) {
-      return GetDynamicOptionType(ast, typeInfo, type_name, enum_type);
+      return GetDynamicOptionType(ast, typeInfo, type_name);
     }
 
     if (enum_kind == ReflectModifyType::RMT_ENUM_KIND2) {
@@ -1088,8 +1129,10 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicTypeFromGenericTypeInfo(
     CompilerType dynamic_type;
     switch (typekind) {
       case UGTypeKind::UG_CLASS:
-      case UGTypeKind::UG_INTERFACE:
         dynamic_type = GetDynamicClassType(ast, typeInfo, type_name);
+        break;
+      case UGTypeKind::UG_INTERFACE:
+        dynamic_type = GetDynamicInterfaceType(ast, type_name);
         break;
       case UGTypeKind::UG_RAWARRAY:
         dynamic_type = GetDynamicRawArrayType(ast, typeInfo, type_name);
