@@ -97,6 +97,7 @@ public:
     CompilerType GetDynamicTupleType(Ptr<AST::Ty>& ty, std::string typeName, CompilerType& genericType);
     CompilerType GetDynamicEnumType(Ptr<AST::Ty>& ty, std::string typeName, CompilerType& genericType);
     CompilerType GetEnumType(Ptr<AST::Ty>& ty, std::string typeName, CompilerType& genericType);
+    CompilerType CreateOptionReturnType(Ptr<Cangjie::AST::Ty>& ty, std::string& typeName);
     void CreateAndAddInheritTypeToRecordType(Ptr<AST::Ty>& ty, CompilerType& enum_type, CompilerType& instancetiateType, CompilerType& generic_type);
 
     CompilerType GetDynamicArrayType(Ptr<AST::Ty>& ty, std::string typeName, CompilerType& genericType);
@@ -105,7 +106,7 @@ public:
     Ptr<AST::Ty> GetMemberDeclTyByName(Ptr<AST::Ty>& ty, std::string& memberName, std::string& parentTypeName);
     size_t GetSubGenericTyIndex(const Ptr<Cangjie::AST::Decl>& decl, std::string memberName);
 
-    lldb_private::CompilerType dynamic_ype;
+    lldb_private::CompilerType dynamic_type;
     struct ParsedFunction {
         ParsedFunction(std::string fscope, std::string fName, std::string func_type, lldb_private::CompilerType type)
             : ScopeName(fscope), FuncName(fName), FuncTypeStr(func_type), funcType(type){};
@@ -138,7 +139,7 @@ private:
     std::map<std::string, lldb_private::CompilerType> m_parsed_types;
     std::map<std::string, uint64_t> m_captured_var_addrs;
 
-    TypeSystemClang * m_type_system = nullptr;
+    TypeSystemClang *m_type_system = nullptr;
 
     void InitVariable();
     void CreateInjectedThis();
@@ -162,8 +163,8 @@ private:
     void CreateGenericConstraints(Ptr<AST::Decl>& decl, CompilerType& type);
     std::set<CompilerType> GetGenericTypeWithConstraints(CompilerType& type);
     void CreateStructMemberDecls(CompilerType type, Ptr<AST::Decl> &decl);
-    void CreateClassLikeParentDecls(CompilerType type, Ptr<AST::ClassLikeDecl> decl);
-    void SetGenericDeclBySubclass(Ptr<AST::RefType> refType, std::string name,  Ptr<AST::ClassLikeDecl>& base);
+    void CreateClassLikeParentDecls(CompilerType type, Ptr<AST::InheritableDecl> decl);
+    void SetGenericDeclBySubclass(Ptr<AST::RefType> refType, std::string name,  Ptr<AST::InheritableDecl>& base);
     CompilerType GetSuperClassDefinedType(CompilerType& type);
     void SetMemberDeclParent(Ptr<AST::FuncDecl> funcdecl, Ptr<AST::Decl> decl);
     void CreateInterfaceMemberDecls(Ptr<AST::Decl> &decl, CompilerType type);
@@ -196,6 +197,7 @@ private:
     CompilerType GetGenericTypeByPartName(const std::string& part_name);
     CompilerType CreateOrGetGenericType(const CompilerType& type);
     void CollectGenericTypeOfVariable(const CompilerType& type);
+    void CollectOptionValType(CompilerType& type);
     void AddFieldToRecordType(const CompilerType& genericType, CompilerType& instancedType, std::string& name);
     std::set<ConstString> m_local_func;
 };
