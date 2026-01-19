@@ -180,6 +180,7 @@ private:
   bool m_hasvalue = false;
   ValueObjectSP m_some =  nullptr;
   bool m_children = false;
+  bool m_dynamic = false;
 };
 
 static std::string DeletePrefixOfTypeName(std::string type_name, std::string prefix) {
@@ -241,6 +242,14 @@ bool CjOptionSyntheticFrontEnd::Update() {
     value = value->Dereference(err);
   }
 
+  if (value != nullptr) {
+    auto dynamic = value->GetDynamicValue(eDynamicDontRunTarget);
+    if (dynamic != nullptr) {
+      m_dynamic = true;
+      value = dynamic;
+    }
+  }
+
   if (value->HasSyntheticValue()) {
     m_some = value->GetSyntheticValue();
   } else {
@@ -253,6 +262,16 @@ bool CjOptionSyntheticFrontEnd::Update() {
   }
 
   return false;
+}
+
+CjOptionSyntheticFrontEnd::CjOptionSyntheticFrontEnd(ValueObjectSP valobj_sp)
+    : SyntheticChildrenFrontEnd(*valobj_sp)  {
+  Update();
+}
+
+ConstString CjOptionSyntheticFrontEnd::GetSyntheticTypeName() {
+  auto type_name = m_backend.GetDisplayTypeName().GetStringRef();
+  return ConstString(type_name.rtrim(" *").str());
 }
 
 class CjVArraySyntheticFrontEnd : public SyntheticChildrenFrontEnd {
@@ -272,16 +291,6 @@ public:
 CjVArraySyntheticFrontEnd::CjVArraySyntheticFrontEnd(ValueObjectSP valobj_sp)
     : SyntheticChildrenFrontEnd(*valobj_sp)  {
   Update();
-}
-
-CjOptionSyntheticFrontEnd::CjOptionSyntheticFrontEnd(ValueObjectSP valobj_sp)
-    : SyntheticChildrenFrontEnd(*valobj_sp)  {
-  Update();
-}
-
-ConstString CjOptionSyntheticFrontEnd::GetSyntheticTypeName() {
-  auto type_name = m_backend.GetDisplayTypeName().GetStringRef();
-  return ConstString(type_name.rtrim(" *").str());
 }
 
 CjArraySyntheticFrontEnd::CjArraySyntheticFrontEnd(ValueObjectSP valobj_sp)
@@ -748,7 +757,7 @@ CjHashSetSyntheticFrontEnd::CjHashSetSyntheticFrontEnd(ValueObjectSP valobj_sp)
 }
 
 bool CjHashSetSyntheticFrontEnd::Update() {
-  m_map = new CjHashMapSyntheticFrontEnd(m_backend.GetChildMemberWithName(ConstString("map"), true));
+  m_map = new CjHashMapSyntheticFrontEnd(m_backend.GetChildMemberWithName(ConstString("myMap"), true));
   if (m_map) {
     // Mark the map(HashMap) is a child of HashSet.
     m_map->SetIsInternalType(true);

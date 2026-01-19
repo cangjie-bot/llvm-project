@@ -3238,6 +3238,9 @@ bool ValueObject::GetCangjieDynamicType(
       return false;
     }
   }
+  if (type_class != lldb::eTypeClassClass) {
+    return false;
+  }
   Status error;
   uint64_t type_addr = 0;
   class_type_or_name.Clear();
@@ -3264,12 +3267,15 @@ bool ValueObject::GetCangjieDynamicType(
     // "::" size is 2.
     pos = dynamic_name.find(":", pos + 2);
   }
+  pos = dynamic_name.find("/");
+  while (pos != std::string::npos) {
+    dynamic_name.replace(pos, 1, "::");
+    pos = dynamic_name.find("/", pos + 2);  // size of "::" is 2
+  }
   lldb_private::TypeList types;
   llvm::DenseSet<SymbolFile *> searched_symbol_files;
-  pos = dynamic_name.rfind(".ti");
   bool is_ti_type = false;
-  if (!GetTypeName().GetStringRef().contains("E1$") && pos == dynamic_name.length() - std::string(".ti").length()) {
-    dynamic_name = dynamic_name.substr(0, pos);
+  if (!GetTypeName().GetStringRef().contains("E1$")) {
     if (dynamic_name != GetTypeName().AsCString()) {
       is_ti_type = true;
     }
