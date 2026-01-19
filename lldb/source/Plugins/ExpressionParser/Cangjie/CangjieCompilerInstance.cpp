@@ -711,15 +711,6 @@ bool CangjieCompilerInstance::PerformImportPackageForCjdb() {
   importManager.SetImportedPackageFromASTNode(m_fake_packages);
 
   PerformImportPackage();
-  Log *log = GetLog(LLDBLog::Expressions);
-  if (diag.GetErrorCount() > 0) {
-    std::string helpInfo = "check if the .cjo file of the package exists in CANGJIE_PATH or CANGJIE_HOME";
-    if (log) {
-      LLDB_LOGF(log, "%s", helpInfo.c_str());
-    }
-    std::cout<<"help: "<<helpInfo<<std::endl;
-    return false;
-  }
   bool inBlacklist = false;
   // Walk decls in packages, and set decl's ty especially for those from std.core.
   auto addDeclTy = [&](Ptr<AST::Node> curNode) -> VisitAction {
@@ -746,6 +737,7 @@ bool CangjieCompilerInstance::PerformImportPackageForCjdb() {
       return false;
     }
   }
+  Log *log = GetLog(LLDBLog::Expressions);
   if (log) {
     std::string fakePkg;
     for (auto& fpkg : packages) {
@@ -849,9 +841,6 @@ void CangjieCompilerInstance::AddImportNodeFromFakePkg(
       continue;
     }
     auto impkg = Utils::JoinStrings(im->content.prefixPaths, ".");
-    if (im->content.hasDoubleColon) {
-      impkg.replace(impkg.find("."), 1, PACKAGE_SUFFIX);
-    }
     auto find = std::find_if(m_package_names.begin(), m_package_names.end(),
         [&impkg](auto& pkg) { return pkg == impkg; });
     if (find == m_package_names.end()) {
@@ -864,7 +853,6 @@ void CangjieCompilerInstance::AddImportNodeFromFakePkg(
     import->content.prefixDotPoses.resize(prefixLen);
     import->content.identifier = "*";
     import->content.kind = ImportKind::IMPORT_ALL;
-    import->content.hasDoubleColon = im->content.hasDoubleColon;
     import->EnableAttr(Attribute::IMPLICIT_ADD, Attribute::COMPILER_ADD);
     import->curFile = file.get();
     file->imports.emplace_back(std::move(import));
@@ -874,16 +862,10 @@ void CangjieCompilerInstance::AddImportNodeFromFakePkg(
 void CangjieCompilerInstance::AddImportSpecToLLDBExprPackage() {
   auto tempPkg = this->GetSourcePackages()[0];
   for (auto& fPkg : this->m_fake_packages) {
-    auto hasDoubleColon = false;
+    auto pkgPath = Utils::SplitQualifiedName(fPkg->fullPackageName);
     auto pkgName = fPkg->fullPackageName;
-    auto pos = pkgName.find(PACKAGE_SUFFIX);
-    if (pos != std::string::npos) {
-      hasDoubleColon = true;
-      pkgName.replace(pos, PACKAGE_SUFFIX.size(), ".");
-    }
-    auto pkgPath = Utils::SplitQualifiedName(pkgName);
     for (auto &file : tempPkg->files) {
-      auto collectImport = [&file, &pkgPath, &hasDoubleColon](Ptr<const Node> curNode) -> VisitAction {
+      auto collectImport = [&file, &pkgPath](Ptr<const Node> curNode) -> VisitAction {
         // locals: vardecl or funcdecl
         if (pkgPath.back() == LOCAL_PACKAGE_NAME &&
           (curNode->astKind == ASTKind::VAR_DECL || curNode->astKind == ASTKind::FUNC_DECL)) {
@@ -920,7 +902,6 @@ void CangjieCompilerInstance::AddImportSpecToLLDBExprPackage() {
           importPackage->content.prefixDotPoses.resize(pkgPath.size());
           importPackage->content.identifier = "*";
           importPackage->content.kind = ImportKind::IMPORT_ALL;
-          importPackage->content.hasDoubleColon = hasDoubleColon;
           importPackage->curFile = file.get();
           importPackage->EnableAttr(Attribute::IMPLICIT_ADD, Attribute::COMPILER_ADD);
           file->imports.emplace_back(std::move(importPackage));
