@@ -903,6 +903,7 @@ Constant *ReflectInfo::getClassReflectInfo(const MDTuple *ReflectMD) {
 Constant *ReflectInfo::getEnumReflectInfo(const MDTuple *ReflectMD) {
   // record all reflection info
   EnumReflectInfo Info(M);
+  Info.GenericClass = getStringFromMD(ReflectMD, ERT_GENERIC_CLASS);
   parseAttributes(getMDOperand(ReflectMD, ERT_ATTRIBUTE), Info.Modifier,
                   Info.Annotation);
   parseEnumCtorMDs(Info.EnumCtors, getMDOperand(ReflectMD, ERT_ENUM_CTOR));
@@ -1141,6 +1142,11 @@ void ReflectInfo::fillEnumReflectInfo(EnumReflectInfo &Info,
   BodyVec[FET_STATIC_METHOD] =
       ConstantInt::get(Int32Ty, Info.StaticMethods.size());
   BodyVec[FET_ANNOTATION] = Info.Annotation;
+  if (Info.GenericClass.empty()) {
+    BodyVec[FET_GENERIC_CLASS] = Int8PtrNull;
+  } else {
+    BodyVec[FET_GENERIC_CLASS] = getNameGlobal(M, Info.GenericClass);
+  }
 
   for (unsigned Idx = 0; Idx < Info.InstanceMethods.size(); ++Idx) {
     BodyVec.push_back(Info.InstanceMethods[Idx]->fillMethodInfo(Idx, TIName));
