@@ -31,7 +31,7 @@ bool CangjieExpressionSourceCode::GetText(
     switch (m_wrap_kind) {
     case WrapKind::Function:
       wrap_stream.Printf(
-          "package expr\n"
+          "package __cjdb_expr\n"
           "%s\n"
           "@OverflowThrowing\n"
           "public func __lldb_expr(__lldb_arg: CPointer<Unit>): Int64 {\n"
@@ -50,7 +50,7 @@ bool CangjieExpressionSourceCode::GetText(
       break;
     case WrapKind::MemberFunction:
       wrap_stream.Printf(
-          "package expr\n"
+          "package __cjdb_expr\n"
           "%s\n"
           "extend %s {\n"
           "  @OverflowThrowing\n"
