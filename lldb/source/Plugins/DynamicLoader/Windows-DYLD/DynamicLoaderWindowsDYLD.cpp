@@ -208,7 +208,7 @@ DynamicLoaderWindowsDYLD::GetStepThroughTrampolinePlan(Thread &thread,
       strcmp(first_insn->GetMnemonic(&exe_ctx), "jmpq") != 0 &&
       strcmp(first_insn->GetMnemonic(&exe_ctx), "jmp") != 0) ||
       (strcmp(second_insn->GetMnemonic(&exe_ctx), "nop") != 0 &&
-      strcmp(second_insn->GetMnemonic(&exe_ctx), "int3") != 0)) {
+       strcmp(second_insn->GetMnemonic(&exe_ctx), "int3") != 0)) {
     return ThreadPlanSP();
   }
 

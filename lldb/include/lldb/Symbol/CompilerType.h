@@ -298,6 +298,8 @@ public:
                                uint32_t *bitfield_bit_size_ptr,
                                bool *is_bitfield_ptr) const;
 
+  CompilerType GetFieldWithName(std::string name) const;
+
   uint32_t GetNumDirectBaseClasses() const;
 
   uint32_t GetNumVirtualBaseClasses() const;
