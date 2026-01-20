@@ -306,8 +306,14 @@ static bool tryInferSubType(DevirtualCallData &CallData) {
     if (K0.isInterface() || K1.isInterface()) {
       // If it find the extensionDef of klass, the subType is true.
       // Otherwise, the subtype is unknown.
-      if (getExtensionDef(Klass0, Klass1) == nullptr)
+      // Only fold when the interface type is concrete and has no where-cond.
+      GlobalVariable *EDGV = getExtensionDef(Klass0, Klass1);
+      if (EDGV == nullptr || !EDGV->hasInitializer())
         continue;
+      ExtensionDefData ED(EDGV);
+      if (ED.WhereCondFn != nullptr) {
+        continue;
+      }
     } else if (K1.isFunction()) {
       Result = isFunctionSubType(K0, K1);
     } else {
