@@ -176,15 +176,27 @@ inline static bool isCJMallocObj(Value *V) {
   return false;
 }
 
-inline static bool isAddrHasPadding(Value *Addr) {
-  auto *ST =
-      dyn_cast<StructType>(Addr->getType()->getNonOpaquePointerElementType());
+inline static bool isTypeHasPadding(Type *AddrElemType, const DataLayout &DL) {
+  auto *ST = dyn_cast<StructType>(AddrElemType);
   if (!ST) {
     return true;
   }
-  auto &DL = dyn_cast<Instruction>(Addr)->getModule()->getDataLayout();
   auto *SL = DL.getStructLayout(ST);
-  return SL->hasPadding();
+  if (SL->hasPadding()) {
+    return true;
+  }
+  uint64_t EndOffset = SL->getSizeInBytes();
+  uint64_t Offset = 0;
+  while (Offset < EndOffset) {
+    unsigned Index = SL->getElementContainingOffset(Offset);
+    Type *ElementTy = ST->getElementType(Index);
+    uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedSize();
+    if (isa<StructType>(ElementTy) && isTypeHasPadding(ElementTy, DL)) {
+      return true;
+    }
+    Offset += ElementSize;
+  }
+  return false;
 }
 
 static bool isDefChainConsistOfCastOrPHI(Value *V) {
@@ -484,9 +496,14 @@ bool CJObjectReuseOpt::transformForMemReuse(
               // when addr type isn't the same and one of them has padding,
               // the replacement is not allowed for SROA pass may generates
               // undef behavior instruction caused by using padding data.
+              const auto &DL = dyn_cast<Instruction>(ReuseAddr)->getModule()->getDataLayout();
+              auto ReplaceElemType =
+                  ReuseAddr->getType()->getNonOpaquePointerElementType();
+              auto BeReplaceElemType =
+                  ReuseAddr->getType()->getNonOpaquePointerElementType();
               if (ReuseAddr->getType() != BeReplacedAddr->getType() &&
-                  (isAddrHasPadding(ReuseAddr) ||
-                   isAddrHasPadding(BeReplacedAddr))) {
+                  (isTypeHasPadding(ReplaceElemType, DL) ||
+                   isTypeHasPadding(BeReplaceElemType, DL))) {
                 continue;
               }
               if (ReuseAddr->getType()->getPointerAddressSpace() !=
