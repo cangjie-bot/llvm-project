@@ -13,6 +13,7 @@
 #include "lldb/Symbol/CompileUnit.h"
 #include "cangjie/Mangle/BaseMangler.h"
 #include "cangjie/Sema/TypeManager.h"
+#include <utility>
 
 using namespace Cangjie;
 using namespace Cangjie::AST;
@@ -22,6 +23,7 @@ inline const std::string LOCAL_PACKAGE_NAME = "__lldb_locals";
 inline const std::string EXPR_RESULT_NAME = "__lldb_expr_result";
 inline const std::string RANGE_NAME = "Range";
 inline const std::string TUPLE_NAME = "Tuple";
+inline const std::string OPTION_NAME = "std.core::Option<";
 inline const std::string INJECTED_SUPER_NAME = "$__lldb_injected_super";
 inline const std::string INJECTED_THIS_NAME = "__lldb_injected_self";
 inline const std::string COLLECTION_PACKAGE_NAME = "std.collection";
@@ -35,18 +37,30 @@ inline const std::string GENERIC_TYPE_PREFIX_NAME = "$G_";
 inline const std::string CJDB_ADD_GENERIC_MEMBER_FUNC_NAME = "$GetGenericDef";
 inline const std::string LOCAL_FUNC_CAPTUREDVAR = "$CapturedVars";
 inline const std::string PACKAGE_SUFFIX = "::";
+
+struct AstTypeInfo {
+  std::string name;
+  CompilerType type;
+
+  AstTypeInfo() = default;
+  AstTypeInfo(std::string n, CompilerType t = CompilerType())
+      : name(std::move(n)), type(t) {}
+};
+
 class CangjieASTBuiler {
 public:
-    OwnedPtr<AST::Type> CreateRefType(std::string name, Ptr<AST::Decl> target, std::string pkg,
+    OwnedPtr<AST::Type> CreateRefType(AstTypeInfo info, Ptr<AST::Decl> target, std::string pkg,
                                       bool isGenericDeclFromTarget = true);
-    OwnedPtr<AST::Type> CreateFuncType(std::string name, Ptr<AST::Decl> target, std::string pkg);
-    OwnedPtr<AST::Type> CreateTupleType(std::string name, Ptr<AST::Decl> target);
+    OwnedPtr<AST::Type> CreateFuncType(Ptr<AST::Decl> target, std::string pkg,
+                                       const CompilerType &type);
+    OwnedPtr<AST::Type> CreateTupleType(AstTypeInfo info, Ptr<Decl> target, std::string pkg);
     std::vector<std::string> GetInstantiatedParamDeclName(const std::string& name);
     std::vector<std::string> SplitTupleName(std::string name);
     std::vector<std::string> SplitTypeName(std::string name);
     std::vector<std::string> SplitCollectionName(std::string name);
     OwnedPtr<AST::Type> CreateVArrayType(std::string name, Ptr<AST::Decl> target);
-    OwnedPtr<AST::Type> CreateAstType(std::string name, Ptr<AST::Decl> target, std::string pkg = "",
+    OwnedPtr<AST::Type> CreateOptionType(CompilerType type, Ptr<Decl> target, std::string pkg);
+    OwnedPtr<AST::Type> CreateAstType(AstTypeInfo info, Ptr<AST::Decl> target, std::string pkg = "",
                                       bool isGenericDeclFromTarget = true);
     static bool IsFunctionType(ConstString type_name);
     OwnedPtr<AST::VarDecl> CreateVarDecl(const CompilerType type, std::string name,
