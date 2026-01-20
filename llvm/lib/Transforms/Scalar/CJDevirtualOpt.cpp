@@ -217,7 +217,13 @@ static bool isSubType(GlobalVariable *Klass0, GlobalVariable *Klass1) {
       return false;
 
     for (unsigned i = ReturnTypeIdx + 1; i < TypeArgNum; ++i) {
-      if (!isSubType(K1.getTypeArg(i), K0.getTypeArg(i))) {
+      GlobalVariable *Arg1 = K1.getTypeArg(i);
+      GlobalVariable *Arg0 = K0.getTypeArg(i);
+      if (!Arg1->hasInitializer() || !Arg0->hasInitializer()) {
+        report_fatal_error(
+            "CJDevirtualOpt: function type arg without initializer");
+      }
+      if (!isSubType(Arg1, Arg0)) {
         return false;
       }
     }
@@ -306,8 +312,14 @@ static bool tryInferSubType(DevirtualCallData &CallData) {
     if (K0.isInterface() || K1.isInterface()) {
       // If it find the extensionDef of klass, the subType is true.
       // Otherwise, the subtype is unknown.
-      if (getExtensionDef(Klass0, Klass1) == nullptr)
+      // Only fold when the interface type is concrete and has no where-cond.
+      GlobalVariable *EDGV = getExtensionDef(Klass0, Klass1);
+      if (EDGV == nullptr || !EDGV->hasInitializer())
         continue;
+      ExtensionDefData ED(EDGV);
+      if (ED.WhereCondFn != nullptr) {
+        continue;
+      }
     } else if (K1.isFunction()) {
       Result = isFunctionSubType(K0, K1);
     } else {
