@@ -133,6 +133,8 @@ public:
   CompilerType GetDynamicClassType(TypeSystemClang& ast,
                             TypeInfo& typeInfo,
                             ConstString& type_name);
+  CompilerType GetDynamicInterfaceType(TypeSystemClang& ast,
+                            ConstString& type_name);
   CompilerType GetDynamicRawArrayType(TypeSystemClang& ast,
                             TypeInfo& typeInfo,
                             ConstString& type_name);
@@ -172,8 +174,7 @@ public:
                             uint64_t ctors_addr);
   CompilerType GetDynamicOptionType(TypeSystemClang& ast,
                             TypeInfo& typeInfo,
-                            ConstString& type_name,
-                            CompilerType& enum_type);
+                            ConstString& type_name);
   CompilerType GetDynamicEnumType(TypeSystemClang& ast,
                             TypeInfo& typeInfo,
                             ConstString& type_name);
