@@ -253,7 +253,6 @@ bool CangjieIRForTarget::IsReferenceType(const lldb_private::CompilerType &ty) {
   }
   if (ty.GetTypeClass() == lldb::eTypeClassStruct &&
       type_name.find(lldb_private::E2_PREFIX_NAME_OPTION_LIKE) != std::string::npos) {
-    // Option like enum's ref is based on args type.
     for (uint32_t i = 0; i < ty.GetNumFields(); i++) {
       std::string member_name;
       auto child_type = ty.GetFieldAtIndex(i, member_name, nullptr, nullptr, nullptr);
@@ -438,7 +437,7 @@ void CangjieIRForTarget::SetPlatformInfo() {
 llvm::StringRef CangjieIRForTarget::FindExtendFunction()
 {
   for (llvm::Function &func : m_module->functions()) {
-    if (func.getName().startswith("_CN4exprUexpr.temp$X") && func.getName().endswith("__lldb_wrapped_exprHPu")) {
+    if (func.getName().startswith("_CN11__cjdb_exprUexpr.temp$X") && func.getName().endswith("__lldb_wrapped_exprHPu")) {
       return func.getName();
     }
   }
@@ -489,8 +488,8 @@ lldb_private::CompilerType CangjieIRForTarget::GetCompilerTypeByName(std::string
       return child_type;
     }
   }
-  if (m_decl_map->IsInterfaceType(type) && m_decl_map->dynamic_ype.IsValid()) {
-    type = m_decl_map->dynamic_ype;
+  if (m_decl_map->IsInterfaceType(type) && m_decl_map->dynamic_type.IsValid()) {
+    type = m_decl_map->dynamic_type;
   }
   if (type.IsValid()) {
     if (log) {
@@ -519,7 +518,8 @@ bool CangjieIRForTarget::CreateResultVariable(lldb_private::Materializer::Persis
     LLDB_LOGF(log, "Result variable Decl:\n %s", s.GetData());
   }
 
-  auto offset = m_materializer->AddResultVariable(result_type, false, true, result_delegate, err);
+  bool isref = IsReferenceType(result_type);
+  auto offset = m_materializer->AddResultVariable(result_type, isref, true, result_delegate, err);
 
   // There are two wrapper kind: Function and MemberFunction.
   lldb_private::ConstString replaceFunc = m_func_name;
