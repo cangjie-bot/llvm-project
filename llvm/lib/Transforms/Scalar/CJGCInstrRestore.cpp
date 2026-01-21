@@ -1,0 +1,206 @@
+//===- CJGCInstrRestore.cpp - -----------------------------------------*- C++
+//-*-===//
+//
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+//
+//===----------------------------------------------------------------------===//
+//
+// This file provides interface to "Cangjie GC Instruction Restore" pass.
+//
+// This pass will restore load/store to gcread/gcwrite in pass pipeline ending.
+//===----------------------------------------------------------------------===//
+
+#include "llvm/Transforms/Scalar/CJGCInstrRestore.h"
+#include "llvm/Transforms/Scalar/CJGCInstrReplace.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/CFG.h"
+#include "llvm/Analysis/CaptureTracking.h"
+#include "llvm/Analysis/MemoryLocation.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Constant.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Pass.h"
+#include "llvm/Transforms/Scalar.h"
+
+using namespace llvm;
+
+#define DEBUG_TYPE "CJGCInstrRestore"
+
+PreservedAnalyses CJGCInstrRestore::run(Function &F,
+                                        FunctionAnalysisManager &FAM) {
+  if (runImpl(F)) {
+    return PreservedAnalyses::none();
+  }
+  return PreservedAnalyses::all();
+}
+
+bool CJGCInstrRestore::runImpl(Function &F) {
+  // return false; // for test
+  // if (F.getName().str() != "_CNat9Exception6<init>HRNat6StringE") {
+  //   return false;
+  // }
+#ifndef NDEBUG
+  LLVM_DEBUG(dbgs() << "CJGCInstrRestore: " << F.getName().str() << " start."
+                    << "\n");
+#endif
+  initContainer();
+  collectLSInstr(F);
+  bool changed = restoreLSInstrToGCInstr();
+#ifndef NDEBUG
+  if (changed) {
+    LLVM_DEBUG(dbgs() << "CJGCInstrRestore: " << F.getName().str()
+                      << " changed." << "\n");
+  }
+  LLVM_DEBUG(dbgs() << "CJGCInstrRestore: " << F.getName().str() << " end."
+                    << "\n");
+#endif
+  return changed;
+}
+
+void CJGCInstrRestore::initContainer() {
+  LSInstrDispatchMap.clear();
+  LoadForGCReadRefs.clear();
+  StoreForGCWriteRefs.clear();
+  LSInstrDispatchMap[Intrinsic::cj_gcread_ref] = &LoadForGCReadRefs;
+  LSInstrDispatchMap[Intrinsic::cj_gcwrite_ref] = &StoreForGCWriteRefs;
+}
+
+inline void CJGCInstrRestore::dispatchLSInstr(Instruction *Instr) {
+  MDNode *Node = Instr->getMetadata(CJGCInstrReplace::GC_WRITE_REF_IID);
+  if (Node) {
+    auto *CInt = mdconst::dyn_extract<ConstantInt>(Node->getOperand(0));
+    auto IID = CInt->getUniqueInteger().getZExtValue();
+    LSInstrDispatchMap[IID]->push_back(Instr);
+  }
+}
+
+void CJGCInstrRestore::collectLSInstr(Function &F) {
+  for (auto &I : instructions(F)) {
+    if (isa<LoadInst>(I) || isa<StoreInst>(I)) {
+      dispatchLSInstr(&I);
+    }
+  }
+}
+
+namespace {
+
+bool valueOperandTypeCheck(Type *Ty) {
+  if (!Ty->isPointerTy()) {
+    return false;
+  }
+  auto *PtrTy = dyn_cast<PointerType>(Ty);
+  if (PtrTy->getAddressSpace() != 1) {
+    return false;
+  }
+
+  Type *ElemTy = PtrTy->getPointerElementType();
+  if (!isa<IntegerType>(ElemTy)) {
+    return false;
+  }
+  IntegerType *IntTy = dyn_cast<IntegerType>(ElemTy);
+  return IntTy->getBitWidth() == 8;
+}
+
+bool ptrOperandTypeCheck(Type *Ty) {
+  if (!Ty->isPointerTy()) {
+    return false;
+  }
+  auto *PtrTy = dyn_cast<PointerType>(Ty);
+  if (PtrTy->getAddressSpace() != 1) {
+    return false;
+  }
+
+  Type *ElemTy = PtrTy->getPointerElementType();
+  return valueOperandTypeCheck(ElemTy);
+  return false;
+}
+
+bool shouldRestore(Instruction *Instr) {
+  // if (isa<LoadInst>(Instr)) {
+
+  // }
+  if (isa<StoreInst>(Instr)) {
+    return valueOperandTypeCheck(Instr->getOperand(0)->getType()) &&
+           ptrOperandTypeCheck(Instr->getOperand(1)->getType());
+  }
+  return false;
+}
+
+Value *castToValueOperandType(Value *V, IRBuilder<> &IRB) {
+  auto *VTy = V->getType();
+  assert(VTy->isPointerTy() &&
+         "invalid type in CJGCInstrRestore pass castToValueOperandType.");
+  if (valueOperandTypeCheck(VTy)) {
+    return V;
+  }
+  Value *Res = nullptr;
+  auto *PtrTy = dyn_cast<PointerType>(VTy);
+  bool AddressSpaceEqualOne = PtrTy->getAddressSpace() == 1;
+  LLVMContext &Ctx = IRB.getContext();
+  Type *TargetType = Type::getInt8PtrTy(Ctx, 1);
+  if (!AddressSpaceEqualOne) {
+    Type *TmpType = Type::getInt8PtrTy(Ctx, 0);
+    Res = IRB.CreateBitCast(V, TmpType);
+    Res = IRB.CreateAddrSpaceCast(Res, TargetType);
+  } else {
+    Res = IRB.CreateBitCast(V, TargetType);
+  }
+  return Res;
+}
+
+bool restoreGCReadRef(SmallVector<Instruction *, 4> *Instrs) { return false; }
+
+bool restoreGCWriteRef(SmallVector<Instruction *, 4> *Instrs) {
+  bool Changed = false;
+  SmallVector<Instruction *, 4> ToBeErased;
+  for (auto *SI : *Instrs) {
+    if (shouldRestore(SI)) {
+      Changed = true;
+      MDNode *Node = SI->getMetadata(CJGCInstrReplace::GC_WRITE_REF_IID);
+      auto *CInt = mdconst::dyn_extract<ConstantInt>(Node->getOperand(0));
+      auto IID = CInt->getUniqueInteger().getZExtValue();
+      IRBuilder<> IRB(SI);
+      Module *M = IRB.GetInsertBlock()->getModule();
+      Function *IntrinsicFunc = Intrinsic::getDeclaration(M, IID);
+      auto *BasePtr =
+          castToValueOperandType(getUnderlyingObject(SI->getOperand(1)), IRB);
+      IRB.CreateCall(IntrinsicFunc,
+                     {SI->getOperand(0), BasePtr, SI->getOperand(1)});
+      ToBeErased.push_back(SI);
+    }
+  }
+  for (auto *I : ToBeErased) {
+    I->eraseFromParent();
+  }
+  return Changed;
+}
+
+} // namespace
+
+bool CJGCInstrRestore::restoreLSInstrToGCInstr() {
+  bool Changed = false;
+  for (auto [IID, Instrs] : LSInstrDispatchMap) {
+    switch (IID) {
+    case Intrinsic::cj_gcread_ref:
+      Changed |= restoreGCReadRef(Instrs);
+      break;
+    case Intrinsic::cj_gcwrite_ref:
+      Changed |= restoreGCWriteRef(Instrs);
+      break;
+    default:
+      break;
+    }
+  }
+  return Changed;
+}
