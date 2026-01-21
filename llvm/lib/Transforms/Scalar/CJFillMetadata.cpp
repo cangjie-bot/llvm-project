@@ -578,6 +578,19 @@ MDTuple *llvm::getMDOperand(const MDTuple *MD, unsigned Idx) {
 }
 
 unsigned llvm::getTypeModifier(StringRef Name) {
+  if (Name.startswith("reflectVersion")) {
+    StringRef VersionStr = Name.substr(14);
+    unsigned Version = 0;
+    if (!VersionStr.getAsInteger(10, Version) && Version > 0 && Version <= 7) {
+      unsigned Result = 0;
+      if (Version & 1) Result |= RMT_REFLECT_VER_BIT1;
+      if (Version & 2) Result |= RMT_REFLECT_VER_BIT2;
+      if (Version & 4) Result |= RMT_REFLECT_VER_BIT3;
+      return Result;
+    }
+    return RMT_MAX;
+  }
+
   return StringSwitch<unsigned>(Name)
       .Case("default", RMT_DEFAULT)
       .Case("private", RMT_PRIVATE)
