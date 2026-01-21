@@ -156,6 +156,8 @@
 #include "llvm/Transforms/Scalar/CJBarrierOpt.h"
 #include "llvm/Transforms/Scalar/CJBarrierSplit.h"
 #include "llvm/Transforms/Scalar/CJDevirtualOpt.h"
+#include "llvm/Transforms/Scalar/CJGCInstrReplace.h"
+#include "llvm/Transforms/Scalar/CJGCInstrRestore.h"
 #include "llvm/Transforms/Scalar/CJSimpleOpt.h"
 #include "llvm/Transforms/Scalar/CJObjectReuseOpt.h"
 #include "llvm/Transforms/Scalar/CJGenericIntrinsicOpt.h"
@@ -332,6 +334,7 @@ cl::opt<bool> PrintPipelinePasses(
              "(best-effort only)."));
 extern cl::opt<bool> CJPipeline;
 extern cl::opt<bool> EnableCJBarrierSplit;
+extern cl::opt<bool> EnableCJGCInstrTransform;
 extern cl::opt<bool> RunPartialInlining;
 extern cl::opt<bool> IVCallInstrEnable;
 } // namespace llvm
@@ -1237,6 +1240,9 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
       MPM.addPass(CJRuntimeLowering());
       if (EnableCJBarrierSplit)
         MPM.addPass(CJBarrierSplit());
+      if (CJPipeline && L.getSpeedupLevel() == 2 && EnableCJGCInstrTransform) {
+        MPM.addPass(createModuleToFunctionPassAdaptor(CJGCInstrReplace()));
+      }
 
       if (L.getSpeedupLevel() > 1)
         MPM.addPass(createModuleToFunctionPassAdaptor(CJSimpleOpt()));
@@ -1245,6 +1251,9 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
         MPM.addPass(PtrAuthBackwardCFI());
     }
     auto addCangjiePasses = [&]() {
+      if (CJPipeline && L.getSpeedupLevel() == 2 && EnableCJGCInstrTransform) {
+        MPM.addPass(createModuleToFunctionPassAdaptor(CJGCInstrRestore()));
+      }
       if (CJPipeline && !CangjieLTOPreOpt) {
         MPM.addPass(CJSpecificOpt(L.getSpeedupLevel()));
         MPM.addPass(PlaceSafepoints());
