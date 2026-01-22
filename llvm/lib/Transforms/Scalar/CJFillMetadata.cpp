@@ -578,6 +578,31 @@ MDTuple *llvm::getMDOperand(const MDTuple *MD, unsigned Idx) {
 }
 
 unsigned llvm::getTypeModifier(StringRef Name) {
+  constexpr StringRef REFLECT_VERSION_PREFIX = "reflectVersion";
+  constexpr size_t REFLECT_VERSION_PREFIX_LEN = REFLECT_VERSION_PREFIX.size();
+  constexpr unsigned MAX_REFLECT_VERSION = 7; // 3 bits: 0b111
+  constexpr unsigned VERSION_BIT_MASK_1 = 1; // 0b001
+  constexpr unsigned VERSION_BIT_MASK_2 = 2; // 0b010
+  constexpr unsigned VERSION_BIT_MASK_3 = 4; // 0b100
+
+  if (Name.startswith(REFLECT_VERSION_PREFIX)) {
+    StringRef VersionStr = Name.substr(REFLECT_VERSION_PREFIX_LEN);
+    unsigned Version = 0;
+    if (!VersionStr.getAsInteger(10, Version) &&
+        Version > 0 &&
+        Version <= MAX_REFLECT_VERSION) {
+      unsigned Result = 0;
+      if (Version & VERSION_BIT_MASK_1)
+        Result |= RMT_REFLECT_VER_BIT1;
+      if (Version & VERSION_BIT_MASK_2)
+        Result |= RMT_REFLECT_VER_BIT2;
+      if (Version & VERSION_BIT_MASK_3)
+        Result |= RMT_REFLECT_VER_BIT3;
+      return Result;
+    }
+    return RMT_MAX;
+  }
+
   return StringSwitch<unsigned>(Name)
       .Case("default", RMT_DEFAULT)
       .Case("private", RMT_PRIVATE)
@@ -903,6 +928,7 @@ Constant *ReflectInfo::getClassReflectInfo(const MDTuple *ReflectMD) {
 Constant *ReflectInfo::getEnumReflectInfo(const MDTuple *ReflectMD) {
   // record all reflection info
   EnumReflectInfo Info(M);
+  Info.GenericClass = getStringFromMD(ReflectMD, ERT_GENERIC_CLASS);
   parseAttributes(getMDOperand(ReflectMD, ERT_ATTRIBUTE), Info.Modifier,
                   Info.Annotation);
   parseEnumCtorMDs(Info.EnumCtors, getMDOperand(ReflectMD, ERT_ENUM_CTOR));
@@ -1141,6 +1167,11 @@ void ReflectInfo::fillEnumReflectInfo(EnumReflectInfo &Info,
   BodyVec[FET_STATIC_METHOD] =
       ConstantInt::get(Int32Ty, Info.StaticMethods.size());
   BodyVec[FET_ANNOTATION] = Info.Annotation;
+  if (Info.GenericClass.empty()) {
+    BodyVec[FET_GENERIC_CLASS] = Int8PtrNull;
+  } else {
+    BodyVec[FET_GENERIC_CLASS] = getNameGlobal(M, Info.GenericClass);
+  }
 
   for (unsigned Idx = 0; Idx < Info.InstanceMethods.size(); ++Idx) {
     BodyVec.push_back(Info.InstanceMethods[Idx]->fillMethodInfo(Idx, TIName));

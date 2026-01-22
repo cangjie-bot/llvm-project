@@ -47,6 +47,7 @@ enum ClassDebugInfoType : uint8_t {
 enum EnumReflectionType : uint8_t {
   ERT_TYPE_NAME = 0,
   ERT_ENUM_CTOR,
+  ERT_GENERIC_CLASS,
   ERT_INSTANCE_METHOD,
   ERT_STATIC_METHOD,
   ERT_ATTRIBUTE,
@@ -109,6 +110,7 @@ enum FillEnumReflectInfoType : uint8_t {
   FET_INSTANCE_METHOD,
   FET_STATIC_METHOD,
   FET_ANNOTATION = 5,
+  FET_GENERIC_CLASS,
   FET_PTRS,
 };
 
@@ -203,6 +205,7 @@ struct ClassReflectInfo : BaseInfo {
 struct EnumReflectInfo : BaseInfo {
   unsigned Modifier = 0;
   Constant *Annotation;
+  StringRef GenericClass;
   SmallVector<EnumCtorInfo, 8> EnumCtors;
   SmallVector<MethodInfo *, 8> InstanceMethods;
   SmallVector<MethodInfo *, 8> StaticMethods;
