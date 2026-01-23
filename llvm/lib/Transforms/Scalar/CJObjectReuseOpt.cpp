@@ -177,25 +177,30 @@ inline static bool isCJMallocObj(Value *V) {
 }
 
 inline static bool isTypeHasPadding(Type *AddrElemType, const DataLayout &DL) {
-  auto *ST = dyn_cast<StructType>(AddrElemType);
-  if (!ST) {
-    return true;
-  }
-  auto *SL = DL.getStructLayout(ST);
-  if (SL->hasPadding()) {
-    return true;
-  }
-  uint64_t EndOffset = SL->getSizeInBytes();
-  uint64_t Offset = 0;
-  while (Offset < EndOffset) {
-    unsigned Index = SL->getElementContainingOffset(Offset);
-    Type *ElementTy = ST->getElementType(Index);
-    uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedSize();
-    if (isa<StructType>(ElementTy) && isTypeHasPadding(ElementTy, DL)) {
+  if (auto *ST = dyn_cast<StructType>(AddrElemType)) {
+    auto *SL = DL.getStructLayout(ST);
+    if (SL->hasPadding()) {
       return true;
     }
-    Offset += ElementSize;
+    uint64_t EndOffset = SL->getSizeInBytes();
+    uint64_t Offset = 0;
+    while (Offset < EndOffset) {
+      unsigned Index = SL->getElementContainingOffset(Offset);
+      Type *ElementTy = ST->getElementType(Index);
+      uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedSize();
+      if (isTypeHasPadding(ElementTy, DL)) {
+        return true;
+      }
+      Offset += ElementSize;
+    }
+  } else if (auto *AT = dyn_cast<ArrayType>(AddrElemType)) {
+    Type *ElementTy = AT->getElementType();
+    return isTypeHasPadding(ElementTy, DL);
+  } else if (auto *VT = dyn_cast<VectorType>(AddrElemType)) {
+    Type *ElementTy = VT->getElementType();
+    return isTypeHasPadding(ElementTy, DL);
   }
+
   return false;
 }
 
@@ -500,7 +505,7 @@ bool CJObjectReuseOpt::transformForMemReuse(
               auto ReplaceElemType =
                   ReuseAddr->getType()->getNonOpaquePointerElementType();
               auto BeReplaceElemType =
-                  ReuseAddr->getType()->getNonOpaquePointerElementType();
+                  BeReplacedAddr->getType()->getNonOpaquePointerElementType();
               if (ReuseAddr->getType() != BeReplacedAddr->getType() &&
                   (isTypeHasPadding(ReplaceElemType, DL) ||
                    isTypeHasPadding(BeReplaceElemType, DL))) {
