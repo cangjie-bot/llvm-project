@@ -730,13 +730,13 @@ void CangjieDeclMap::SetGenericDeclBySubclass(Ptr<AST::RefType> refType, std::st
     bool isFromSubclass = false;
     for (auto& param:subclass->generic->typeParameters) {
       if (param->identifier.Val() == GetGenericParamDeclName(ele)) {
-        refType->typeArguments.emplace_back(builder.CreateAstType({ele}, param.get(), m_current_pkgname));
+        refType->typeArguments.emplace_back(builder.CreateAstType(AstTypeInfo(ele), param.get(), m_current_pkgname));
         isFromSubclass = true;
         break;
       }
     }
     if (!isFromSubclass) {
-      refType->typeArguments.emplace_back(builder.CreateAstType({ele}, nullptr, m_current_pkgname));
+      refType->typeArguments.emplace_back(builder.CreateAstType(AstTypeInfo(ele), nullptr, m_current_pkgname));
     }
   }
 }
@@ -781,15 +781,16 @@ void CangjieDeclMap::CreateClassLikeParentDecls(CompilerType type, Ptr<AST::Inhe
     Ptr<Decl> target = nullptr;
     target = CreateTypeDecl(superType);
     if (superName == "Object" || superName == "std.core::Object") {
-      id->inheritedTypes.emplace_back(builder.CreateAstType({"std.core::Object"}, target, m_current_pkgname));
+      id->inheritedTypes.emplace_back(builder.CreateAstType(AstTypeInfo("std.core::Object"),
+                                      target, m_current_pkgname));
     } else if (superName.find(GENERIC_TYPE_PREFIX_NAME) == std::string::npos) {
       // The generic type parameter of the superclass not comes from the subclass.
       // For example, class B <: A<Int64>, class B<T> <: A<Int64>
-      id->inheritedTypes.emplace_back(builder.CreateAstType({superName}, target, m_current_pkgname));
+      id->inheritedTypes.emplace_back(builder.CreateAstType(AstTypeInfo(superName), target, m_current_pkgname));
     } else {
       // The generic type parameter of the superclass comes from the subclass.
       // For example, class B<T> <: A<T>, class B<T,K> <: A<T,Int64>.
-      OwnedPtr<AST::Type> refType = builder.CreateAstType({superName}, target, m_current_pkgname, false);
+      OwnedPtr<AST::Type> refType = builder.CreateAstType(AstTypeInfo(superName), target, m_current_pkgname, false);
       auto rt = RawStaticCast<AST::RefType *>(refType.get());
       SetGenericDeclBySubclass(rt, superName, id);
       id->inheritedTypes.emplace_back(std::move(refType));
@@ -860,7 +861,7 @@ OwnedPtr<GenericConstraint> CangjieDeclMap::CreateGenericConstraintsDecl(Ptr<AST
     }
     Ptr<AST::Decl> decltmp = CreateTypeDecl(superType);
     std::string up = DeletePrefixOfType(superType.GetTypeName().AsCString());
-    OwnedPtr<AST::Type> ctype = builder.CreateAstType({up}, decltmp, m_current_pkgname);
+    OwnedPtr<AST::Type> ctype = builder.CreateAstType(AstTypeInfo(up), decltmp, m_current_pkgname);
 
     gc->upperBounds.emplace_back(std::move(ctype));
     std::string superName = superType.GetTypeName().GetCString();
@@ -1625,7 +1626,7 @@ bool CangjieDeclMap::CheckAndModifyCapturedVardecl(VarDecl& vd, OwnedPtr<AST::Fu
         OwnedPtr<FuncParam> param = MakeOwned<FuncParam>();
         param->identifier = vd.identifier;
         rt->ref.identifier = rt->ref.identifier.Val().substr(pos + CAPTURED_PREFIX.size());
-        auto capturedType = builder.CreateAstType({rt->ref.identifier.Val()}, nullptr);
+        auto capturedType = builder.CreateAstType(AstTypeInfo(rt->ref.identifier.Val()), nullptr);
         param->type = capturedType->astKind == AST::ASTKind::REF_TYPE ?
           std::move(vd.type) : std::move(capturedType);
         paramList->params.emplace_back(std::move(param));
