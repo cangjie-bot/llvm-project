@@ -453,8 +453,12 @@ static bool processCangjieIR(Module &M, unsigned OptLevel) {
     Changed = true;
   }
   // "0_for_keeping_some_types" is not needed after opt, clear it.
-  Function *KeepingTypeFunc = M.getFunction("0_for_keeping_some_types");
-  if (KeepingTypeFunc) {
+  SmallVector<Function *, 4> KeepingTypeFuncs;
+  for (Function &F : M) {
+    if (F.getName().startswith("0_for_keeping_some_types"))
+      KeepingTypeFuncs.push_back(&F);
+  }
+  for (Function *KeepingTypeFunc : KeepingTypeFuncs) {
     auto *FunPtrTy = cast<PointerType>(KeepingTypeFunc->getType());
     KeepingTypeFunc->replaceAllUsesWith(ConstantPointerNull::get(FunPtrTy));
     KeepingTypeFunc->eraseFromParent();
