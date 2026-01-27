@@ -502,11 +502,13 @@ bool CJObjectReuseOpt::transformForMemReuse(
               // the replacement is not allowed for SROA pass may generates
               // undef behavior instruction caused by using padding data.
               const auto &DL = dyn_cast<Instruction>(ReuseAddr)->getModule()->getDataLayout();
-              auto ReplaceElemType =
-                  ReuseAddr->getType()->getNonOpaquePointerElementType();
-              auto BeReplaceElemType =
-                  BeReplacedAddr->getType()->getNonOpaquePointerElementType();
-              if (ReuseAddr->getType() != BeReplacedAddr->getType() &&
+              auto ReplaceElemType = getUnderlyingObject(ReuseAddr)
+                                         ->getType()
+                                         ->getNonOpaquePointerElementType();
+              auto BeReplaceElemType = getUnderlyingObject(BeReplacedAddr)
+                                           ->getType()
+                                           ->getNonOpaquePointerElementType();
+              if (ReplaceElemType != BeReplaceElemType &&
                   (isTypeHasPadding(ReplaceElemType, DL) ||
                    isTypeHasPadding(BeReplaceElemType, DL))) {
                 continue;
