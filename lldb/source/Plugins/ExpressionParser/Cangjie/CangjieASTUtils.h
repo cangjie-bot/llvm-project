@@ -43,7 +43,7 @@ struct AstTypeInfo {
   CompilerType type;
 
   AstTypeInfo() = default;
-  AstTypeInfo(std::string n, CompilerType t = CompilerType())
+  explicit AstTypeInfo(std::string n, CompilerType t = CompilerType())
       : name(std::move(n)), type(t) {}
 };
 
