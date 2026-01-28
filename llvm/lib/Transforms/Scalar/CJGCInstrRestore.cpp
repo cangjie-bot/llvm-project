@@ -152,7 +152,12 @@ bool restoreGCWriteRef(SmallVector<Instruction *, 4> *Instrs) {
       auto *ValuePtr = castToI8AddrNum1PtrType(SI->getOperand(0), IRB);
       auto *DerivedPtr =
           castToI8AddrNum1PtrTypeAddrNum1PtrType(SI->getOperand(1), IRB);
-      IRB.CreateCall(IntrinsicFunc, {ValuePtr, BasePtr, DerivedPtr});
+      auto *GCInstr = IRB.CreateCall(IntrinsicFunc, {ValuePtr, BasePtr, DerivedPtr});
+      SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;
+      SI->getAllMetadata(MDs);
+      for (const auto &MD : MDs) {
+        GCInstr->setMetadata(MD.first, MD.second);
+      }
       ToBeErased.push_back(SI);
     }
   }
