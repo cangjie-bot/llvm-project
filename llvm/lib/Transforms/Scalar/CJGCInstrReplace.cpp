@@ -104,6 +104,11 @@ bool changeGCWriteRef(SmallVector<CallBase *, 4> *GCInstrs) {
     IRBuilder<> IRB(GCWriteRef);
     auto AddedStoreInstr = IRB.CreateStore(GCWriteRef->getArgOperand(0),
                                            GCWriteRef->getArgOperand(2));
+    SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;
+    GCWriteRef->getAllMetadata(MDs);
+    for (const auto &MD : MDs) {
+        AddedStoreInstr->setMetadata(MD.first, MD.second);
+    }
     addGCInstrMetadata(AddedStoreInstr, GCWriteRef);
   }
   for (auto *GCWriteRef : *GCInstrs) {
