@@ -2001,7 +2001,7 @@ public:
   ~MemPtr() override = default;
 
   static MemPtr *create(Value *Val, int Off, CJEscapeAnalysis &EAImpl,
-                        LoopInfo *LI = nullptr) {
+                        LoopInfo *LI = nullptr, bool needInsert = true) {
     if (EAImpl.AllMemLocInfo.count(std::make_pair(Val, Off))) {
       return EAImpl.AllMemLocInfo[std::make_pair(Val, Off)];
     }
@@ -2013,7 +2013,8 @@ public:
     }
     MemPtr *New = new MemPtr(Val, Off, P->LoopDepth, EAImpl, P);
     EAImpl.AllMemLocInfo[std::make_pair(Val, Off)] = New;
-    P->insertMem(New);
+    if (needInsert)
+      P->insertMem(New);
     return New;
   }
 
@@ -2199,7 +2200,7 @@ static void memPtrspreadEscape(
     BasicBlock *BB, unsigned ES, DenseMap<GCPtr *, unsigned> &SuccBBInfo,
     GCPtr *P, SmallVector<int, 8> &Offsets, bool Direct) {
   int CurOffset = Offsets.back();
-  MemPtr *MPtr = MemPtr::create(P->P, CurOffset, P->EA);
+  MemPtr *MPtr = MemPtr::create(P->P, CurOffset, P->EA, nullptr, Direct);
   if (MPtr == nullptr) {
     return;
   }
