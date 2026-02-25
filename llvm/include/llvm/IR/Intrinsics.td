@@ -472,6 +472,12 @@ def int_cj_array_copy_struct        : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyint_ty]>;
 def int_cj_copy_struct_field        : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyint_ty]>;
+def int_cj_maybe_local_write_ref    : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptrgcptr_ty, llvm_gcptr_ty],
+                                                [IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>]>;
+def int_cj_demode_write_ref         : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptrgcptr_ty, llvm_gcptr_ty],
+                                                [IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>]>;
 def int_cj_cross_access_barrier    : Intrinsic<[], [llvm_i64_ty]>;
 def int_cj_get_exported_ref        : Intrinsic<[llvm_gcptr_ty],
                                                 [llvm_i64_ty]>;
@@ -636,6 +642,18 @@ def int_cj_array_copy_generic       : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyint_ty]>;
 def int_cj_gcwrite_generic_payload  : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_ptr_ty, llvm_i32_ty]>;
+def int_cj_malloc_local_object      : Intrinsic<[llvm_gcptr_ty],
+                                                [llvm_ptr_ty, llvm_i32_ty],
+                                                [Throws]>;
+def int_cj_malloc_local_array       : Intrinsic<[llvm_gcptr_ty],
+                                                [llvm_ptr_ty, llvm_i64_ty, llvm_i64_ty],
+                                                [Throws]>;
+def int_cj_malloc_local_array_generic     : Intrinsic<[llvm_gcptr_ty],
+                                                [llvm_ptr_ty, llvm_i64_ty],
+                                                [Throws]>;
+def int_cj_alloca_local_generic     : Intrinsic<[llvm_gcptr_ty],
+                                                [llvm_ptr_ty, llvm_i32_ty],
+                                                [Throws]>;
 
 //===------------------- ObjC ARC runtime Intrinsics --------------------===//
 //
