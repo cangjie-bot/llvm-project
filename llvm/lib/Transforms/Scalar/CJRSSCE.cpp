@@ -59,22 +59,29 @@ static cl::opt<bool> EnableCJRSSCE("enable-cj-rssce", cl::Hidden,
 using Interval = std::pair<uint64_t, uint64_t>;
 
 static std::pair<Value *, uint64_t>
-getBasePtrAndOffset(const DataLayout &DL, Value *V, Instruction *I) {
+getBasePtrAndOffset(const DataLayout &DL, Value *V, Instruction *I,
+                    Instruction **LastClobberI = nullptr) {
   // For example:
   //   %16 = llvm.cj.gcread.ref(%cmp, %15)
   //   store i8 addrspace(1)* %16, %17
   // The Ptr now is %16, and we need to find cmp to check if cmp is same as
-  // BasePtr.
+  // BasePtr. And if V is a load instruction, we need to ensure that the load
+  // pointer is not clobbered starting from here.
   V = V->stripPointerCasts();
   if (isa<StoreInst>(I)) {
+    Instruction *StartI = I->getFunction()->getEntryBlock().getFirstNonPHI();
     if (auto *II = dyn_cast<IntrinsicInst>(V)) {
       if (II->getIntrinsicID() == Intrinsic::cj_gcread_ref)
         V = II->getArgOperand(1)->stripPointerCasts();
       else if (II->getIntrinsicID() == Intrinsic::cj_gcread_static_ref)
         V = II->getArgOperand(0)->stripPointerCasts();
+      StartI = II;
     } else if (auto *LI = dyn_cast<LoadInst>(V)) {
       V = LI->getPointerOperand()->stripPointerCasts();
+      StartI = LI;
     }
+    if (LastClobberI)
+      *LastClobberI = StartI;
   }
   // V is not a memory object.
   if (!isa<PointerType>(V->getType()))
@@ -506,7 +513,7 @@ struct SourcePropagationState {
       }
       assert((isa<StoreInst>(I) || isa<MemCpyInst>(I)) &&
              "Only support to deal store or memcpy");
-      auto [SrcBPtr, SrcOff] = getBasePtrAndOffset(DL, Src, I);
+      auto [SrcBPtr, SrcOff] = getBasePtrAndOffset(DL, Src, I, &LastClobberI);
       auto [DstBPtr, DstOff] = getBasePtrAndOffset(DL, Dst, I);
       if (!SrcBPtr || !DstBPtr)
         break;
