@@ -2815,6 +2815,9 @@ public:
         SrcMP = findSrcMP(BaseV, VPOffset, I->getParent());
         SrcMPCache.insert({CacheKey, SrcMP});
       }
+      // The definition of Base is itself, skip it.
+      if (SrcMP->P == Base && VPOffset == PVOffset)
+        continue;
       MemPtr *MP = MemPtr::create(Base, PVOffset, *this, LI);
       MP->insertDefine(I->getParent(), SrcMP);
       if (!Def[I->getParent()][Base][PVOffset].empty()) {
