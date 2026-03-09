@@ -1342,7 +1342,7 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
   }
 }
 
-//   ldr	R12, .Ltmp1
+//  ldr	R12, .Ltmp1
 // .Ltmp0:
 // 	add	R12, pc, R12
 // 	ldr	R12, [R12]
@@ -1351,8 +1351,10 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
 // 	mov	r12, #0
 // 	str	R12, [sp, #4] // CallFrameSize
 // 	bl	CJ_MCC_N2CStub
+//  b .Ltmp2
 // .Ltmp1:
 //   .long	.Ltmp1-(.calleefunc+8)
+// .Ltmp2:
 void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
                                                const Function *F,
                                                const MachineOperand &MOSym,
