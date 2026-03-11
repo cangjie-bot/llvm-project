@@ -1183,6 +1183,9 @@ bool ItaniumABILanguageRuntime::GetGenericDynamicType(ValueObject &in_value,
     if (!error.Success()) {
       return false;
     }
+    if (GetTypeName(*m_process, typeInfo) == in_value.GetCompilerType().GetTypeName()) {
+      return false;
+    }
     auto dynamic_type = GetDynamicTypeFromGenericTypeInfo(*ast, typeInfo);
     if (!dynamic_type.IsValid()) {
       return false;
