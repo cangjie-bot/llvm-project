@@ -85,6 +85,10 @@ struct CangjieDCE {
     SmallPtrSet<GlobalVariable *, 4> FuncTables;
     DenseMap<GlobalVariable *, bool> HasCompilerInfo;
     DenseMap<GlobalVariable *, GenericFuncInfo *> Next;
+
+#ifndef NDEBUG
+    GlobalVariable *Ty = nullptr;
+#endif
   };
 
   // These are used for eliminating the useless virtual func.
