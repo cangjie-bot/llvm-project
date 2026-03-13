@@ -84,6 +84,10 @@ struct CangjieDCE {
     // Save all func tables with current type.
     SmallPtrSet<GlobalVariable *, 4> FuncTables;
     DenseMap<GlobalVariable *, GenericFuncInfo *> Next;
+
+#ifndef NDEBUG
+    GlobalVariable *Ty = nullptr;
+#endif
   };
 
   // These are used for eliminating the useless virtual func.
