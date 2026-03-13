@@ -519,6 +519,9 @@ CangjieDCE::insertInstance(const SmallVectorImpl<GlobalVariable *> &Path,
       continue;
     }
     auto *GFI = new GenericFuncInfo;
+#ifndef NDEBUG
+    GFI.Ty = GV;
+#endif
     GFI->Prev = CurRoot;
     CurRoot->Next[GV] = GFI;
     CurRoot = GFI;
@@ -620,8 +623,9 @@ void CangjieDCE::updateDependencies(
   };
   for (auto &[GFI, Offsets] : Relation) {
     for (auto I : Offsets) {
+      auto *CurGFI = GFI;
       // 1. Mark all child nodes.
-      SmallVector<GenericFuncInfo *, 8> Worklist = {GFI};
+      SmallVector<GenericFuncInfo *, 8> Worklist = {CurGFI};
       while (!Worklist.empty()) {
         auto *Child = Worklist.pop_back_val();
         for (auto [_, N] : Child->Next) {
@@ -630,10 +634,10 @@ void CangjieDCE::updateDependencies(
         }
       }
       // 2. Recursively mark all parent nodes.
-      while (GFI != Root) {
-        auto &FTs = GFI->FuncTables;
-        GFI = GFI->Prev;
-        Mark(FTs, GFI->HasCompilerInfo, I);
+      while (CurGFI != Root) {
+        auto &FTs = CurGFI->FuncTables;
+        CurGFI = CurGFI->Prev;
+        Mark(FTs, CurGFI->HasCompilerInfo, I);
       }
     }
   }
