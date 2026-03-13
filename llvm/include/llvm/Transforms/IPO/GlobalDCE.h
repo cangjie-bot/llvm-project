@@ -79,11 +79,16 @@ private:
 
 struct CangjieDCE {
   struct GenericFuncInfo {
-    bool IsValid= false;
+    bool IsValid = false;
     GenericFuncInfo *Prev = nullptr;
     // Save all func tables with current type.
     SmallPtrSet<GlobalVariable *, 4> FuncTables;
+    DenseMap<GlobalVariable *, bool> HasCompilerInfo;
     DenseMap<GlobalVariable *, GenericFuncInfo *> Next;
+
+#ifndef NDEBUG
+    GlobalVariable *Ty = nullptr;
+#endif
   };
 
   // These are used for eliminating the useless virtual func.
