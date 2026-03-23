@@ -1436,9 +1436,20 @@ void ARMAsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
 
   MCSymbol *StubGVSymbol = GetARMGVSymbol(F, 0);
   // bl CJ_MCC_N2CStub
-  EmitToStreamer(*OutStreamer,
-                 MCInstBuilder(ARM::BL).addOperand(MCOperand::createExpr(
-                     MCSymbolRefExpr::create(StubGVSymbol, OutContext))));
+  if (Opcode == ARM::TAILJMPd) {
+    EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::Bcc)
+                                     .addExpr(MCSymbolRefExpr::create(
+                                         StubGVSymbol, OutContext))
+                                     .addImm(ARMCC::AL)
+                                     .addReg(0));
+  } else {
+    assert((Opcode != ARM::TCRETURNri) && (Opcode != ARM::TCRETURNdi) &&
+           (Opcode != ARM::TAILJPr) &&
+           "Do not support TCRETURNdi/TCRETURNri/TAILJMPr.");
+    EmitToStreamer(*OutStreamer,
+                   MCInstBuilder(ARM::BL).addOperand(MCOperand::createExpr(
+                       MCSymbolRefExpr::create(StubGVSymbol, OutContext))));
+  }
 
   SM.recordCJStackMap(*MI);
 
@@ -1528,6 +1539,10 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
        MI->getFlag(MachineInstr::FrameSetup))
     EmitUnwindingInstruction(MI);
 
+  if (MI->getOpcode() == ARM::TAILJMPd) {
+    if (tryEmitCangjieSpecificCall(MI))
+      return;
+  }
   // Do any auto-generated pseudo lowerings.
   if (emitPseudoExpansionLowering(*OutStreamer, MI))
     return;
