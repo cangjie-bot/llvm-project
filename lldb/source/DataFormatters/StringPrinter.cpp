@@ -468,7 +468,7 @@ static bool ReadEncodedBufferAndDumpToStream(
     target_sp->ReadStringFromMemory(options.GetLocation(), buffer,
                                      bufferSPSize, error, type_width);
   else
-    target_sp->ReadMemory(options.GetLocation(), buffer, bufferSPSize, error);
+    target_sp->ReadMemory(options.GetLocation(), buffer, bufferSPSize, error, true);
   if (error.Fail()) {
     options.GetStream()->Printf("unable to read data");
     return true;
