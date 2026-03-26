@@ -1066,7 +1066,7 @@ endif ()
 message(STATUS "COV_FLAG : ${COV_FLAG}")
 
 if (COV_FLAG MATCHES 1)
-  set(CMAKE_COV_FLAGS "-fprofile-arcs -ftest-coverage -Xclang -coverage-cfg-checksum -Xclang -coverage-no-function-names-in-data -Xclang -coverage-version=A75*")
+  set(CMAKE_COV_FLAGS "-fprofile-arcs -ftest-coverage -O0 -fno-inline")
 endif()
 
 # Used for security compilation options
