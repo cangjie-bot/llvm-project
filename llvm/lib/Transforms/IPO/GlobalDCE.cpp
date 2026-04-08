@@ -48,7 +48,7 @@ static cl::opt<bool>
 
 static cl::opt<bool>
     ClEnableCJTIE("enable-cangjie-typeinfo-elimination", cl::Hidden,
-                  cl::init(false),
+                  cl::init(true),
                   cl::desc("Enable cangjie typeinfo elimination"));
 
 STATISTIC(NumAliases  , "Number of global aliases removed");
@@ -827,22 +827,17 @@ void CangjieDCE::updateLiveExtensions() {
 }
 
 void CangjieDCE::updateNonExternalExtensionDefs(Module &M) {
-  for (auto &GV : M.globals()) {
-    if (!GV.isCJInnerTypeExtensions())
-      continue;
-    auto *C = GV.getInitializer();
+  auto ReorderArray = [this](GlobalVariable &GV,
+                             std::vector<unsigned> &OldToNew,
+                             SmallSet<GlobalVariable *, 8> &RewriteTypeInfos) {
     ArrayType *ATy = cast<ArrayType>(GV.getValueType());
-    unsigned NumElements = C->getNumOperands(), NextLiveIndex = 0,
-             NextDeadIndex = NumElements - 1;
-    if (NumElements == 0)
-      continue;
-    std::vector<unsigned> OldToNew(NumElements);
+    auto *C = GV.getInitializer();
+    unsigned NumElements = C->getNumOperands();
     std::vector<Constant *> NewElements(
         NumElements,
         ConstantPointerNull::get(cast<PointerType>(ATy->getElementType())));
+    unsigned NextLiveIndex = 0, NextDeadIndex = NumElements - 1;
     DenseMap<unsigned, unsigned> DeadGVIndex;
-    // Move dead GV to the back.
-    SmallSet<GlobalVariable *, 8> RewriteTypeInfos;
     for (unsigned I = 0; I < NumElements; ++I) {
       auto *Ext = cast<Constant>(C->getOperand(I)->stripPointerCasts());
       auto *ExtGV = dyn_cast_or_null<GlobalVariable>(Ext);
@@ -866,8 +861,8 @@ void CangjieDCE::updateNonExternalExtensionDefs(Module &M) {
     }
     if (NextDeadIndex + 1 != NextLiveIndex ||
         !(isa<ConstantPointerNull>(NewElements[NextLiveIndex]) ||
-         !DCE.AliveGlobals.count(
-             cast<GlobalVariable>(NewElements[NextLiveIndex]))))
+          !DCE.AliveGlobals.count(
+              cast<GlobalVariable>(NewElements[NextLiveIndex]))))
       report_fatal_error("error");
     NextDeadIndex = NumElements - 1;
     while (NextLiveIndex < NextDeadIndex) {
@@ -877,6 +872,98 @@ void CangjieDCE::updateNonExternalExtensionDefs(Module &M) {
     }
     GV.setInitializer(ConstantArray::get(dyn_cast<ArrayType>(GV.getValueType()),
                                          NewElements));
+  };
+  auto FixupConstantUsers = [](SmallVectorImpl<ConstantExpr *> &GEPUsers,
+                               std::vector<unsigned> &OldToNew) {
+    // We must NOT use replaceAllUsesWith on GEP ConstantExprs here.
+    // ConstantExprs are uniqued: if GEP@104's new index is 92,
+    // getWithOperands returns the existing GEP@92 object. Then
+    // replaceAllUsesWith merges Expr104's users into Expr92. When Expr92
+    // is later processed (92->80), ALL users (including ones that should
+    // stay at 92) are moved to 80.
+    //
+    // Fix: snapshot each GEP's user chain (GEP -> Constant -> GV) before
+    // any mutation, then rebuild each GlobalVariable initializer directly.
+    struct InitFixup {
+      GlobalVariable *TI;
+      unsigned FieldIdx;
+      Constant *NewGEP;
+    };
+    SmallVector<InitFixup, 8> InitFixups;
+
+    for (auto *Expr : GEPUsers) {
+      unsigned Op = Expr->getNumOperands() - 1;
+      auto *OldIndex = cast<ConstantInt>(Expr->getOperand(Op));
+      unsigned NewIdx = OldToNew[OldIndex->getZExtValue()];
+      if (OldIndex->getZExtValue() == NewIdx)
+        continue;
+      SmallVector<Constant *, 4> Operands;
+      Operands.reserve(Expr->getNumOperands());
+      for (Value *Operand : Expr->operands())
+        Operands.push_back(cast<Constant>(Operand));
+      Operands[Op] = ConstantInt::get(OldIndex->getType(), NewIdx);
+      Constant *NewGEP = Expr->getWithOperands(Operands);
+
+      // Walk the user chain: GEP -> Constant (initializer) -> GlobalVariable.
+      // Snapshot before any mutation to avoid cross-contamination.
+      for (User *U : Expr->users()) {
+        for (User *UU : U->users()) {
+          auto *TI = dyn_cast<GlobalVariable>(UU);
+          auto *CS = dyn_cast<ConstantStruct>(TI->getInitializer());
+          for (unsigned i = 0; i < CS->getNumOperands(); ++i) {
+            if (CS->getOperand(i) == Expr) {
+              InitFixups.push_back({TI, i, NewGEP});
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // Apply all collected fixups by rebuilding each GV's initializer.
+    for (auto &F : InitFixups) {
+      auto *CS = cast<ConstantStruct>(F.TI->getInitializer());
+      SmallVector<Constant *, 16> Fields;
+      Fields.reserve(CS->getNumOperands());
+      for (unsigned i = 0; i < CS->getNumOperands(); i++)
+        Fields.push_back(i == F.FieldIdx ? F.NewGEP
+                                         : cast<Constant>(CS->getOperand(i)));
+      F.TI->setInitializer(
+          ConstantStruct::get(cast<StructType>(CS->getType()), Fields));
+      if (isSafeToDestroyConstant(CS))
+        CS->destroyConstant();
+    }
+  };
+  auto ResetBitmap = [](SmallSet<GlobalVariable *, 8> &RewriteTypeInfos) {
+    for (auto *TI : RewriteTypeInfos) {
+      auto *TIC = TI->getInitializer();
+      unsigned Op = ClassInfoFieldType::CIT_ITABLE;
+      if (isa<ConstantPointerNull>(TIC->getOperand(Op)))
+        continue;
+      auto *StructInit = dyn_cast<ConstantStruct>(TIC);
+      SmallVector<Constant *, 8> Operands;
+      Operands.reserve(TIC->getNumOperands());
+      for (Value *Operand : TIC->operands())
+        Operands.push_back(cast<Constant>(Operand));
+      Operands[Op] = Constant::getNullValue(Operands[Op]->getType());
+      Constant *New = ConstantStruct::get(
+          cast<StructType>(StructInit->getType()), Operands);
+      if (New != TIC)
+        TI->setInitializer(New);
+      if (isSafeToDestroyConstant(TIC))
+        TIC->destroyConstant();
+    }
+  };
+  for (auto &GV : M.globals()) {
+    if (!GV.isCJInnerTypeExtensions())
+      continue;
+    auto *C = GV.getInitializer();
+    if (C->getNumOperands() == 0)
+      continue;
+    // Reorder the array, move dead GV to the back.
+    std::vector<unsigned> OldToNew(C->getNumOperands());
+    SmallSet<GlobalVariable *, 8> RewriteTypeInfos;
+    ReorderArray(GV, OldToNew, RewriteTypeInfos);
     SmallVector<ConstantExpr *, 8> GEPUsers;
     for (auto *U : GV.users()) {
       auto *Expr = dyn_cast<ConstantExpr>(U);
@@ -884,19 +971,9 @@ void CangjieDCE::updateNonExternalExtensionDefs(Module &M) {
         GEPUsers.push_back(Expr);
     }
     // Modify typeinfo and typetemplate using GV.
-    for (auto *Expr : GEPUsers) {
-      unsigned Op = Expr->getNumOperands() - 1;
-      auto *OldIndex = cast<ConstantInt>(Expr->getOperand(Op));
-      SmallVector<Constant *, 4> Operands;
-      Operands.reserve(Expr->getNumOperands());
-      for (Value *Operand : Expr->operands())
-        Operands.push_back(cast<Constant>(Operand));
-      Operands[Op] = ConstantInt::get(OldIndex->getType(),
-                                      OldToNew[OldIndex->getZExtValue()]);
-      Constant *NewExpr = Expr->getWithOperands(Operands);
-      if (NewExpr != Expr)
-        Expr->replaceAllUsesWith(NewExpr);
-    }
+    FixupConstantUsers(GEPUsers, OldToNew);
+    // Reset bitmap in typeinfo.
+    ResetBitmap(RewriteTypeInfos);
     // Delete dead users and constant.
     GV.removeDeadConstantUsers();
     if (isSafeToDestroyConstant(C))
