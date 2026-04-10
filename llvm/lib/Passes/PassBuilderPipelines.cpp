@@ -1428,7 +1428,7 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
     MPM.addPass(IROutlinerPass());
 
   // Merge functions if requested.
-  if (PTO.MergeFunctions || CJPipeline)
+  if (PTO.MergeFunctions)
     MPM.addPass(MergeFunctionsPass());
 
   if (!LTOPreLink && CJPipeline) {
@@ -1947,7 +1947,9 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   // Now that we have optimized the program, discard unreachable functions.
   MPM.addPass(GlobalDCEPass());
 
-  if (PTO.MergeFunctions)
+  // It will conflict with VFE, so it is necessary to ensure that VFE is not
+  // executed after MergeFunction.
+  if (PTO.MergeFunctions || CJPipeline)
     MPM.addPass(MergeFunctionsPass());
 
   if (PTO.CallGraphProfile)
