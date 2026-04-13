@@ -176,6 +176,9 @@ def RemoveOuterQuotes(s: str) -> str:
         end -= 1
     return s[start:end]
 
+def EscapeExpressionString(s):
+    return s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+
 def FunctionSummaryProvider(valobj, _):
     raw = valobj.GetNonSyntheticValue()
     ptr = raw.GetChildMemberWithName("ptr")
@@ -188,6 +191,7 @@ def FunctionSummaryProvider(valobj, _):
        mangle_name = sb_context.GetFunction().GetName()
     if (sb_context.GetSymbol().IsValid()):
        mangle_name = sb_context.GetSymbol().GetName()
+    mangle_name = EscapeExpressionString(mangle_name)
     if mangle_name.startswith("_"):
         expr = f'(char *)CJ_MRT_DemangleHandle("{"_" + mangle_name}")'
     else:
@@ -1639,6 +1643,7 @@ class CommandCJBackTrace :
             str.Clear()
             frame.GetDescription(str)
             mangled = frame.GetFunctionName().split("(", 1)[0]
+            mangled = EscapeExpressionString(mangled)
             if mangled.startswith("_"):
                 expr = f'(char *)CJ_MRT_DemangleHandle("{"_" + mangled}")'
             else:
