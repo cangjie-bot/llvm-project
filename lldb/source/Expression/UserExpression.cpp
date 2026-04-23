@@ -206,10 +206,17 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
     }
   }
   auto thread = exe_ctx.GetThreadPtr();
-  auto cjthread = process->FindCJThreadByOSThreadID(thread->GetID(), true);
-  if (cjthread) {
-    cjthread->BindCJThreadToOSThread(*process);
+  lldb::CJThreadSP old_cjthread = process->GetBindCJThread();
+  lldb::CJThreadSP new_cjthread = process->FindCJThreadByOSThreadID(thread->GetID(), false);
+  if (old_cjthread != new_cjthread) {
+    if (old_cjthread) {
+      old_cjthread->UnBindCJThreadToOSThread(*process);
+    }
+    if (new_cjthread) {
+      new_cjthread->BindCJThreadToOSThread(*process);
+    }
   }
+
   // Explicitly force the IR interpreter to evaluate the expression when the
   // there is no process that supports running the expression for us. Don't
   // change the execution policy if we have the special top-level policy that
