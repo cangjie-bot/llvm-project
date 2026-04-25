@@ -1741,7 +1741,7 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
       bitcodeFile->ExportSymbols = isVisible;
       hasVisiblePkgMatch |= isVisible;
     }
-    if (!hasVisiblePkgMatch) {
+    if (!hideAllVisiblePkgs && !hasVisiblePkgMatch) {
       for (InputFile *file : files)
         if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file))
           bitcodeFile->ExportSymbols = true;
