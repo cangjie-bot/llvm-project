@@ -210,6 +210,14 @@ bool ValidateSocketName(const std::string& name) {
         return false;
     }
 
+    const std::regex kAndroidSocketPattern(
+        R"(^/[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)*/[a-zA-Z][a-zA-Z0-9]*-[0-9]+\.sock$)"
+    );
+
+    if (std::regex_match(name, kAndroidSocketPattern)) {
+        return true;
+    }
+
     const std::regex valid_chars(R"(^[a-zA-Z0-9_.-]+$)");
 
     return std::regex_match(name, valid_chars);
