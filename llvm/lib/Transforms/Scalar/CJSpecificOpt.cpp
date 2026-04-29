@@ -403,7 +403,6 @@ static bool generateAliasForStaticGI(Module &M) {
         // ThinLTO where non-prevailing linkonce_odr symbols are downgraded by
         // the 'ElimAvailExtern' pass.
         if (TI->hasExternalLinkage()) {
-          NewOperands.push_back(TI);
           continue;
         }
 
