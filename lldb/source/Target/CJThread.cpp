@@ -84,15 +84,15 @@ constexpr CJThreadLayoutOffsets offsets_x86_windows = {
 
 constexpr CJThreadLayoutOffsets offsets_aarch64_linux = {
     .offset_of_ScheduleManager_dot_allCJThreadList = 144,
-    .offset_of_CJThread_dot_allCJThreadDulink = 320,
+    .offset_of_CJThread_dot_allCJThreadDulink = 240,
     .offset_of_CJThread_dot_context = 24,
     .offset_of_CJThread_dot_thread = 16,
-    .offset_of_CJThread_dot_state = 296,
-    .offset_of_CJThread_dot_id = 536,
-    .offset_of_CJThread_dot_name = 544,
-    .offset_of_Thread_dot_tid = 80,
-    .offset_of_boundThread = 376,
-    .offset_of_boundCJThread = 512
+    .offset_of_CJThread_dot_state = 216,
+    .offset_of_CJThread_dot_id = 456,
+    .offset_of_CJThread_dot_name = 464,
+    .offset_of_Thread_dot_tid = 104,
+    .offset_of_boundThread = 432,
+    .offset_of_boundCJThread =320
 };
 
 constexpr CJThreadLayoutOffsets offsets_aarch64_darwin = {
