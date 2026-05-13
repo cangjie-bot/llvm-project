@@ -534,3 +534,37 @@ lldb::tid_t SBCJThread::GetCJThreadID() const {
 
   return cjthread_id;
 }
+
+lldb::tid_t SBCJThread::GetHostThreadID() const {
+  LLDB_INSTRUMENT_VA(this);
+
+  lldb::tid_t host_thread_id = LLDB_INVALID_THREAD_ID;
+  std::unique_lock<std::recursive_mutex> lock;
+  ExecutionContext exe_ctx(m_opaque_sp.get(), lock);
+
+  if (exe_ctx.HasCJThreadScope()) {
+    CJThread *cjthread = exe_ctx.GetCJThreadPtr();
+    if (cjthread) {
+      host_thread_id = cjthread->GetHostThreadID();
+    }
+  }
+
+  return host_thread_id;
+}
+
+const char *SBCJThread::GetName() const {
+  LLDB_INSTRUMENT_VA(this);
+
+  const char *name = nullptr;
+  std::unique_lock<std::recursive_mutex> lock;
+  ExecutionContext exe_ctx(m_opaque_sp.get(), lock);
+
+  if (exe_ctx.HasCJThreadScope()) {
+    Process::StopLocker stop_locker;
+    if (stop_locker.TryLock(&exe_ctx.GetProcessPtr()->GetRunLock())) {
+      name = exe_ctx.GetCJThreadPtr()->GetName();
+    }
+  }
+
+  return name;
+}
