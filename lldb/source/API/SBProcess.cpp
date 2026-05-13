@@ -383,6 +383,58 @@ bool SBProcess::SetSelectedThreadByIndexID(uint32_t index_id) {
   return ret_val;
 }
 
+bool SBProcess::SetSelectedCJThread(const SBCJThread &cjthread) {
+  LLDB_INSTRUMENT_VA(this, cjthread);
+
+  ProcessSP process_sp(GetSP());
+  if (process_sp) {
+    std::lock_guard<std::recursive_mutex> guard(
+        process_sp->GetTarget().GetAPIMutex());
+    lldb::tid_t cjthread_id = cjthread.GetCJThreadID();
+    ThreadList &cjthread_list = process_sp->GetCJThreadList();
+    bool success = cjthread_list.SetSelectedThreadByID(cjthread_id, true);
+    if (success) {
+      CJThreadSP cjthread_sp = std::dynamic_pointer_cast<CJThread>(
+          cjthread_list.FindThreadByID(cjthread_id));
+      if (cjthread_sp && cjthread_sp->GetCJThreadState() == CJThreadState::eRunning) {
+        ThreadSP os_thread = process_sp->GetThreadList().FindThreadByID(
+            cjthread_sp->GetHostThreadID());
+        if (os_thread) {
+          process_sp->GetThreadList().SetSelectedThreadByID(os_thread->GetID(), false);
+        }
+      }
+    }
+    return success;
+  }
+  return false;
+}
+
+bool SBProcess::SetSelectedCJThreadByID(lldb::tid_t cjthread_id) {
+  LLDB_INSTRUMENT_VA(this, cjthread_id);
+
+  bool ret_val = false;
+  ProcessSP process_sp(GetSP());
+  if (process_sp) {
+    std::lock_guard<std::recursive_mutex> guard(
+        process_sp->GetTarget().GetAPIMutex());
+    ThreadList &cjthread_list = process_sp->GetCJThreadList();
+    ret_val = cjthread_list.SetSelectedThreadByID(cjthread_id, true);
+    if (ret_val) {
+      CJThreadSP cjthread_sp = std::dynamic_pointer_cast<CJThread>(
+          cjthread_list.FindThreadByID(cjthread_id));
+      if (cjthread_sp && cjthread_sp->GetCJThreadState() == CJThreadState::eRunning) {
+        ThreadSP os_thread = process_sp->GetThreadList().FindThreadByID(
+            cjthread_sp->GetHostThreadID());
+        if (os_thread) {
+          process_sp->GetThreadList().SetSelectedThreadByID(os_thread->GetID(), false);
+        }
+      }
+    }
+  }
+
+  return ret_val;
+}
+
 SBThread SBProcess::GetThreadAtIndex(size_t index) {
   LLDB_INSTRUMENT_VA(this, index);
 
@@ -1293,7 +1345,23 @@ SBCJThread SBProcess::GetCJThreadAtIndex(size_t index) {
     const bool can_update = stop_locker.TryLock(&process_sp->GetRunLock());
     std::lock_guard<std::recursive_mutex> guard(
         process_sp->GetTarget().GetAPIMutex());
-    thread_sp = process_sp->GetThreadList().GetThreadAtIndex(index, can_update);
+    thread_sp = process_sp->GetCJThreadList().GetThreadAtIndex(index, can_update);
+    sb_cjthread.SetCJThread(std::dynamic_pointer_cast<lldb_private::CJThread>(thread_sp));
+  }
+
+  return sb_cjthread;
+}
+
+SBCJThread SBProcess::GetSelectedCJThread() const {
+  LLDB_INSTRUMENT_VA(this);
+
+  SBCJThread sb_cjthread;
+  ThreadSP thread_sp;
+  ProcessSP process_sp(GetSP());
+  if (process_sp) {
+    std::lock_guard<std::recursive_mutex> guard(
+        process_sp->GetTarget().GetAPIMutex());
+    thread_sp = process_sp->GetCJThreadList().GetSelectedThread();
     sb_cjthread.SetCJThread(std::dynamic_pointer_cast<lldb_private::CJThread>(thread_sp));
   }
 
