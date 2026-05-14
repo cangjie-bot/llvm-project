@@ -92,6 +92,8 @@ public:
 
   lldb::SBCJThread GetCJThreadAtIndex(size_t index);
 
+  lldb::SBCJThread GetSelectedCJThread() const;
+
   lldb::SBThread GetThreadAtIndex(size_t index);
 
   lldb::SBThread GetThreadByID(lldb::tid_t sb_thread_id);
@@ -111,6 +113,10 @@ public:
   bool SetSelectedThreadByID(lldb::tid_t tid);
 
   bool SetSelectedThreadByIndexID(uint32_t index_id);
+
+  bool SetSelectedCJThread(const lldb::SBCJThread &cjthread);
+
+  bool SetSelectedCJThreadByID(lldb::tid_t cjthread_id);
 
   // Queue related functions
   uint32_t GetNumQueues();

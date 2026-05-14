@@ -151,6 +151,11 @@ public:
     GetCJThreadAtIndex (size_t index);
 
     %feature("autodoc", "
+    Returns the currently selected cjthread.") GetSelectedCJThread;
+    lldb::SBCJThread
+    GetSelectedCJThread () const;
+
+    %feature("autodoc", "
     Returns the thread with the given thread ID.") GetThreadByID;
     lldb::SBThread
     GetThreadByID (lldb::tid_t sb_thread_id);
@@ -178,6 +183,12 @@ public:
 
     bool
     SetSelectedThreadByIndexID (uint32_t index_id);
+
+    bool
+    SetSelectedCJThread (const lldb::SBCJThread &cjthread);
+
+    bool
+    SetSelectedCJThreadByID (lldb::tid_t cjthread_id);
 
     //------------------------------------------------------------------
     // Queue related functions
@@ -526,6 +537,7 @@ public:
         target = property(GetTarget, None, doc='''A read only property that an lldb object that represents the target (lldb.SBTarget) that owns this process.''')
         num_threads = property(GetNumThreads, None, doc='''A read only property that returns the number of threads in this process as an integer.''')
         selected_thread = property(GetSelectedThread, SetSelectedThread, doc='''A read/write property that gets/sets the currently selected thread in this process. The getter returns a lldb.SBThread object and the setter takes an lldb.SBThread object.''')
+        selected_cjthread = property(GetSelectedCJThread, SetSelectedCJThread, doc='''A read/write property that gets/sets the currently selected cjthread in this process. The getter returns a lldb.SBCJThread object and the setter takes an lldb.SBCJThread object.''')
         state = property(GetState, None, doc='''A read only property that returns an lldb enumeration value (see enumerations that start with "lldb.eState") that represents the current state of this process (running, stopped, exited, etc.).''')
         exit_state = property(GetExitStatus, None, doc='''A read only property that returns an exit status as an integer of this process when the process state is lldb.eStateExited.''')
         exit_description = property(GetExitDescription, None, doc='''A read only property that returns an exit description as a string of this process when the process state is lldb.eStateExited.''')
