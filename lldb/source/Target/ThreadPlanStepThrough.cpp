@@ -34,7 +34,9 @@ ThreadPlanStepThrough::ThreadPlanStepThrough(Thread &thread,
       m_backstop_addr(LLDB_INVALID_ADDRESS), m_return_stack_id(m_stack_id),
       m_stop_others(stop_others) {
   LookForPlanToStepThroughFromCurrentPC();
-
+  if (!m_sub_plan_sp) {
+      m_sub_plan_sp = CFFILookForPlanToStepThroughFromCurrentPC();
+  }
   // If we don't get a valid step through plan, don't bother to set up a
   // backstop.
   if (m_sub_plan_sp) {
