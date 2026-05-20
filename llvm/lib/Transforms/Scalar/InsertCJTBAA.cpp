@@ -581,13 +581,24 @@ static bool tryToInsertTBAAForGEPGEP(TBAAProcessUnit &TBAAUnit) {
   if (!CheckGEPGEP())
     return false;
 
+  auto *OuterIdx = cast<ConstantInt>(GEP->getOperand(1));
+  if (OuterIdx->isZero())
+    return prepareCJTBAA(TBAAUnit.DL, TBAAUnit.I, GEPGEP, TBAAUnit.DstTy,
+                         false, 0);
+
+  // If a scalar-typed pointer is advanced again, the final access may land in
+  // the middle of a scalar or in struct padding. We cannot reconstruct a
+  // verifier-safe scalar TBAA path from the parent struct in that case, so
+  // conservatively omit TBAA.
+  if (GEP->getSourceElementType()->isSingleValueType())
+    return false;
+
   // %1 = gep %"ArrayLayout.xxx" addrspace(1)* %0, 0, 1, %x, 1
   // %2 = gep i64 addrspace(1)* %1, i64 1
   // load %2
   uint64_t Size =
       TBAAUnit.DL.getTypeSizeInBits(GEP->getSourceElementType()) / 8;
-  uint64_t OriginOff =
-      cast<ConstantInt>(GEP->getOperand(1))->getZExtValue() * Size;
+  uint64_t OriginOff = OuterIdx->getZExtValue() * Size;
   return prepareCJTBAA(TBAAUnit.DL, TBAAUnit.I, GEPGEP, TBAAUnit.DstTy, false,
                        OriginOff);
 }
