@@ -2246,6 +2246,10 @@ bool AArch64InstrInfo::isADDXri(const MachineInstr &MI) const {
   return MI.getOpcode() == AArch64::ADDXri;
 }
 
+bool AArch64InstrInfo::isADDXrr(const MachineInstr &MI) const {
+  return MI.getOpcode() == AArch64::ADDXrr;
+}
+
 bool AArch64InstrInfo::isORRXri(const MachineInstr &MI) const {
   return MI.getOpcode() == AArch64::ORRXri;
 }

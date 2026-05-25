@@ -71,9 +71,8 @@ void WinException::beginFunction(const MachineFunction *MF) {
 
   shouldEmitMoves = Asm->needsSEHMoves() && MF->hasWinCFI();
 
-  if (F.isCangjieSafepointStub()) {
+  if (F.isCangjieSafepointStub())
     shouldEmitMoves = true;
-  }
 
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
   unsigned PerEncoding = TLOF.getPersonalityEncoding();

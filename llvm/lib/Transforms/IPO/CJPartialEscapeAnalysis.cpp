@@ -2001,7 +2001,7 @@ public:
   ~MemPtr() override = default;
 
   static MemPtr *create(Value *Val, int Off, CJEscapeAnalysis &EAImpl,
-                        LoopInfo *LI = nullptr) {
+                        LoopInfo *LI = nullptr, bool needInsert = true) {
     if (EAImpl.AllMemLocInfo.count(std::make_pair(Val, Off))) {
       return EAImpl.AllMemLocInfo[std::make_pair(Val, Off)];
     }
@@ -2013,7 +2013,8 @@ public:
     }
     MemPtr *New = new MemPtr(Val, Off, P->LoopDepth, EAImpl, P);
     EAImpl.AllMemLocInfo[std::make_pair(Val, Off)] = New;
-    P->insertMem(New);
+    if (needInsert)
+      P->insertMem(New);
     return New;
   }
 
@@ -2199,7 +2200,7 @@ static void memPtrspreadEscape(
     BasicBlock *BB, unsigned ES, DenseMap<GCPtr *, unsigned> &SuccBBInfo,
     GCPtr *P, SmallVector<int, 8> &Offsets, bool Direct) {
   int CurOffset = Offsets.back();
-  MemPtr *MPtr = MemPtr::create(P->P, CurOffset, P->EA);
+  MemPtr *MPtr = MemPtr::create(P->P, CurOffset, P->EA, nullptr, Direct);
   if (MPtr == nullptr) {
     return;
   }
@@ -2216,6 +2217,7 @@ static void memPtrspreadEscape(
 }
 
 void CJEscapeAnalysis::setInfoEscaped(GCPtr *GP, BasicBlock *BB) {
+  assert(GP && "CJEscapeAnalysis::setInfoEscaped GCPtr should not be nullptr!");
   GP->setInfoEscaped();
   if (!EscapeBBInfo[BB].count(GP)) {
     EscapeBBInfo[BB][GP] = NotEscape;
@@ -2274,7 +2276,7 @@ bool CJEscapeAnalysis::isEscapedValue(Value *V) {
     }
     return true;
   }
-  return false;
+  return true;
 }
 
 class EscapeAnalysisImpl : public InstVisitor<EscapeAnalysisImpl>,
@@ -2365,6 +2367,7 @@ public:
     }
   }
 #endif
+
   void initialize() {
     for (Function *Func : SCCFunctions) {
       ProcessedFunc = Func;
@@ -2641,6 +2644,7 @@ public:
   }
 
   void bindInfoEscape(GCPtr *P, GCPtr *V, BasicBlock *BB) {
+    assert((P && V) && "CJEscapeAnalysis::bindInfoEscape GCPtr should not be nullptr!");
     P->InfoEscapedVec.insert(V);
     V->InfoEscapedVec.insert(P);
     unsigned PES = isEscapedValue(P->P) ? Escaped : NotEscape;
@@ -2663,6 +2667,7 @@ public:
     Value *P = II->getOperand(2);
     GCPtr *GP = GCPtr::create(P, *this, LI);
     GCPtr *GV = GCPtr::create(V, *this, LI);
+    assert((GP && GV) && "CJEscapeAnalysis::handleGCWrite GCPtr should not be nullptr!");
     if (isEscapedValue(P) || GP->LoopDepth < GV->LoopDepth) {
       if (auto VI = dyn_cast<Instruction>(V)) {
         EscapeBBInfo[II->getParent()][GV] = Escaped;
@@ -2851,6 +2856,7 @@ public:
     if (BBIt == Def.end())
       return MemPtr::create(BaseV, VPOffset, *this, LI);
     auto &BBDefs = BBIt->second;
+
     auto FindInMap = [&BBDefs, this](Value *BaseV,
                                      uint64_t VPOffset) -> GCPtr * {
       auto BaseIt = BBDefs.find(BaseV);
@@ -2861,6 +2867,7 @@ public:
         return nullptr;
       return *OffIt->second.begin();
     };
+
     GCPtr *Temp = FindInMap(BaseV, VPOffset);
     if (!Temp)
       return MemPtr::create(BaseV, VPOffset, *this, LI);
@@ -3133,6 +3140,7 @@ public:
     Value *P = SI.getPointerOperand();
     GCPtr *GP = GCPtr::create(P, *this, LI);
     GCPtr *GV = GCPtr::create(V, *this, LI);
+    assert((GP && GV) && "CJEscapeAnalysis::visitStoreInst GCPtr should not be nullptr!");
     if (isEscapedValue(P) || GP->LoopDepth < GV->LoopDepth) {
       if (auto VI = dyn_cast<Instruction>(V)) {
         EscapeBBInfo[SI.getParent()][GV] = Escaped;

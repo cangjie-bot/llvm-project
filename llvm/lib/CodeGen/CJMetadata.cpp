@@ -585,7 +585,6 @@ void CJMetadataInfo::emitGCRoots() {
     return;
 
   OS.switchSection(TD[GCRootsTableIdx].TableSection);
-
   if (TT.isOSBinFormatMachO())
     // 8: align size, 8 bytes
     OS.emitValueToAlignment(8);
@@ -761,11 +760,9 @@ void CJMetadataInfo::emitSDKVersion() {
     return;
 
   OS.switchSection(TD[SDKVersionIdx].TableSection);
-
   if (TT.isOSBinFormatMachO())
     // 8: align size, 8 bytes
     OS.emitValueToAlignment(8);
-
   OS.emitValue(getGVRefSymbol(Version), FuncPtrSize);
 }
 
