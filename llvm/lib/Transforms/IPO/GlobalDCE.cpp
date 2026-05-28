@@ -494,6 +494,7 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
     EraseUnusedGlobalValue(GIF);
 
   if (CJPipeline && ClEnableCJTIE) {
+    CJDCE.shrinkNonExternalExtensionDefs(M);
     CJDCE.rewriteExtensions(M);
     CJDCE.rewriteLLVMUsed(M);
   }
@@ -983,6 +984,61 @@ void CangjieDCE::updateNonExternalExtensionDefs(Module &M) {
     GV.removeDeadConstantUsers();
     if (isSafeToDestroyConstant(C))
       C->destroyConstant();
+  }
+}
+
+void CangjieDCE::shrinkNonExternalExtensionDefs(Module &M) {
+  SmallVector<GlobalVariable *, 4> Candidates;
+  for (GlobalVariable &GV : M.globals())
+    if (GV.isCJInnerTypeExtensions())
+      Candidates.push_back(&GV);
+
+  for (auto *GV : Candidates) {
+    if (!GV->hasInitializer())
+      report_fatal_error("Must have initializer");
+
+    auto *C = GV->getInitializer();
+    ArrayType *OldAT = cast<ArrayType>(GV->getValueType());
+    Type *ATy = OldAT->getElementType();
+    std::vector<Constant *> LiveGVs;
+    for (unsigned I = 0, E = C->getNumOperands(); I != E; ++I) {
+      if (isa<ConstantPointerNull>(C->getOperand(I)))
+        continue;
+      LiveGVs.push_back(cast<Constant>(C->getOperand(I)));
+    }
+
+    // NonExternalExtensionDefs is null-terminated for runtime parsing.
+    LiveGVs.push_back(ConstantPointerNull::get(cast<PointerType>(ATy)));
+    if (LiveGVs.size() == C->getNumOperands())
+      continue;
+
+    ArrayType *AT = ArrayType::get(ATy, LiveGVs.size());
+    Constant *NewC = ConstantArray::get(AT, LiveGVs);
+    GlobalVariable *NewGV = new GlobalVariable(
+        M, AT, GV->isConstant(), GV->getLinkage(), NewC);
+    NewGV->takeName(GV);
+    NewGV->copyAttributesFrom(GV);
+    NewGV->copyMetadata(GV, /*Offset=*/0);
+
+    SmallVector<ConstantExpr *, 8> GEPUsers;
+    for (auto *U : GV->users())
+      if (auto *Expr = dyn_cast<ConstantExpr>(U);
+          Expr && Expr->getOpcode() == Instruction::GetElementPtr)
+        GEPUsers.push_back(Expr);
+    for (auto *Expr : GEPUsers) {
+      SmallVector<Constant *, 4> Operands;
+      Operands.reserve(Expr->getNumOperands());
+      for (Value *Operand : Expr->operands())
+        Operands.push_back(Operand == GV ? NewGV : cast<Constant>(Operand));
+      Constant *NewGEP =
+          Expr->getWithOperands(Operands, Expr->getType(),
+                                /*OnlyIfReduced=*/false, NewGV->getValueType());
+      Expr->replaceAllUsesWith(NewGEP);
+      if (isSafeToDestroyConstant(Expr))
+        Expr->destroyConstant();
+    }
+    GV->replaceAllUsesWith(ConstantExpr::getBitCast(NewGV, GV->getType()));
+    GV->eraseFromParent();
   }
 }
 
