@@ -900,8 +900,17 @@ PreservedAnalyses CJSimpleOpt::run(Function &F,
   return PreservedAnalyses::all();
 }
 
-// The following instruction is redundant because the runtime has already done
-// it when the catch type is unique.
+static GlobalVariable *getUnderlyingGlobalVariable(Value *V) {
+  auto *CE = dyn_cast<ConstantExpr>(V);
+  if (!CE || CE->getOpcode() != Instruction::BitCast)
+    return nullptr;
+  auto *GV = dyn_cast<GlobalVariable>(CE->getOperand(0));
+  if (!GV || !GV->hasName())
+    return nullptr;
+
+  return GV;
+}
+
 //  landing_pad_bb:
 //    ...
 //    %x = call i1 @llvm.cj.is.subtype(...)
@@ -923,6 +932,13 @@ static bool simplifyLandingPad(Function &F) {
     if (!CB || !CB->getCalledFunction()->hasName() ||
         CB->getCalledFunction()->getName() != "CJ_MCC_IsSubType")
       continue;
+    auto *TypeInfoGV = getUnderlyingGlobalVariable(CB->getArgOperand(1));
+    if (!TypeInfoGV)
+      continue;
+    auto *CatchGV = getUnderlyingGlobalVariable(LPI->getOperand(0));
+    if (!CatchGV || CatchGV != TypeInfoGV)
+      continue;
+
     CB->replaceAllUsesWith(
         ConstantInt::getTrue(Type::getInt1Ty(LPI->getContext())));
     Changed = true;
