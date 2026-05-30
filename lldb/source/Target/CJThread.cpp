@@ -95,6 +95,19 @@ constexpr CJThreadLayoutOffsets offsets_aarch64_linux = {
     .offset_of_boundCJThread =320
 };
 
+constexpr CJThreadLayoutOffsets offsets_aarch64_linux_ohos = {
+    .offset_of_ScheduleManager_dot_allCJThreadList = 128,
+    .offset_of_CJThread_dot_allCJThreadDulink = 240,
+    .offset_of_CJThread_dot_context = 24,
+    .offset_of_CJThread_dot_thread = 16,
+    .offset_of_CJThread_dot_state = 216,
+    .offset_of_CJThread_dot_id = 456,
+    .offset_of_CJThread_dot_name = 464,
+    .offset_of_Thread_dot_tid = 104,
+    .offset_of_boundThread = 432,
+    .offset_of_boundCJThread =320
+};
+
 constexpr CJThreadLayoutOffsets offsets_aarch64_darwin = {
     .offset_of_ScheduleManager_dot_allCJThreadList = 176,
     .offset_of_CJThread_dot_allCJThreadDulink = 240,
@@ -124,7 +137,12 @@ static bool GetCJThreadLayoutOffsets(Process &process, CJThreadLayoutOffsets &of
       offsets = offsets_aarch64_darwin;
       return true;
     } else if (triple.getOS() == llvm::Triple::OSType::Linux) {
-      offsets = offsets_aarch64_linux;
+      auto env = triple.getEnvironmentName();
+      if (env.equals("ohos")) {
+        offsets = offsets_aarch64_linux_ohos;
+      } else {
+        offsets = offsets_aarch64_linux;
+      }
       return true;
     }
   }
