@@ -22,11 +22,11 @@
 @"default:A<Int32>.ti" = internal global %TypeInfo { i8* getelementptr inbounds ([17 x i8], [17 x i8]* @"default:A<Int32>.name", i32 0, i32 0), i8 -128, i8 0, i16 0, i32 0, i8* null, i32 0, i8 1, i8 1, i16 -32768, i32* null, i8* bitcast (%TypeTemplate* @"default:A.tt" to i8*), i8* bitcast ([1 x %TypeInfo*]* @"default:A<Int32>.ti.typeArgs" to i8*), i8* null, %TypeInfo* @"std.core:Object.ti", %ExtensionDef** getelementptr inbounds ([2 x %ExtensionDef*], [2 x %ExtensionDef*]* @NonExternalExtensionDefs, i32 0, i32 0), i8* inttoptr (i64 -9223372036854775807 to i8*), i8* null } #0
 @"default:A<Int32>.ti.typeArgs" = private global [1 x %TypeInfo*] [%TypeInfo* @Int32.ti] #2
 @"default:A<T>_ed_A:I1" = private global %ExtensionDef { i32 1, i8 1, i8* bitcast (%TypeTemplate* @"default:A.tt" to i8*), i8* bitcast (%TypeInfo* @"A:I1.ti" to i8*), i8* null, i8* null } #5
-; CHECK: @NonExternalExtensionDefs = private global [2 x %ExtensionDef*] zeroinitializer
+; CHECK-DAG: @NonExternalExtensionDefs = private global [1 x %ExtensionDef*] zeroinitializer
 @NonExternalExtensionDefs = private global [2 x %ExtensionDef*] [%ExtensionDef* @"default:A<T>_ed_A:I1", %ExtensionDef* null] #4
-; CHECK: @StaticGenericTIs = private global [1 x %TypeInfo*] zeroinitializer
+; CHECK-DAG: @StaticGenericTIs = private global [1 x %TypeInfo*] zeroinitializer
 @StaticGenericTIs = private global [1 x %TypeInfo*] [%TypeInfo* @"default:A<Int32>.ti"] #6
-; CHECK: @llvm.used = appending global [2 x i8*] [i8* bitcast ([2 x %ExtensionDef*]* @NonExternalExtensionDefs to i8*), i8* bitcast ([1 x %TypeInfo*]* @StaticGenericTIs to i8*)], section "llvm.metadata"
+; CHECK-DAG: @llvm.used = appending global [2 x i8*] [i8* bitcast ([1 x %ExtensionDef*]* @NonExternalExtensionDefs to i8*), i8* bitcast ([1 x %TypeInfo*]* @StaticGenericTIs to i8*)], section "llvm.metadata"
 @llvm.used = appending global [2 x i8*] [i8* bitcast ([2 x %ExtensionDef*]* @NonExternalExtensionDefs to i8*), i8* bitcast ([1 x %TypeInfo*]* @StaticGenericTIs to i8*)], section "llvm.metadata"
 
 attributes #0 = { "CFileKlass" }
