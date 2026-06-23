@@ -246,7 +246,7 @@ void CJObjectReuseOpt::collectNoEscapeValue(
           continue;
         }
         auto *ClassInfo = GV->getInitializer();
-        if (ClassInfo->getNumOperands() < ClassInfoFieldType::CIT_SIZE) {
+        if (ClassInfo->getNumOperands() <= ClassInfoFieldType::CIT_SIZE) {
           continue;
         }
         uint64_t BitSize = dyn_cast<Constant>(ClassInfo->getOperand(
