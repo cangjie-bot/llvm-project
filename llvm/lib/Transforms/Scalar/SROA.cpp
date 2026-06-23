@@ -3800,7 +3800,7 @@ static void getInnerTys(const DataLayout &DL, StructType *STy,
                     Offset - ElementBegin, EndOffset - ElementBegin);
         Offset = EndOffset;
       } else if (ElementBegin < Offset) {
-        assert(ElementEnd < EndOffset);
+        assert(ElementEnd <= EndOffset);
         getInnerTys(DL, dyn_cast<StructType>(ElementTy), InnerTys,
                     Offset - ElementBegin, ElementEnd - ElementBegin);
         Offset = ElementEnd;
