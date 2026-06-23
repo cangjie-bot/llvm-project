@@ -1430,7 +1430,7 @@ private:
 
   SmallPtrSet<User *, 8> Visited;
 
-  SmallPtrSet<Function *, 8> SCCFunctions;
+  SmallSetVector<Function *, 8> SCCFunctions;
 
   ObjectLocation *HeapLoc = nullptr;
 
@@ -3347,7 +3347,7 @@ static bool removeDeadBlocks(LazyCallGraph::SCC &C,
 
 static bool escapeAnalysisImpl(LazyCallGraph::SCC &C, LazyCallGraph &CG,
                                CGSCCAnalysisManager &AM,
-			                   CGSCCUpdateResult &UR) {
+                               CGSCCUpdateResult &UR) {
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerCGSCCProxy>(C, CG).getManager();
   auto LookLoop = [&](Function &F) -> LoopInfo & {
