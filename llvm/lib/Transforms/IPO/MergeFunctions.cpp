@@ -201,7 +201,7 @@ public:
   }
 
   bool runOnModule(Module &M);
-  void doExceptionOutline(Module &M);
+  bool doExceptionOutline(Module &M);
 
 private:
   // The function comparison operator is provided here so that FunctionNodes do
@@ -499,7 +499,8 @@ static Function* generateFunc(BasicBlock *BB, Function *OrigF) {
   return Func;
 }
 
-void MergeFunctions::doExceptionOutline(Module &M) {
+bool MergeFunctions::doExceptionOutline(Module &M) {
+  bool Changed = false;
   SmallVector<std::pair<llvm::BasicBlock *, llvm::Function *>> ExceptionBBs;
 
   for (Function &F : M) {
@@ -513,15 +514,15 @@ void MergeFunctions::doExceptionOutline(Module &M) {
       }
     }
   }
-
   for (auto &pair : ExceptionBBs) {
-    generateFunc(pair.first, pair.second);
+      if (generateFunc(pair.first, pair.second))
+        Changed = true;
   }
+  return Changed;
 }
 
 bool MergeFunctions::runOnModule(Module &M) {
-  bool Changed = false;
-  doExceptionOutline(M);
+  bool Changed = doExceptionOutline(M);
   SmallVector<GlobalValue *, 4> UsedV;
   collectUsedGlobalVariables(M, UsedV, /*CompilerUsed=*/false);
   collectUsedGlobalVariables(M, UsedV, /*CompilerUsed=*/true);
