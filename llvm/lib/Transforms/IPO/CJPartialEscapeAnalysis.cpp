@@ -2276,7 +2276,7 @@ bool CJEscapeAnalysis::isEscapedValue(Value *V) {
     }
     return true;
   }
-  return true;
+  return false;
 }
 
 class EscapeAnalysisImpl : public InstVisitor<EscapeAnalysisImpl>,
