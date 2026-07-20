@@ -879,7 +879,11 @@ private:
       Value *GVExpr = ConstantExpr::getBitCast(GV, IRB.getInt8PtrTy());
       IRB.CreateStore(GVExpr, BC);
       const StructLayout *AllocaSL = DL.getStructLayout(AllocaTy);
-      uint64_t HeaderSize = DL.getTypeAllocSize(TIType->getPointerTo()).getFixedSize();
+      // Count the arm32 i32 padding (see ElemTypes above) so the memset
+      // starts at the payload @8, not the padding @4.
+      uint64_t HeaderSize =
+          DL.getTypeAllocSize(TIType->getPointerTo()).getFixedSize() +
+          (TT.isARM() ? 4 : 0);
       uint64_t MemSize = AllocaSL->getSizeInBytes() - HeaderSize;
       // %x.payload = getelementptr i8*, %x.i, HeaderSize
       // call @memset(%x.payload, 0, MemSize)
