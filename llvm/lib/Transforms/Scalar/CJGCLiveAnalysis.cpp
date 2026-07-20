@@ -13,6 +13,7 @@
 #include "llvm/Transforms/Scalar/CJGCLiveAnalysis.h"
 
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
@@ -1098,7 +1099,13 @@ void StructLiveAnalysis::visitMemoryStore(StoreInst *SI,
   }
 
   Type *ValType = SI->getValueOperand()->getType();
-  if (ValType->isPointerTy() || ValType->isIntegerTy(64)) { // 64bit
+  // On 32-bit ARM a pointer is 4 bytes, so a `store i32` (e.g. zeroing the
+  // payload field) can define a GC field. Route it through the pointer/i64
+  // branch so it is recorded as a def; otherwise the else branch skips it as
+  // a partial store and the GC scans stale data (SIGSEGV on a null gctib).
+  const Triple TT(SI->getModule()->getTargetTriple());
+  if (ValType->isPointerTy() || ValType->isIntegerTy(64) ||
+      (TT.isARM() && ValType->isIntegerTy(32))) {
     FieldInfo *Field = getFieldInfoByValue(Ptr);
     Value *Base = Field->V;
     if (isa<AllocaInst>(Base) || isa<Argument>(Base))
