@@ -268,7 +268,6 @@ CompilerType CangjieDeclMap::LookUptype(lldb::ModuleSP module,
     if (full_type.IsValid()) {
       return full_type;
     }
-    continue;
   }
 
   return CompilerType();
@@ -871,7 +870,6 @@ OwnedPtr<GenericConstraint> CangjieDeclMap::CreateGenericConstraintsDecl(Ptr<AST
     OwnedPtr<AST::Type> ctype = builder.CreateAstType(AstTypeInfo(up), decltmp, m_current_pkgname);
 
     gc->upperBounds.emplace_back(std::move(ctype));
-    std::string superName = SafeAsCString(superType.GetTypeName());
   }
   return gc;
 }
