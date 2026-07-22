@@ -52,9 +52,9 @@ cl::opt<bool> CJDisablePEA("cj-disable-partial-ea",
 cl::opt<unsigned> CJPEAMaxCycNonzero(
     "cj-pea-max-cyc-nonzero", cl::Hidden, cl::init(24),
     // 24 bails the confirmed-pathological case (RedBlackTree.put,
-    // maxCycNonzero=30) while letting high-but-benign SCCs through: e.g.
-    // std.ast's Tokens.init(Array<UInt8>) reaches 32 yet completes in ~50s
-    // with output identical to the bailed run, so bailing it gains nothing.
+    // maxCycNonzero=30). The metric counts every non-zero-offset
+    // intra-SCC edge (multi-edges included); the -1 escape-all sentinel
+    // offset is excluded (see countNonzeroIntraEdges).
     cl::desc("Max non-zero-offset edges inside a cyclic SCC of the PEA "
              "propagation graph for PEA to proceed; above this PEA bails "
              "out. A cyclic SCC with non-zero offsets makes spreadMemEscape "
@@ -2590,28 +2590,35 @@ public:
   // deterministic graph property (independent of ASLR or DenseMap order).
   unsigned computeMaxCycNonzero() {
     DenseMap<GCPtr *, SmallVector<GCPtr *>> G;
-    DenseMap<GCPtr *, SmallVector<int>> GOff;
+    DenseMap<GCPtr *, SmallVector<int64_t>> GOff;
+    auto AddEdge = [&](GCPtr *From, GCPtr *To, int64_t Off) {
+      G[From].push_back(To);
+      GOff[From].push_back(Off);
+      // Pre-register every edge target as a key of G: targets such as
+      // MemPtrs live in AllMemLocInfo and are never values of AllPtrLocInfo,
+      // so without this tarjanMaxCycNonzero would insert them via G[U]
+      // while iterating G, invalidating the iteration (UB).
+      if (G.find(To) == G.end()) {
+        G[To];
+      }
+    };
     for (auto &KV : AllPtrLocInfo) {
       GCPtr *P = KV.second;
       for (GCPtr *M : P->MPs) {
-        G[P].push_back(M);
-        GOff[P].push_back(0);
+        AddEdge(P, M, 0);
       }
       for (auto &V : P->BaseValue) {
-        for (int O : V.second) {
-          G[P].push_back(V.first);
-          GOff[P].push_back(O);
+        for (uint64_t O : V.second) {
+          AddEdge(P, V.first, static_cast<int64_t>(O));
         }
       }
       for (auto &V : P->Alias) {
         for (int O : V.second) {
-          G[P].push_back(V.first);
-          GOff[P].push_back(O);
+          AddEdge(P, V.first, O);
         }
       }
       for (GCPtr *V : P->InfoEscapedVec) {
-        G[P].push_back(V);
-        GOff[P].push_back(0);
+        AddEdge(P, V, 0);
       }
     }
     return tarjanMaxCycNonzero(G, GOff);
@@ -2620,7 +2627,7 @@ public:
   // Iterative Tarjan SCC. For every cyclic SCC, count non-zero-offset
   // intra-SCC edges and return the maximum such count.
   unsigned tarjanMaxCycNonzero(DenseMap<GCPtr *, SmallVector<GCPtr *>> &G,
-                              DenseMap<GCPtr *, SmallVector<int>> &GOff) {
+                               DenseMap<GCPtr *, SmallVector<int64_t>> &GOff) {
     unsigned Idx = 0;
     DenseMap<GCPtr *, unsigned> Disc, Low;
     SmallVector<GCPtr *> Stk;
@@ -2677,15 +2684,20 @@ public:
     return MaxCycNonzero;
   }
 
-  // Count edges within a cyclic SCC whose offset is non-zero.
+  // Count edges within a cyclic SCC whose offset is non-zero. The -1
+  // escape-all sentinel (an unknown, non-constant offset; see getBaseValue)
+  // is excluded: it stops offset accumulation in spreadMemEscape rather
+  // than making cumulative offset-paths diverge, so it must not count as a
+  // diverging edge.
   unsigned countNonzeroIntraEdges(SmallVectorImpl<GCPtr *> &Comp,
                                   DenseMap<GCPtr *, SmallVector<GCPtr *>> &G,
-                                  DenseMap<GCPtr *, SmallVector<int>> &GOff,
+                                  DenseMap<GCPtr *, SmallVector<int64_t>> &GOff,
                                   DenseSet<GCPtr *> &In) {
     unsigned Nz = 0;
     for (GCPtr *N : Comp) {
       for (unsigned I = 0; I < G[N].size(); ++I) {
-        if (In.count(G[N][I]) && GOff[N][I] != 0) {
+        int64_t Off = GOff[N][I];
+        if (In.count(G[N][I]) && Off != 0 && Off != -1) {
           ++Nz;
         }
       }
