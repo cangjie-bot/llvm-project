@@ -1527,25 +1527,6 @@ void AsmPrinter::emitFunctionBody() {
     emitBasicBlockStart(MBB);
     DenseMap<StringRef, unsigned> MnemonicCounts;
     for (auto &MI : MBB) {
-      // Under Large code model, ISel (FastISel or SelectionDAG) may expand
-      // the safepoint call inside CJ_Safepoint_Stub to ADRP+LDR+BLR (GOT
-      // indirect). Because the stub is Naked (no prologue/epilogue), BLR
-      // overwrites LR without saving, and the trailing RET loops forever.
-      // Replace the entire MIR body with the correct outline stub pattern
-      // (TLS check + br x9), which uses br (tail call, no LR overwrite)
-      // and
-      // is safe under Naked regardless of code model or ISel backend.
-      // Only needed under Large code model — in Small model, ISel emits a
-      // single BL and the existing tryEmitCangjieSpecificCallByMOSym
-      // interception in emitInstruction handles it correctly.
-      if (MF->getFunction().getName() == "CJ_Safepoint_Stub" &&
-          TM.getCodeModel() == CodeModel::Large) {
-        emitCJSafepointOutlineStub();
-        HasAnyRealCode = true;
-        NumInstsInFunction += 4;
-        emitBasicBlockEnd(MBB);
-        continue;
-      }
       // Print the assembly for the instruction.
       if (!MI.isPosition() && !MI.isImplicitDef() && !MI.isKill() &&
           !MI.isDebugInstr()) {
