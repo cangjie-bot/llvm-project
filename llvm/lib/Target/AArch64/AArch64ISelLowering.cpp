@@ -6882,10 +6882,12 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
     if (CalleeFunc->isCangjieSafepointStub() ||
         CalleeFunc->isCangjieSafePoint() ||
         CalleeFunc->isCangjieStackCheck() ||
+        CalleeFunc->isCangjieThrowException() ||
         CalleeFunc->getName().isGetGCPhase() ||
         CalleeFunc->isGetCJThreadId() ||
         CalleeFunc->getName().isSetDebugLocation() ||
-        CalleeFunc->getName().equals("CJ_MRT_PreInitializePackage"))
+        CalleeFunc->getName().equals("CJ_MRT_PreInitializePackage") ||
+        CalleeFunc->isCangjieNativeStub(MF.getFunction()))
       OpFlags = AArch64II::MO_NO_FLAG;
     if (OpFlags & AArch64II::MO_GOT) {
       Callee = DAG.getTargetGlobalAddress(GV, DL, PtrVT, 0, OpFlags);
