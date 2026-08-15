@@ -112,6 +112,8 @@ const static StdMap<unsigned, StringRef> RuntimeMap {
     {Intrinsic::cj_malloc_local_array, "CJ_MCC_NewLocalArray"},
     {Intrinsic::cj_malloc_local_array_generic, "CJ_MCC_NewLocalGenericArray"},
     {Intrinsic::cj_maybe_local_write_ref, "CJ_MCC_MaybeLocalWriteRef"},
+    {Intrinsic::cj_maybe_local_write_generic,
+     "CJ_MCC_MaybeLocalWriteGeneric"},
     {Intrinsic::cj_demode_write_ref, "CJ_MCC_DemodeWriteRef"},
   };
 
@@ -1210,9 +1212,10 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       Changed = true;
       break;
     case Intrinsic::cj_maybe_local_write_ref:
+    case Intrinsic::cj_maybe_local_write_generic:
     case Intrinsic::cj_demode_write_ref:
-      // GC leaf: CJ_MCC_MaybeLocalWriteRef / CJ_MCC_DemodeWriteRef are exported as plain
-      // aliases without a callee-saved-register stub, so they cannot act as safepoints.
+      // GC leaf: the local-aware writes are exported as plain aliases without a
+      // callee-saved-register stub, so they cannot act as safepoints.
       Lowering.replaceWithRuntimeFunc(CI, true, false);
       Changed = true;
       break;

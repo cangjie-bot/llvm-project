@@ -475,6 +475,12 @@ def int_cj_copy_struct_field        : Intrinsic<[],
 def int_cj_maybe_local_write_ref    : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptrgcptr_ty, llvm_gcptr_ty],
                                                 [IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>]>;
+def int_cj_maybe_local_write_generic : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_i32_ty],
+                                                [IntrArgMemOnly, IntrWillReturn,
+                                                 NoCapture<ArgIndex<0>>,
+                                                 NoCapture<ArgIndex<1>>, WriteOnly<ArgIndex<1>>,
+                                                 NoCapture<ArgIndex<2>>, NoAlias<ArgIndex<2>>, ReadOnly<ArgIndex<2>>]>;
 def int_cj_demode_write_ref         : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptrgcptr_ty, llvm_gcptr_ty],
                                                 [IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>]>;
