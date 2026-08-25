@@ -641,6 +641,12 @@ def int_cj_assign_generic           : Intrinsic<[],
                                                  NoCapture<ArgIndex<0>>, NoAlias<ArgIndex<0>>,
                                                  NoCapture<ArgIndex<1>>, NoAlias<ArgIndex<1>>, ReadOnly<ArgIndex<1>>,
                                                  NoCapture<ArgIndex<2>>, NoAlias<ArgIndex<2>>, ReadOnly<ArgIndex<2>>]>;
+def int_cj_assign_local_generic     : Intrinsic<[],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_ptr_ty],
+                                                [IntrArgMemOnly, IntrWillReturn,
+                                                 NoCapture<ArgIndex<0>>, NoAlias<ArgIndex<0>>,
+                                                 NoCapture<ArgIndex<1>>, NoAlias<ArgIndex<1>>, ReadOnly<ArgIndex<1>>,
+                                                 NoCapture<ArgIndex<2>>, NoAlias<ArgIndex<2>>, ReadOnly<ArgIndex<2>>]>;
 def int_cj_malloc_array_generic     : Intrinsic<[llvm_gcptr_ty],
                                                 [llvm_ptr_ty, llvm_i64_ty],
                                                 [Throws]>;
