@@ -125,7 +125,7 @@ public:
   static bool classof(const LanguageRuntime *runtime) {
     return runtime->isA(&ID);
   }
-  std::string GetReflectionFieldName(int16_t id, TypeInfo& typeInfo);
+  std::string GetReflectionFieldName(uint16_t id, TypeInfo& typeInfo);
   void AddFieldToRecordType(TypeSystemClang& ast,
                             TypeInfo& typeInfo,
                             CompilerType& dynamic_type,

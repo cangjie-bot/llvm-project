@@ -309,7 +309,7 @@ bool IsRefType(int8_t type) {
     return false;
 }
 
-std::string ItaniumABILanguageRuntime::GetReflectionFieldName(int16_t id, TypeInfo& typeInfo) {
+std::string ItaniumABILanguageRuntime::GetReflectionFieldName(uint16_t id, TypeInfo& typeInfo) {
   uint64_t field_name_addr;
   Status error;
   char field_name[name_size + 1];
@@ -339,7 +339,7 @@ std::string ItaniumABILanguageRuntime::GetReflectionFieldName(int16_t id, TypeIn
 void ItaniumABILanguageRuntime::AddFieldToRecordType(
     TypeSystemClang& ast, TypeInfo& typeInfo, CompilerType& dynamic_type, bool is_class_member) {
     Status error;
-    int16_t super_fields_num = 0;
+    uint16_t super_fields_num = 0;
     if (typeInfo.super) {
       TypeInfo superti;
       m_process->ReadMemory((uint64_t)(typeInfo.super), &superti, sizeof(TypeInfo), error);
@@ -352,7 +352,9 @@ void ItaniumABILanguageRuntime::AddFieldToRecordType(
           // add typeinfo* to class member.
           CompilerType ti_type = ast.GetBasicType(eBasicTypeVoid).GetPointerType();
           ast.AddFieldToRecordType(dynamic_type, "$ti*", ti_type, lldb::eAccessPublic, 0);
-        } else {
+      } else {
+          if (superti.fieldsNum > typeInfo.fieldsNum)
+            return;
           // DW_TAG_inheritance
           std::vector<std::unique_ptr<clang::CXXBaseSpecifier>> bases;
           bases.push_back(
@@ -366,7 +368,8 @@ void ItaniumABILanguageRuntime::AddFieldToRecordType(
     uint64_t field_name_addr = 0;
     char field_name[name_size + 1];
     field_name[name_size] = '\0';
-    for (int16_t i = 0; i < typeInfo.fieldsNum - super_fields_num; i++) {
+    const uint16_t field_num = typeInfo.fieldsNum - super_fields_num;
+    for (uint16_t i = 0; i < field_num; i++) {
       m_process->ReadMemory((uint64_t)(typeInfo.fields) + i * BitsPerByte, &field_type_addr, sizeof(uint64_t), error);
       TypeInfo fieldti;
       m_process->ReadMemory(field_type_addr, &fieldti, sizeof(TypeInfo), error);
@@ -532,7 +535,7 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicFuncType(
     uint64_t para_ti_addr = 0;
     TypeInfo fieldti;
     std::vector<CompilerType> param_types;
-    for (int8_t i = 1; i < type_arg_num; i++) {
+    for (uint8_t i = 1; i < type_arg_num; i++) {
       m_process->ReadMemory(type_args + i * BitsPerByte, &para_ti_addr, sizeof(uint64_t), error);
       m_process->ReadMemory(para_ti_addr, &fieldti, sizeof(TypeInfo), error);
       param_types.push_back(GetDynamicTypeFromGenericTypeInfo(ast, fieldti));
@@ -598,19 +601,19 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicCFuncType(
     TypeSystemClang& ast, TypeInfo& typeInfo, ConstString& type_name) {
     // type_name: (Int32) -> Int32
     Status error;
-    int8_t type_arg_num = typeInfo.typeArgNum;
+    uint8_t type_arg_num = typeInfo.typeArgNum;
     uint64_t type_args = (uint64_t)typeInfo.typeArgs;
     if (type_arg_num < 1) {
       return CompilerType();
     }
     // para_num: type_arg_num - 1
-    int8_t para_num = type_arg_num - 1;
+    uint8_t para_num = type_arg_num - 1;
 
     // para_typeinfo: type_args
     uint64_t para_ti_addr = 0;
     TypeInfo fieldti;
     std::vector<CompilerType> param_types;
-    for (int8_t i = 0; i < para_num; i++) {
+    for (uint8_t i = 0; i < para_num; i++) {
       m_process->ReadMemory(type_args + i * BitsPerByte, &para_ti_addr, sizeof(uint64_t), error);
       m_process->ReadMemory(para_ti_addr, &fieldti, sizeof(TypeInfo), error);
       param_types.push_back(GetDynamicTypeFromGenericTypeInfo(ast, fieldti));
@@ -667,7 +670,7 @@ CompilerType ItaniumABILanguageRuntime::GetDynamicTupleType(
     ast.StartTagDeclarationDefinition(dynamic_type);
     uint64_t field_type_addr = 0;
     TypeInfo fieldti;
-    for (int16_t i = 0; i < typeInfo.fieldsNum; i++) {
+    for (uint16_t i = 0; i < typeInfo.fieldsNum; i++) {
       m_process->ReadMemory((uint64_t)(typeInfo.fields) + i * BitsPerByte, &field_type_addr, sizeof(uint64_t), error);
       m_process->ReadMemory(field_type_addr, &fieldti, sizeof(TypeInfo), error);
       auto field_type = GetDynamicTypeFromGenericTypeInfo(ast, fieldti);
@@ -740,7 +743,7 @@ void ItaniumABILanguageRuntime::CreateAndAddInheritTypeToRecordType(CompilerType
       if (ctor_ti.fieldsNum > 1) {
         uint64_t ctor_para_addr = 0;
         TypeInfo ctor_para_ti;
-        for (int16_t j = 0; j < ctor_ti.fieldsNum - 1; j++) {
+        for (uint16_t j = 0; j + 1 < ctor_ti.fieldsNum; j++) {
           m_process->ReadMemory((uint64_t)(ctor_ti.fields) + (j + 1)  * BitsPerByte, &ctor_para_addr,
                                 sizeof(uint64_t), error);
           m_process->ReadMemory(ctor_para_addr, &ctor_para_ti, sizeof(TypeInfo), error);
@@ -789,7 +792,7 @@ void ItaniumABILanguageRuntime::CreateAndAddInheritTypeToEnum3Type(CompilerType&
       if (ctor_ti.fieldsNum > 1) {
         uint64_t ctor_para_addr = 0;
         TypeInfo ctor_para_ti;
-        for (int16_t j = 1; j < ctor_ti.fieldsNum; j++) {
+        for (uint16_t j = 1; j < ctor_ti.fieldsNum; j++) {
           m_process->ReadMemory((uint64_t)(ctor_ti.fields) + j * BitsPerByte, &ctor_para_addr,
                                 sizeof(uint64_t), error);
           m_process->ReadMemory(ctor_para_addr, &ctor_para_ti, sizeof(TypeInfo), error);
@@ -836,7 +839,7 @@ CompilerType ItaniumABILanguageRuntime::CreateEnum2Type(TypeSystemClang& ast,
     }
     uint64_t ctor_para_addr = 0;
     TypeInfo ctor_para_ti;
-    for (int16_t j = 1; j < ctor_ti.fieldsNum; j++) {
+    for (uint16_t j = 1; j < ctor_ti.fieldsNum; j++) {
       m_process->ReadMemory((uint64_t)(ctor_ti.fields) + (j)  * BitsPerByte, &ctor_para_addr, sizeof(uint64_t), error);
       m_process->ReadMemory(ctor_para_addr, &ctor_para_ti, sizeof(TypeInfo), error);
       if (!error.Success()) {
