@@ -22,6 +22,7 @@ add_llvm_component_library(LLVMScalarOpts
   CJGCInstrRestore.cpp
   CJSimpleOpt.cpp
   CJGenericIntrinsicOpt.cpp
+  CJInsertRemoveLocalFinalizer.cpp
   CJSimpleRangeAnalysis.cpp
   CJRSSCE.cpp
   CJLoopFloatOpt.cpp
