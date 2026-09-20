@@ -1104,12 +1104,19 @@ static void replaceFastFunc(Function &F, GCStatepointInst *CI,
 static bool doNewFastPath(Function &F, SetVector<GCStatepointInst *> &NewObjs) {
   if (CangjieJIT)
     return false;
+
   for (GCStatepointInst *CI : NewObjs) {
     Function *Callee = CI->getActualCalledFunction();
-    if (Callee->getName().equals("CJ_MCC_NewObject")) {
+    if (Callee == nullptr)
+      continue;
+
+    StringRef CalleeName = Callee->getName();
+    if (CalleeName.equals("CJ_MCC_NewObject")) {
       replaceFastFunc(F, CI, NewObjFastStr);
-    } else {
+    } else if (CalleeName.equals("CJ_MCC_NewFinalizer")) {
       replaceFastFunc(F, CI, NewObjFinalizerFastStr);
+    } else {
+      assert(false && "the unknown allocation function does not support fast path");
     }
   }
   return true;
