@@ -551,11 +551,15 @@ static bool canStackAllocateFinalizer(CallBase *CB, Module *M, LoopInfo *LI) {
   Function *FinalizerMethod = getFinalizerMethod(Klass, M);
   if (FinalizerMethod == nullptr)
     return false;
-  // ~init is not required to be nounwind. The language spec ("class 终结器")
-  // makes an uncaught exception escaping a finalizer undefined behavior, so
-  // surfacing it at the insert point is a legal, deterministic realization
-  // of that UB. A may-throw plain call between the allocation and ~init
-  // unwinds on an edge the CFG does not model (issue #204);
+  // Reject a finalizer whose ~init may throw. An uncaught exception
+  // escaping a finalizer is implementation-defined ("class 终结器" spec);
+  // running ~init synchronously at the insert point would change the
+  // observable behavior of such programs (HLT class_finalizer_spec_20024),
+  // so keep may-throw finalizers on the GC heap.
+  if (!FinalizerMethod->doesNotThrow())
+    return false;
+  // A may-throw plain call between the allocation and ~init unwinds on an
+  // edge the CFG does not model (issue #204);
   // runFinalizerUnwindProtection converts those calls to invokes.
   BasicBlock *BB = CB->getParent();
   DominatorTree DT(*BB->getParent());
@@ -598,6 +602,10 @@ public:
     FinalizerMethod = getFinalizerMethod(FinalizerKlass, M);
     FinalizerInsertBB = CB->getParent();
     if (FinalizerMethod == nullptr)
+      return false;
+    // Same nounwind gate as canStackAllocateFinalizer: the analysis gate and
+    // this rewrite gate must reach the same verdict.
+    if (!FinalizerMethod->doesNotThrow())
       return false;
     // Same loop exemption as canStackAllocateFinalizer: the analysis gate
     // and this rewrite gate must reach the same verdict (see the escape

@@ -98,8 +98,10 @@ define i64 @method_maywrite(i8 addrspace(1)* %this, i64 %i) nounwind {
   ret i64 %x
 }
 
-; User-written ~init: calls a C release and has no nounwind attribute.
-define void @w_dtor(i8 addrspace(1)* %this, %TypeInfo* %ti) gc "cangjie" {
+; User-written ~init: calls a C release and cannot throw. Compiler-generated
+; wrapper finalizers carry DOES_NOT_THROW, so the emitted LLVM function has
+; the nounwind attribute required by the promotion gate.
+define void @w_dtor(i8 addrspace(1)* %this, %TypeInfo* %ti) nounwind gc "cangjie" {
   %p = getelementptr inbounds i8, i8 addrspace(1)* %this, i64 8
   %hslot = bitcast i8 addrspace(1)* %p to i8* addrspace(1)*
   %h = load i8*, i8* addrspace(1)* %hslot, align 8
@@ -309,14 +311,14 @@ exit:
   ret i64 %i
 }
 
-; A ~init that may throw is still promoted: an uncaught exception escaping a
-; finalizer is undefined behavior per the language spec, so the synchronous
-; call at the latch is a legal (and deterministic) realization of that UB.
+; A ~init that may throw is not promoted: an uncaught exception escaping a
+; finalizer is implementation-defined per the language spec, so the object
+; stays on the GC heap and no synchronous ~init call is inserted.
 ; CHECK-LABEL: define i64 @loop_throwing_dtor(
-; CHECK: alloca { %TypeInfo*, %ObjLayout.W }
-; CHECK-NOT: CJ_MCC_NewFinalizer
-; CHECK: call void @throwing_dtor(
-; CHECK-NEXT: br label %header
+; CHECK-NOT: alloca
+; CHECK: call i8 addrspace(1)* @CJ_MCC_NewFinalizer(
+; CHECK-NOT: call void @throwing_dtor(
+; CHECK: ret i64
 define i64 @loop_throwing_dtor() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
