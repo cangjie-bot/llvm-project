@@ -3,7 +3,8 @@
 ; Issue #204: a may-throw plain call while a promoted finalizer is live
 ; unwinds on an edge the CFG does not model, skipping ~init. Convert those
 ; calls to invokes that land in a catch-all pad running ~init and rethrowing.
-; ~init is not required to be nounwind: a throwing finalizer is UB per spec.
+; Only finalizers whose ~init is nounwind are promoted: a throwing ~init is
+; implementation-defined per spec, so such objects stay on the GC heap.
 
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
@@ -89,12 +90,12 @@ entry:
   ret i64 %r
 }
 
-; A ~init that may throw is still promoted: throwing from a finalizer is UB.
+; A ~init that may throw is not promoted: the object stays on the GC heap.
 ; CHECK-LABEL: @work_throwing_dtor(
-; CHECK:         alloca { %TypeInfo*, %"ObjLayout.default:W" }
-; CHECK-NOT:     CJ_MCC_NewFinalizer
-; CHECK:         call void @throwing_dtor(
-; CHECK-NEXT:    ret i64
+; CHECK-NOT:     alloca
+; CHECK:         call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(
+; CHECK-NOT:     call void @throwing_dtor(
+; CHECK:         ret i64
 define i64 @work_throwing_dtor(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -264,12 +265,14 @@ exit:
   ret i64 %r
 }
 
-; Reverse rewrite order runs B's may-throw ~init first while A is still
-; live, so that dtor is itself a hazard: invoke + pad runs only A's ~init.
+; B's may-throw ~init keeps B on the heap; only A is promoted. B's surviving
+; NewFinalizer call is itself a may-throw hazard while A is live, so it is
+; converted to an invoke whose pad runs A's ~init before rethrowing.
 ; CHECK-LABEL: @throwing_dtor_as_hazard(
-; CHECK-NOT:     CJ_MCC_NewFinalizer
-; CHECK:         invoke void @throwing_dtor(
+; CHECK:         alloca { %TypeInfo*, %"ObjLayout.default:W" }
+; CHECK:         invoke noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(
 ; CHECK:         unwind label %cj.finalizer.unwind
+; CHECK-NOT:     throwing_dtor
 ; CHECK:         call void @"_CN7default1W5~initHv"(
 ; CHECK:       cj.finalizer.unwind:
 ; CHECK-NOT:     throwing_dtor
