@@ -489,9 +489,18 @@ public:
   }
 
   // llvm.cj.gcmalloc.array(TypeInfo* @Klass.ti, i64 length, i64 elem.size)
-  void replaceNewArray(CallBase *CI) {
+  // IsLocalArray must be true for cj_malloc_local_array: the "fast_new_array"
+  // marker makes the backend inline the NewArrayFast path, which bumps the
+  // *normal* heap AllocBuffer (the one shared with CJ_MCC_NewObjectFast).
+  // A local-mode array allocated there lives in GC-heap memory that the
+  // collector recycles and reuses on the normal schedule, while the
+  // local-object root registries keep referencing it across GCs; concurrent
+  // marking then dereferences the overwritten memory and crashes. Local
+  // arrays therefore always take the slow path into the local-object
+  // allocator (CJ_MCC_NewLocalArray8 -> HeapManager::AllocateLocal).
+  void replaceNewArray(CallBase *CI, bool IsLocalArray = false) {
     uint64_t Size = 0; // 0 is slowpath, others is fastpath.
-    if (EnableCJNewArrayFast && !CangjieJIT) {
+    if (EnableCJNewArrayFast && !IsLocalArray && !CangjieJIT) {
       auto *LengthOp = dyn_cast<ConstantInt>(CI->getArgOperand(1));
       auto *ElemSizeOp = dyn_cast<ConstantInt>(CI->getArgOperand(2));
       if (LengthOp && ElemSizeOp) {
@@ -1198,7 +1207,10 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       Changed = true;
       break;
     case Intrinsic::cj_malloc_local_array:
-      Lowering.replaceNewArray(CI);
+      // Local arrays must never take the NewArrayFast inline fast path: it
+      // allocates from the normal heap TLR and bypasses the local-object
+      // allocator (see the comment above replaceNewArray).
+      Lowering.replaceNewArray(CI, /*IsLocalArray=*/true);
       CI->addRetAttr(Attribute::NoAlias);
       Changed = true;
       break;
