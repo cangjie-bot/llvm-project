@@ -250,6 +250,7 @@ bool restoreGCReadRef(SmallVector<Instruction *, 4> *Instrs, SmallDenseMap<Value
       }
       LI->replaceAllUsesWith(ReplacerValue);
       LI->eraseFromParent();
+      ValueToBasePointer.erase(LI);
     }
   }
   return Changed;
@@ -277,6 +278,7 @@ bool restoreGCWriteRef(SmallVector<Instruction *, 4> *Instrs, SmallDenseMap<Valu
   }
   for (auto *I : ToBeErased) {
     I->eraseFromParent();
+    ValueToBasePointer.erase(I);
   }
   return Changed;
 }
