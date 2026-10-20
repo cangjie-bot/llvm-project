@@ -1,4 +1,5 @@
 ; RUN: opt < %s -passes=tailcallelim -verify-dom-info -S | FileCheck %s
+; RUN: opt < %s -passes=tailcallelim -verify-dom-info --cangjie-pipeline -S | FileCheck %s
 
 ; CHECK: tail call void @callee0()
 ; CHECK: notail call void @callee1()
