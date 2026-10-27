@@ -1690,19 +1690,12 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
             variable_list_sp->AppendVariablesWithScope(
                 eValueTypeVariableArgument, args);
           if (args.GetSize() > 0) {
-            // The runtime argument values belong to the innermost function,
-            // whose argument list is rendered as the LAST parenthesized group
-            // of the function name. Languages that nest function contexts in
-            // the demangled name render a parameter list for every context
-            // level, e.g. a Cangjie local function:
-            //   pkg::outer(T)::inner(U)
-            // Locate that group by starting at the last ')' of the name and
-            // walking backwards to its matching '('; the balanced scan keeps
-            // parentheses that belong to argument types (e.g. a function type
-            // like "(Int64) -> Int64") on the correct side of the split.
-            // Trailing text after the group (generic constraints, qualifiers)
-            // is preserved by printing from close_paren to the end of the
-            // name.
+            // The runtime argument values belong to the innermost function, whose
+            // parameter list is the LAST parenthesized group of the demangled name.
+            // Locate it by scanning backwards from the last ')' to its matching '(';
+            // the balanced scan keeps parentheses that belong to argument types (e.g.
+            // a function type like "(Int64) -> Int64") on the correct side of the
+            // split, and text after the group is preserved.
             const char *open_paren = nullptr;
             const char *close_paren = strrchr(cstr, ')');
             if (close_paren) {
