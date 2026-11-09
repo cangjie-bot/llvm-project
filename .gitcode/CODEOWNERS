@@ -4,7 +4,7 @@
 
 /compiler-rt/ @duo-duo @wangyang594
 /llvm/ @duo-duo @wangyang594
-/lldb/ @zxudong
+/lldb/ @Cangjie-JYF
 /lld/ @duo-duo @wangyang594
 
 /bolt/ @neilliuistaken
